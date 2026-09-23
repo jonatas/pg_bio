@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  pg_bio_db:
+    build: .
+    container_name: pg_bio_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: bio_demo
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_bio_data:/var/lib/postgresql/data
+      - ./setup_pg_bio.sql:/docker-entrypoint-initdb.d/setup_pg_bio.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pg_bio_data:
