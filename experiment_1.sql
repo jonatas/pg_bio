@@ -45,9 +45,9 @@ CREATE TABLE active_site_atoms (
 
 -- Insert 3D coordinates for the Dehalogenase active site
 INSERT INTO active_site_atoms (coord, z_index) VALUES
-( '{"x": 10.5, "y": 12.0, "z": 8.1, "name": "TRP150"}', residue_z_index('{"x": 10.5, "y": 12.0, "z": 8.1, "name": "TRP"}') ),
-( '{"x": 11.0, "y": 12.5, "z": 8.5, "name": "ASP105"}', residue_z_index('{"x": 11.0, "y": 12.5, "z": 8.5, "name": "ASP"}') ),
-( '{"x": 50.0, "y": -10.0, "z": 100.0, "name": "GLY10"}', residue_z_index('{"x": 50.0, "y": -10.0, "z": 100.0, "name": "GLY"}') ); -- Far away atom
+( create_residue_coord(10.5, 12.0, 8.1, 'TRP150'), residue_z_index(create_residue_coord(10.5, 12.0, 8.1, 'TRP')) ),
+( create_residue_coord(11.0, 12.5, 8.5, 'ASP105'), residue_z_index(create_residue_coord(11.0, 12.5, 8.5, 'ASP')) ),
+( create_residue_coord(50.0, -10.0, 100.0, 'GLY10'), residue_z_index(create_residue_coord(50.0, -10.0, 100.0, 'GLY')) ); -- Far away atom
 
 -- Create a B-Tree index on the Z-Order curve!
 -- This instantly maps 3D spatial space into a highly optimized 1D binary tree.
@@ -57,9 +57,9 @@ CREATE INDEX idx_spatial_z_order ON active_site_atoms (z_index);
 -- By querying the 1D Z-index, Postgres can jump directly to the correct spatial sector without Math.sqrt()!
 SELECT 
     (coord).name, 
-    distance_angstroms(coord, '{"x": 10.0, "y": 11.5, "z": 8.0, "name": "PTFE"}') as true_distance
+    distance_angstroms(coord, create_residue_coord(10.0, 11.5, 8.0, 'PTFE')) as true_distance
 FROM 
     active_site_atoms
 WHERE 
-    z_index BETWEEN residue_z_index('{"x": 9.0, "y": 10.0, "z": 7.0, "name": ""}') 
-                AND residue_z_index('{"x": 12.0, "y": 13.0, "z": 9.0, "name": ""}');
+    z_index BETWEEN residue_z_index(create_residue_coord(9.0, 10.0, 7.0, '')) 
+                AND residue_z_index(create_residue_coord(12.0, 13.0, 9.0, ''));

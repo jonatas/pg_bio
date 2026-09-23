@@ -18,11 +18,12 @@ CREATE TABLE genomic_predictions (
 INSERT INTO genomic_predictions (sequence_name, orca_hic_map) VALUES
 (
     'TeaFlon Synthetic Plasmid',
-    '{"sequence_length": 1352, "entries": [
-        {"source_residue": 25, "target_residue": 1300, "weight": 0.92},  -- Promoter looping to Terminator!
-        {"source_residue": 25, "target_residue": 500,  "weight": 0.15},  -- Weak interaction
-        {"source_residue": 800, "target_residue": 810, "weight": 0.99}   -- Local tight folding (knot)
-    ]}'
+    create_sparse_map(
+        1352,
+        ARRAY[25, 25, 800], 
+        ARRAY[1300, 500, 810], 
+        ARRAY[0.92, 0.15, 0.99]::real[]
+    )
 );
 
 -- ====================================================================

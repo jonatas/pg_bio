@@ -14,11 +14,12 @@ CREATE TABLE protein_attention_maps (
 INSERT INTO protein_attention_maps (name, attention_data) VALUES
 (
     'Fluoroacetate Dehalogenase (Active Site Interactions)',
-    '{"sequence_length": 298, "entries": [
-        {"source_residue": 105, "target_residue": 150, "weight": 0.98},
-        {"source_residue": 105, "target_residue": 20, "weight": 0.65},
-        {"source_residue": 150, "target_residue": 88, "weight": 0.88}
-    ]}'
+    create_sparse_map(
+        298,
+        ARRAY[105, 105, 150],
+        ARRAY[150, 20, 88],
+        ARRAY[0.98, 0.65, 0.88]::real[]
+    )
 );
 
 -- Experiment:
