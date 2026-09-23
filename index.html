@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Introducing pg_bio: The Future of Computational Biology</title>
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --text-color: #e2e8f0;
+            --accent-color: #38bdf8;
+            --secondary-color: #818cf8;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+
+        /* Spiral Animation Container */
+        .spiral-container {
+            position: relative;
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            perspective: 1000px;
+            background: radial-gradient(circle at center, #1e293b 0%, #0b0f19 100%);
+        }
+
+        .spiral {
+            position: absolute;
+            transform-style: preserve-3d;
+            animation: rotate 20s linear infinite;
+        }
+
+        .dot {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--accent-color);
+            box-shadow: 0 0 15px var(--accent-color), 0 0 30px var(--secondary-color);
+        }
+
+        /* Generate dots for DNA-like spiral using CSS variables populated via JS later or hardcoded */
+        
+        @keyframes rotate {
+            0% { transform: rotateY(0deg) rotateX(20deg); }
+            100% { transform: rotateY(360deg) rotateX(20deg); }
+        }
+
+        .hero-text {
+            position: absolute;
+            z-index: 10;
+            text-align: center;
+            pointer-events: none;
+            background: rgba(11, 15, 25, 0.7);
+            padding: 2rem;
+            border-radius: 1rem;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        h1 {
+            font-size: 4rem;
+            margin: 0;
+            background: linear-gradient(to right, var(--accent-color), var(--secondary-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        h2 {
+            font-size: 1.5rem;
+            font-weight: 300;
+            margin-top: 1rem;
+            color: #94a3b8;
+        }
+
+        /* Content section */
+        .content {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 4rem 2rem;
+        }
+
+        .feature-card {
+            background: rgba(30, 41, 59, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 1rem;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            transition: transform 0.3s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--accent-color);
+        }
+
+        h3 {
+            color: var(--accent-color);
+            margin-top: 0;
+        }
+
+        code {
+            background: #1e293b;
+            padding: 0.2rem 0.4rem;
+            border-radius: 0.25rem;
+            font-family: monospace;
+            color: #f8fafc;
+        }
+
+        pre {
+            background: #0f172a;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            border: 1px solid #334155;
+        }
+
+        /* Scroll reveal animation */
+        .reveal {
+            opacity: 0;
+            transform: translateY(30px);
+            transition: all 0.8s ease-out;
+        }
+
+        .reveal.active {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="spiral-container">
+        <div class="spiral" id="spiral"></div>
+        <div class="hero-text">
+            <h1>pg_bio</h1>
+            <h2>Bringing Computational Biology to the Database Layer</h2>
+        </div>
+    </div>
+
+    <div class="content">
+        <div class="reveal">
+            <p style="font-size: 1.25rem; color: #cbd5e1;">
+                We are about to hit a wall in structural biology. As models generate billions of protein structures, moving terabytes of data into Python just to run basic spatial searches or homology queries is slow, expensive, and unscalable.
+            </p>
+            <p style="font-size: 1.25rem; color: #cbd5e1;">
+                <strong>pg_bio</strong> is a native PostgreSQL extension written in Rust that brings the compute directly to the data.
+            </p>
+        </div>
+
+        <div class="feature-card reveal">
+            <h3>1. Vector Homology</h3>
+            <p>Replace slow string alignments with high-dimensional embeddings. pg_bio converts biological sequences into dense vectors, allowing you to instantly find structural and functional twins using Cosine Distance mathematics.</p>
+            <pre><code>SELECT name, embedding_cosine_distance(
+    embedding, get_sequence_embedding('MFEGFERRLVD')
+) as distance 
+FROM proteins ORDER BY distance ASC LIMIT 3;</code></pre>
+        </div>
+
+        <div class="feature-card reveal">
+            <h3>2. Sparse Attention Traversal</h3>
+            <p>Protein language models generate massive interaction networks. pg_bio compresses these into native Sparse Attention Maps (CSR format) directly inside the database. Instantly traverse allosteric pathways to pinpoint critical active sites.</p>
+            <pre><code>SELECT get_top_interacting_residues(attention_data, target := 50, limit := 5)
+FROM protein_attention_maps WHERE uniprot_id = '1BAY';</code></pre>
+        </div>
+
+        <div class="feature-card reveal">
+            <h3>3. Z-Order Spatial Indexing</h3>
+            <p>No more brute-force Pythagorean math across millions of atoms. pg_bio maps 3D atomic coordinates into 1D integers using Morton Coding (Z-Order curves). Extract precise 3D binding pockets using standard B-Tree indexes in milliseconds.</p>
+            <pre><code>SELECT atom_id, coord FROM protein_atoms
+WHERE z_index BETWEEN min_z AND max_z;</code></pre>
+        </div>
+    </div>
+
+    <script>
+        // Generate DNA-like spiral
+        const spiral = document.getElementById('spiral');
+        const numDots = 100;
+        
+        for (let i = 0; i < numDots; i++) {
+            const dot1 = document.createElement('div');
+            dot1.className = 'dot';
+            
+            // Math for spiral
+            const t = i * 0.2;
+            const r = 100; // radius
+            const x = Math.cos(t) * r;
+            const z = Math.sin(t) * r;
+            const y = (i - numDots/2) * 8; // spread vertically
+            
+            dot1.style.transform = `translate3d(${x}px, ${y}px, ${z}px)`;
+            
+            // Second strand for DNA look
+            const dot2 = document.createElement('div');
+            dot2.className = 'dot';
+            dot2.style.background = 'var(--secondary-color)';
+            dot2.style.transform = `translate3d(${-x}px, ${y}px, ${-z}px)`;
+            
+            spiral.appendChild(dot1);
+            spiral.appendChild(dot2);
+        }
+
+        // Scroll reveal logic
+        function reveal() {
+            var reveals = document.querySelectorAll(".reveal");
+            for (var i = 0; i < reveals.length; i++) {
+                var windowHeight = window.innerHeight;
+                var elementTop = reveals[i].getBoundingClientRect().top;
+                var elementVisible = 150;
+                
+                if (elementTop < windowHeight - elementVisible) {
+                    reveals[i].classList.add("active");
+                }
+            }
+        }
+        window.addEventListener("scroll", reveal);
+        reveal(); // Trigger on load
+    </script>
+</body>
+</html>
