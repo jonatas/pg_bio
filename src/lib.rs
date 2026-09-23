@@ -15,6 +15,12 @@ pub struct ResidueCoord {
     pub name: String, 
 }
 
+/// SQL constructor to safely create a ResidueCoord without relying on internal CBOR string parsing
+#[pg_extern(immutable, parallel_safe)]
+pub fn create_residue_coord(x: f64, y: f64, z: f64, name: &str) -> ResidueCoord {
+    ResidueCoord { x, y, z, name: name.to_string() }
+}
+
 #[inline]
 fn split_by_3(x: u64) -> u64 {
     let mut res = 0;
@@ -76,9 +82,39 @@ pub fn embedding_cosine_distance(a: Vec<f32>, b: Vec<f32>) -> f64 {
 }
 
 #[pg_extern(immutable, parallel_safe)]
-pub fn get_esm_embedding(_sequence: &str) -> Vec<f32> {
-    let len = _sequence.len() as f32;
-    vec![len * 0.01; 1280] 
+pub fn get_esm_embedding(sequence: &str) -> Vec<f32> {
+    let mut vec = vec![0.0f32; 1280];
+    if sequence.is_empty() { return vec; }
+    
+    let bytes = sequence.as_bytes();
+    let k = 3; // Use tri-peptides
+    if bytes.len() < k {
+        for &b in bytes {
+            let idx = (b as usize) % 1280;
+            vec[idx] += 1.0;
+        }
+    } else {
+        for window in bytes.windows(k) {
+            let hash = (window[0] as usize).wrapping_mul(73)
+                .wrapping_add((window[1] as usize).wrapping_mul(179))
+                .wrapping_add((window[2] as usize).wrapping_mul(283));
+            let idx = hash % 1280;
+            vec[idx] += 1.0;
+        }
+    }
+    
+    // L2 Normalization
+    let mut sum_sq = 0.0;
+    for &v in vec.iter() {
+        sum_sq += v * v;
+    }
+    if sum_sq > 0.0 {
+        let norm = sum_sq.sqrt();
+        for v in vec.iter_mut() {
+            *v /= norm;
+        }
+    }
+    vec
 }
 
 // =====================================================================
@@ -99,6 +135,21 @@ pub struct AttentionEntry {
 pub struct SparseAttentionMap {
     pub sequence_length: i32,
     pub entries: Vec<AttentionEntry>,
+}
+
+/// SQL constructor to build a SparseAttentionMap from arrays
+#[pg_extern(immutable, parallel_safe)]
+pub fn create_sparse_map(length: i32, sources: Vec<i32>, targets: Vec<i32>, weights: Vec<f32>) -> SparseAttentionMap {
+    let mut entries = Vec::new();
+    let count = sources.len().min(targets.len()).min(weights.len());
+    for i in 0..count {
+        entries.push(AttentionEntry {
+            source_residue: sources[i],
+            target_residue: targets[i],
+            weight: weights[i],
+        });
+    }
+    SparseAttentionMap { sequence_length: length, entries }
 }
 
 /// A highly optimized native function that traverses the compressed attention map
@@ -159,6 +210,30 @@ mod tests {
         assert!(embedding_cosine_distance(v1.clone(), v2.clone()).abs() < 1e-6);
         assert!((embedding_cosine_distance(v1.clone(), v3.clone()) - 1.0).abs() < 1e-6);
     }
+
+    #[pg_test]
+    fn test_embedding_uniqueness() {
+        // Guarantee we never go back to naively implemented (e.g. relying on sequence length)
+        let seq1 = "MFEGFERRLVD";
+        let seq2 = "MFEGFERRLVA"; // Same length, 1 mutation
+        let seq3 = "MFEGFERRLVDAAA"; // Different length
+        
+        let emb1 = crate::get_esm_embedding(seq1);
+        let emb2 = crate::get_esm_embedding(seq2);
+        let emb3 = crate::get_esm_embedding(seq3);
+        
+        let dist1_2 = crate::embedding_cosine_distance(emb1.clone(), emb2.clone());
+        let dist1_3 = crate::embedding_cosine_distance(emb1.clone(), emb3.clone());
+        
+        // Distances must be strictly greater than 0, proving uniqueness
+        assert!(dist1_2 > 0.0001, "Same length sequences must not have 0 distance!");
+        assert!(dist1_3 > 0.0001, "Different sequences must not have 0 distance!");
+        
+        // A single mutation should be relatively close compared to radically different sequences
+        // (In tri-peptide feature hashing, one mutation changes up to 3 tri-peptides)
+        assert!(dist1_2 < 0.5, "1 mutation should still remain reasonably close");
+    }
+
 
     #[pg_test]
     fn test_sparse_attention() {
