@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "esmfold_local": {
+      "command": "uv",
+      "args": [
+        "run",
+        "/Users/jonatas/code/pg_bio/mcp_server.py"
+      ]
+    }
+  }
+}
