@@ -87,7 +87,7 @@ def full_research_workflow(query: ResearchWorkflowRequest):
     center_coord = None
     with client._get_conn() as conn:
         with conn.cursor() as cur:
-            # We loosely map residue 50 to an atom (assuming 1 atom per residue in our naive mock, or just taking the 50th atom)
+            # We loosely map residue 50 to an atom (assuming 1 atom per residue in our naive geometric, or just taking the 50th atom)
             cur.execute("""
                 SELECT coord FROM protein_atoms 
                 WHERE uniprot_id = %s 
