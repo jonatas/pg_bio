@@ -16,3 +16,5 @@ __pycache__/
 *.o
 *.rlib
 *.dylib
+test_dihedral
+test_purr/

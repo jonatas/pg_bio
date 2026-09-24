@@ -60,7 +60,7 @@ cd pg_bio
 docker-compose up -d
 
 # 3. (Optional) Run the local Demo Seeder to pull structures directly from RCSB PDB
-uv run seed_bio_demo.py
+uv run scripts/seed_bio_demo.py
 ```
 
 ## 📚 Resources & Next Steps
@@ -77,10 +77,14 @@ Whether you are a researcher looking to run benchmarks or an engineer deploying 
 
 ### 🔬 Research & Experiments
 We have provided raw SQL notes and Python benchmarks proving `pg_bio`'s capabilities across different biological domains:
-* **[Experiment 1: Z-Order vs B-Tree](experiment_1.sql)** - Proof of spatial indexing performance.
-* **[Experiment 2: Sparse Attention](experiment_2.sql)** - Creating and querying compressed neural network weights.
-* **[Experiment 3: Hi-C ORCA Genomics](experiment_3_orca_genomics.sql)** - Using `pg_bio` to query 3D genome architecture and chromatin contact maps.
-* **[Benchmark: pg_bio vs Python](benchmark_pgbio.py)** - A rigorous benchmark script proving in-database Cosine Similarity is **6.4x faster** than fetching vectors to Python.
+* **[Experiment 1: Z-Order vs B-Tree](experiments/experiment_1.sql)** - Proof of spatial indexing performance.
+* **[Experiment 2: Sparse Attention](experiments/experiment_2.sql)** - Creating and querying compressed neural network weights.
+* **[Experiment 3: Hi-C ORCA Genomics](experiments/experiment_3_orca_genomics.sql)** - Using `pg_bio` to query 3D genome architecture and chromatin contact maps.
+
+### 🧪 Scripts & Pipelines
+We have heavily organized our Python utilities to help you run local workflows:
+* **`scripts/`**: Contains core database utilities, seeding scripts (like `seed_bio_demo.py`), embeddings migration tools, and rigorous benchmark scripts (`benchmark_pgbio.py` which proves in-database Cosine Similarity is **6.4x faster** than fetching vectors to Python).
+* **`examples/`**: Contains ready-to-run research pipelines demonstrating Off-Target Prediction, Cross-Species Analysis, and Discovery Workflows natively on your machine!
 
 ### 🛠️ Setting Up the Database Locally
 Choose the method that best fits your workflow:
@@ -101,5 +105,5 @@ Choose the method that best fits your workflow:
 3. **Seeding Live Data (RCSB PDB)**
    Once your database is running, you can seed it with real 3D coordinates directly from the Protein Data Bank:
    ```bash
-   uv run seed_bio_demo.py
+   uv run scripts/seed_bio_demo.py
    ```
