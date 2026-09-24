@@ -27,12 +27,12 @@ def run_discovery():
             
             cur.execute("""
                 WITH target AS (
-                    SELECT get_esm_embedding(%s) as emb
+                    SELECT get_esm_embedding(%s)::vector(1280) as emb
                 )
-                SELECT p.uniprot_id, p.name, embedding_cosine_distance(p.embedding, t.emb) as distance
+                SELECT p.uniprot_id, p.name, (p.embedding <=> t.emb) as distance
                 FROM proteins p, target t
                 WHERE EXISTS (SELECT 1 FROM protein_attention_maps m WHERE m.uniprot_id = p.uniprot_id)
-                ORDER BY distance ASC
+                ORDER BY p.embedding <=> t.emb ASC
                 LIMIT 3;
             """, (GG_SEQ,))
             

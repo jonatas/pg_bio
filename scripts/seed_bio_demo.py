@@ -179,6 +179,7 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
     with psycopg.connect(DB_URI_DEMO, autocommit=True) as conn:
         with conn.cursor() as cur:
             print("Installing our custom pg_bio extension...")
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
             cur.execute("CREATE EXTENSION IF NOT EXISTS pg_bio;")
             
             # 1. Create Tables
@@ -187,7 +188,7 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
                     uniprot_id VARCHAR(20) PRIMARY KEY,
                     name TEXT,
                     sequence TEXT,
-                    embedding REAL[]
+                    embedding vector(1280)
                 );
             """)
             
@@ -237,7 +238,7 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
                         cur.execute(
                             """
                             INSERT INTO proteins (uniprot_id, name, sequence, embedding) 
-                            VALUES (%s, %s, %s, get_esm_embedding(%s))
+                            VALUES (%s, %s, %s, get_esm_embedding(%s)::vector(1280))
                             ON CONFLICT (uniprot_id) DO NOTHING
                             RETURNING uniprot_id;
                             """,
@@ -305,7 +306,7 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
                     cur.execute(
                         """
                         INSERT INTO proteins (uniprot_id, name, sequence, embedding) 
-                        VALUES (%s, %s, %s, get_esm_embedding(%s))
+                        VALUES (%s, %s, %s, get_esm_embedding(%s)::vector(1280))
                         ON CONFLICT (uniprot_id) DO NOTHING
                         RETURNING uniprot_id;
                         """,
@@ -337,6 +338,9 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
             
             print("Ensuring spatial Z-Order index exists...")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_spatial_z_order ON protein_atoms (z_index);")
+            
+            print("Ensuring HNSW vector index exists for lightning-fast homology searches...")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_protein_embedding ON proteins USING hnsw (embedding vector_cosine_ops);")
                 
             print("\n🎉 Database 'bio_demo' successfully seeded and highly optimized!")
             print("You can now connect to it via `psql -p 28818 -d bio_demo` to run spatial queries.")
