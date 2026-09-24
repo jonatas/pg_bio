@@ -16,6 +16,7 @@ def setup_attention():
     
     with psycopg.connect(DB_URI) as conn:
         with conn.cursor() as cur:
+            cur.execute("DROP TABLE IF EXISTS protein_attention_maps CASCADE;")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS protein_attention_maps (
                     id SERIAL PRIMARY KEY,

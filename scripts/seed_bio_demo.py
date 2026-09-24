@@ -240,7 +240,37 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
                 
                 print(f"Successfully inserted {inserted_count} new proteins.")
                 if new_proteins:
-                    print("Note: UniProt sequences do not contain 3D coordinates. Run with 'pdb' source to get real atoms.")
+                    print(f"Fetching actual 3D coordinates from AlphaFold DB for {len(new_proteins)} proteins...")
+                    for pid, _, _ in new_proteins:
+                        # Fetch AlphaFold structure
+                        af_url = f"https://alphafold.ebi.ac.uk/files/AF-{pid}-F1-model_v4.pdb"
+                        af_resp = session.get(af_url)
+                        
+                        if af_resp.status_code != 200:
+                            continue
+                            
+                        atoms = []
+                        for line in af_resp.text.splitlines():
+                            if line.startswith("ATOM  ") or line.startswith("HETATM"):
+                                try:
+                                    x = float(line[30:38].strip())
+                                    y = float(line[38:46].strip())
+                                    z = float(line[46:54].strip())
+                                    name = line[12:16].strip()
+                                    atoms.append({"x": x, "y": y, "z": z, "name": name})
+                                except ValueError:
+                                    continue
+                                    
+                        if atoms:
+                            print(f"  -> Bulk inserting {len(atoms)} real atoms for {pid} (AlphaFold)")
+                            records = []
+                            for a in atoms:
+                                coord_str = f'{{"x":{a["x"]},"y":{a["y"]},"z":{a["z"]},"name":"{a["name"]}"}}'
+                                records.append((pid, coord_str))
+                                
+                            with cur.copy("COPY protein_atoms (uniprot_id, coord) FROM STDIN") as copy:
+                                for r in records:
+                                    copy.write_row(r)
                             
             elif source == "pdb":
                 pdb_ids = get_pdb_ids_for_organism(organism_id, limit)
