@@ -11,3 +11,8 @@ tests/pg_regress/regression.out
 __pycache__/
 .venv/
 .env
+
+# Build artifacts
+*.o
+*.rlib
+*.dylib
