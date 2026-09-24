@@ -10,7 +10,7 @@ from pgbio import PgBioClient
 # Connect to the local pg_bio instance
 client = PgBioClient("postgresql://localhost:28818/bio_demo")
 
-print("--- DISCOVERY 1: Vector Homology Mock ---")
+print("--- DISCOVERY 1: Vector Homology Database Search ---")
 # 1. Structural/Functional Homology via Vector Embeddings
 homologues = client.find_homologues("MFEGFERRLVD", limit=3)
 for h in homologues:

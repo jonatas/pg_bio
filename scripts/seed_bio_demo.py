@@ -239,20 +239,8 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
                         print(f"Error inserting {pid}: {e}")
                 
                 print(f"Successfully inserted {inserted_count} new proteins.")
-
                 if new_proteins:
-                    print(f"Generating synthetic 3D atomic coordinates for {len(new_proteins)} new proteins...")
-                    records = []
-                    for pid, _, _ in new_proteins:
-                        for _ in range(100):
-                            x, y, z = random.uniform(-100, 100), random.uniform(-100, 100), random.uniform(-100, 100)
-                            coord_str = f'{{"x":{x},"y":{y},"z":{z},"name":"ALA"}}'
-                            records.append((pid, coord_str))
-                    
-                    print("Bulk loading spatial data via COPY STDIN...")
-                    with cur.copy("COPY protein_atoms (uniprot_id, coord) FROM STDIN") as copy:
-                        for r in records:
-                            copy.write_row(r)
+                    print("Note: UniProt sequences do not contain 3D coordinates. Run with 'pdb' source to get real atoms.")
                             
             elif source == "pdb":
                 pdb_ids = get_pdb_ids_for_organism(organism_id, limit)

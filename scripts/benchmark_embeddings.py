@@ -1,99 +1,74 @@
 # /// script
-# requires-python = ">=3.10, <3.13"
+# requires-python = ">=3.12"
 # dependencies = [
-#     "psycopg>=3.1",
+#     "psycopg",
 #     "numpy",
 #     "scipy",
 # ]
 # ///
 
+import time
 import psycopg
 import numpy as np
-import time
 from scipy.spatial.distance import cosine
 
 DB_URI = "postgresql://localhost:28818/bio_demo"
 
-# ==============================================================================
-# Python Adapters
-# ==============================================================================
-
-class PgBioAdapter:
-    """A fast Python adapter utilizing the pg_bio PostgreSQL extension natively."""
-    def __init__(self, db_uri):
-        self.db_uri = db_uri
-        
-    def find_similar_proteins(self, target_embedding, limit=5):
-        """Uses pg_bio's native `embedding_cosine_distance` to search inside the DB."""
-        with psycopg.connect(self.db_uri) as conn:
-            with conn.cursor() as cur:
-                # The heavy vector math happens inside Rust/Postgres!
-                query = """
-                    SELECT name, embedding_cosine_distance(embedding, %s::real[]) as distance 
-                    FROM proteins 
-                    ORDER BY distance ASC 
-                    LIMIT %s;
-                """
-                # psycopg automatically converts numpy arrays to Postgres REAL[] arrays
-                cur.execute(query, (target_embedding.tolist(), limit))
-                return cur.fetchall()
-
-
-class PythonBruteForceAdapter:
-    """The standard Data Science approach (pulling data into Python to do math)."""
-    def __init__(self, db_uri):
-        self.db_uri = db_uri
-        
-    def find_similar_proteins(self, target_embedding, limit=5):
-        """Fetches all embeddings over the network and uses Numpy for math."""
-        with psycopg.connect(self.db_uri) as conn:
-            with conn.cursor() as cur:
-                # 1. I/O Bottleneck: Fetching thousands of vectors over the network
-                cur.execute("SELECT name, embedding FROM proteins WHERE embedding IS NOT NULL;")
-                rows = cur.fetchall()
-        
-        # 2. Compute Bottleneck: Calculating cosine distance using SciPy/Numpy
-        results = []
-        for name, emb in rows:
-            dist = cosine(target_embedding, emb)
-            results.append((name, dist))
-            
-        # 3. Sort in python
-        results.sort(key=lambda x: x[1])
-        return results[:limit]
-
-
-# ==============================================================================
-# Benchmark
-# ==============================================================================
-
 def run_benchmark():
-    print("Initializing Database Adapters...")
-    adapter_pg = PgBioAdapter(DB_URI)
-    adapter_py = PythonBruteForceAdapter(DB_URI)
-
-    # Generate a mock 320-dimensional embedding (Simulating an ESM-2 vector query)
-    target_emb = np.random.rand(320).astype(np.float32)
-
-    print("\n--- Standard Python / Numpy Data Science Approach ---")
-    print("Pulling all vectors from DB and calculating in Pandas/Numpy...")
-    start = time.perf_counter()
-    py_results = adapter_py.find_similar_proteins(target_emb)
-    py_time = (time.perf_counter() - start) * 1000
-    print(f"⏱️ Time: {py_time:.2f} ms")
+    print("--- BENCHMARK: Vector Math (pg_bio vs Python) ---")
     
-    print("\n--- pg_bio (Postgres + Rust Native) Approach ---")
-    print("Pushing the query down to the Database engine...")
-    start = time.perf_counter()
-    pg_results = adapter_pg.find_similar_proteins(target_emb)
-    pg_time = (time.perf_counter() - start) * 1000
-    print(f"⏱️ Time: {pg_time:.2f} ms")
-    
-    speedup = py_time / pg_time if pg_time > 0 else 0
-    print(f"\n🚀 RESULT: pg_bio is {speedup:.1f}x faster than standard Python!")
-    print("Why? Standard Python approaches suffer from massive I/O serialization penalties.")
-    print("You have to transmit megabytes of float arrays over the connection just to do math on them.")
-    print("pg_bio processes the math securely inside the C/Rust database engine memory, returning only the 5 closest matches!")
+    with psycopg.connect(DB_URI) as conn:
+        with conn.cursor() as cur:
+            # Fetch a real embedding from the database to query with
+            cur.execute("SELECT embedding FROM proteins WHERE embedding IS NOT NULL LIMIT 1;")
+            row = cur.fetchone()
+            if not row:
+                print("No embeddings found. Seed database first.")
+                return
+            target_emb_list = row[0]
+            target_emb = np.array(target_emb_list, dtype=np.float32)
+            
+            # Fetch all for Python bench
+            cur.execute("SELECT uniprot_id, embedding FROM proteins WHERE embedding IS NOT NULL;")
+            all_records = cur.fetchall()
+            if not all_records:
+                return
+                
+            db_vectors = {r[0]: np.array(r[1], dtype=np.float32) for r in all_records}
+            print(f"Loaded {len(db_vectors)} real biological vectors.\n")
+            
+            # 1. PYTHON BENCHMARK
+            print("[1] Python Pipeline (NumPy/SciPy)")
+            start = time.perf_counter()
+            best_id, best_dist = None, float('inf')
+            for uid, emb in db_vectors.items():
+                dist = cosine(target_emb, emb)
+                if dist < best_dist and dist > 0.0001: # Avoid self-match
+                    best_dist = dist
+                    best_id = uid
+            py_time = time.perf_counter() - start
+            print(f"  Best Match: {best_id} (Distance: {best_dist:.4f})")
+            print(f"  Execution Time: {py_time*1000:.2f} ms\n")
+            
+            # 2. PG_BIO BENCHMARK
+            print("[2] pg_bio Pipeline (In-Database Rust)")
+            start = time.perf_counter()
+            emb_str = "{" + ",".join(map(str, target_emb_list)) + "}"
+            cur.execute(f"""
+                SELECT uniprot_id, embedding_cosine_distance(embedding, '{emb_str}'::real[]) as distance
+                FROM proteins 
+                WHERE embedding IS NOT NULL AND embedding_cosine_distance(embedding, '{emb_str}'::real[]) > 0.0001
+                ORDER BY distance ASC LIMIT 1;
+            """)
+            pg_match = cur.fetchone()
+            pg_time = time.perf_counter() - start
+            
+            print(f"  Best Match: {pg_match[0]} (Distance: {pg_match[1]:.4f})")
+            print(f"  Execution Time: {pg_time*1000:.2f} ms\n")
+            
+            # RESULT
+            if pg_time > 0:
+                print(f"--- pg_bio is {py_time/pg_time:.1f}x faster! ---")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     run_benchmark()

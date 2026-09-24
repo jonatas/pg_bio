@@ -5,15 +5,17 @@
 #     "pgbio @ file://./pgbio-py",
 # ]
 # ///
+
 import psycopg
-import random
-from pgbio import PgBioClient
+import json
+import math
 
 DB_URI = "postgresql://localhost:28818/bio_demo"
 
-def setup_attention_table():
-    print("Connecting to 'bio_demo' to setup Sparse Attention Maps...")
-    with psycopg.connect(DB_URI, autocommit=True) as conn:
+def setup_attention():
+    print("Setting up Ground-Truth Geometric Attention Maps...")
+    
+    with psycopg.connect(DB_URI) as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS protein_attention_maps (
@@ -22,40 +24,69 @@ def setup_attention_table():
                     attention_data SparseAttentionMap
                 );
             """)
-            print("Table 'protein_attention_maps' created.")
-
-            # Let's seed an attention map for a known protein, e.g., '1F5X' if it exists.
-            cur.execute("SELECT uniprot_id, length(sequence) FROM proteins WHERE name LIKE 'PDB Structure%' LIMIT 5;")
-            targets = cur.fetchall()
             
-            for uniprot_id, seq_len in targets:
-                print(f"Generating Sparse Attention Map for {uniprot_id} (Length: {seq_len})...")
+            cur.execute("TRUNCATE protein_attention_maps RESTART IDENTITY;")
+            
+            # Fetch proteins that have actual atoms
+            cur.execute("""
+                SELECT DISTINCT uniprot_id FROM protein_atoms;
+            """)
+            proteins = cur.fetchall()
+            
+            if not proteins:
+                print("No atoms found in database. Run 'uv run scripts/seed_bio_demo.py' and select 'pdb' source first.")
+                return
+
+            print(f"Generating geometric contact maps for {len(proteins)} structures...")
+            
+            for (pid,) in proteins:
+                print(f"  -> Processing {pid}")
                 
-                sources = []
+                # Fetch atoms for this protein
+                cur.execute("SELECT atom_id, coord::text FROM protein_atoms WHERE uniprot_id = %s ORDER BY atom_id ASC;", (pid,))
+                atoms = cur.fetchall()
+                
+                if not atoms:
+                    continue
+                    
+                # To keep it fast for demo, we take the first 100 atoms
+                atoms = atoms[:100]
+                
                 targets_list = []
                 weights = []
+                # Compute distance matrix and create sparse weights for < 8.0 Angstroms
+                for i in range(len(atoms)):
+                    c1 = json.loads(atoms[i][1])
+                    for j in range(len(atoms)):
+                        if i == j:
+                            continue
+                        c2 = json.loads(atoms[j][1])
+                        dx = c1['x'] - c2['x']
+                        dy = c1['y'] - c2['y']
+                        dz = c1['z'] - c2['z']
+                        dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+                        
+                        if dist < 8.0:
+                            # Convert distance into a normalized attention weight (closer = higher weight)
+                            weight = max(0.01, 1.0 - (dist / 8.0))
+                            targets_list.append(j + 1)
+                            weights.append(weight)
                 
-                # Simulate sparse interactions (only ~5 interactions per residue)
-                for i in range(1, seq_len + 1):
-                    # Interacts with itself (diagonal)
-                    sources.append(i)
-                    targets_list.append(i)
-                    weights.append(1.0)
+                if not targets_list:
+                    continue
                     
-                    # Interacts with 4 random distant residues
-                    for _ in range(4):
-                        sources.append(i)
-                        targets_list.append(random.randint(1, seq_len))
-                        weights.append(random.uniform(0.5, 0.9))
+                # Store sparse interactions
+                targets_pg = "{" + ",".join(map(str, targets_list)) + "}"
+                weights_pg = "{" + ",".join(f"{w:.4f}" for w in weights) + "}"
                 
-                print(f"  -> Generated {len(sources)} non-zero interactions.")
-                
-                cur.execute("""
+                query = f"""
                     INSERT INTO protein_attention_maps (uniprot_id, attention_data)
-                    VALUES (%s, create_sparse_map(%s::integer, %s::int[], %s::int[], %s::real[]))
-                """, (uniprot_id, seq_len, sources, targets_list, weights))
-            
-            print("Successfully seeded Sparse Attention Maps!")
+                    VALUES (%s, row({len(atoms)}, '{targets_pg}', '{weights_pg}')::SparseAttentionMap)
+                """
+                cur.execute(query, (pid,))
+                
+            conn.commit()
+            print("\nSuccessfully built ground-truth biological attention maps from real 3D coordinates!")
 
-if __name__ == "__main__":
-    setup_attention_table()
+if __name__ == '__main__':
+    setup_attention()
