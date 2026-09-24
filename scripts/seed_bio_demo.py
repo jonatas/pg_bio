@@ -73,12 +73,12 @@ def interactive_prompt():
     reset_choice = input("Reset [N]: ").strip().lower()
     reset = reset_choice == "y" or reset_choice == "yes"
 
-    # Full
-    print("\nDo you want to run the full pipeline (setup attention maps after)? (y/N)")
-    full_choice = input("Full pipeline [N]: ").strip().lower()
-    full = full_choice == "y" or full_choice == "yes"
+    # Skip Attention Maps
+    print("\nDo you want to SKIP generating the ground-truth attention maps after seeding? (y/N)")
+    skip_choice = input("Skip attention maps [N]: ").strip().lower()
+    skip_attention_maps = skip_choice == "y" or skip_choice == "yes"
 
-    return source, organism, limit, reset, full
+    return source, organism, limit, reset, skip_attention_maps
 
 def create_database(reset=False):
     print("Connecting to local pgrx cluster...")
@@ -349,7 +349,7 @@ if __name__ == "__main__":
         parser.add_argument("--organism", type=str, default="human", help="Organism to filter by (e.g. human, mouse, ecoli). Can also be a taxonomy ID.")
         parser.add_argument("--limit", type=int, default=100, help="Number of proteins to download. Set to -1 for all.")
         parser.add_argument("--reset", action="store_true", help="Drop and recreate the database from scratch.")
-        parser.add_argument("--full", action="store_true", help="Run the full pipeline (setup attention maps automatically after seeding).")
+        parser.add_argument("--skip-attention-maps", action="store_true", help="Skip the automatic generation of ground-truth attention maps after seeding.")
         
         args = parser.parse_args()
         
@@ -357,16 +357,16 @@ if __name__ == "__main__":
         organism_raw = args.organism
         limit = args.limit
         reset = args.reset
-        full = args.full
+        skip_attention_maps = args.skip_attention_maps
     else:
         # Interactive mode
-        source, organism_raw, limit, reset, full = interactive_prompt()
+        source, organism_raw, limit, reset, skip_attention_maps = interactive_prompt()
         
     organism_id = ORGANISM_MAP.get(organism_raw.lower(), organism_raw)
     
     create_database(reset=reset)
     setup_schema_and_seed(source=source, organism_id=organism_id, organism_raw=organism_raw, limit=limit)
     
-    if full:
-        print("\nExecuting --full pipeline: Automatically setting up ground-truth attention maps...")
+    if not skip_attention_maps:
+        print("\nAutomatically setting up ground-truth attention maps...")
         subprocess.run(["uv", "run", "scripts/setup_attention_maps.py"])
