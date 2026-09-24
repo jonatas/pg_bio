@@ -9,6 +9,12 @@ Typically, querying for proteins within a specific mass range requires pre-compu
 
 With `pg_bio`, the `molecular_weight` function executes blazing-fast native Rust code to calculate the mass (in Daltons) of the amino acid sequence directly during the `SELECT` execution.
 
+### How it works under the hood
+The function accurately calculates mass using standard biochemical rules:
+1. **Terminals (Water):** It starts with a base weight of **18.015 Daltons**. This accounts for the extra Hydrogen atom at the N-terminus and the Hydroxyl (OH) group at the C-terminus (which together form an intact water molecule).
+2. **Per-Residue Mass:** It iterates through the sequence, adding the specific monoisotopic/average mass of each amino acid *residue* (e.g., `A` adds 71.079, `W` adds 186.213).
+3. **Error Tolerance:** If the sequence contains unrecognized characters or gaps, they are safely ignored (adding `0.0`), preventing queries from crashing.
+
 Let's find proteins weighing between 15 kDa and 50 kDa:
 
 ```sql
