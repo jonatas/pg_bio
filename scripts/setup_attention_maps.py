@@ -2,7 +2,6 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "psycopg",
-#     "pgbio @ file://./pgbio-py",
 # ]
 # ///
 
@@ -52,8 +51,10 @@ def setup_attention():
                 # To keep it fast for demo, we take the first 100 atoms
                 atoms = atoms[:100]
                 
+                sources_list = []
                 targets_list = []
                 weights = []
+                
                 # Compute distance matrix and create sparse weights for < 8.0 Angstroms
                 for i in range(len(atoms)):
                     c1 = json.loads(atoms[i][1])
@@ -69,21 +70,23 @@ def setup_attention():
                         if dist < 8.0:
                             # Convert distance into a normalized attention weight (closer = higher weight)
                             weight = max(0.01, 1.0 - (dist / 8.0))
+                            sources_list.append(i + 1)
                             targets_list.append(j + 1)
                             weights.append(weight)
                 
-                if not targets_list:
+                if not sources_list:
                     continue
                     
                 # Store sparse interactions
+                sources_pg = "{" + ",".join(map(str, sources_list)) + "}"
                 targets_pg = "{" + ",".join(map(str, targets_list)) + "}"
                 weights_pg = "{" + ",".join(f"{w:.4f}" for w in weights) + "}"
                 
                 query = f"""
                     INSERT INTO protein_attention_maps (uniprot_id, attention_data)
-                    VALUES (%s, row({len(atoms)}, '{targets_pg}', '{weights_pg}')::SparseAttentionMap)
+                    VALUES (%s, create_sparse_map(%s, '{sources_pg}'::int[], '{targets_pg}'::int[], '{weights_pg}'::real[]))
                 """
-                cur.execute(query, (pid,))
+                cur.execute(query, (pid, len(atoms)))
                 
             conn.commit()
             print("\nSuccessfully built ground-truth biological attention maps from real 3D coordinates!")
