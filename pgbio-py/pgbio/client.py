@@ -85,7 +85,7 @@ class PgBioClient:
 
     def find_interacting_residues(self, protein_id: str, target_residue_index: int, limit: int = 5) -> List[int]:
         """
-        Uses pg_bio's native Sparse Attention Maps to traverse AI attention weights instantly.
+        Uses pg_bio's native Sparse Attention Maps to traverse Attention weights instantly.
         """
         query = """
             SELECT get_top_interacting_residues(attention_data, %s, %s)

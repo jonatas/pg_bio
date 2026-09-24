@@ -31,7 +31,7 @@ def load_model():
 @mcp.tool()
 def fold_sequence(sequence: str, output_pdb_path: str) -> str:
     """
-    Predicts the 3D atomic structure of a protein sequence using the local ESMFold AI model.
+    Predicts the 3D atomic structure of a protein sequence using the local ESMFold Computational model.
     Saves the result to the specified output_pdb_path and returns a success message.
     """
     model, tokenizer = load_model()

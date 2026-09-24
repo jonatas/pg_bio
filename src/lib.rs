@@ -57,7 +57,7 @@ pub fn distance_angstroms(a: ResidueCoord, b: ResidueCoord) -> f64 {
 }
 
 // =====================================================================
-// 2. HIGH-DIMENSIONAL VECTOR EMBEDDINGS (ESM AI MODELS)
+// 2. HIGH-DIMENSIONAL VECTOR EMBEDDINGS (ESM Computational models)
 // =====================================================================
 
 #[pg_extern(immutable, parallel_safe)]
@@ -121,7 +121,7 @@ pub fn get_esm_embedding(sequence: &str) -> Vec<f32> {
 // 3. SPARSE ATTENTION MATRICES (Custom Memory-Optimized Storage)
 // =====================================================================
 
-/// Represents a single non-zero interaction in an AI Attention Map.
+/// Represents a single non-zero interaction in an Attention Map.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AttentionEntry {
     pub source_residue: i32, // Amino acid index initiating attention

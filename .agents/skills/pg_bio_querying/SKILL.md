@@ -1,6 +1,6 @@
 ---
 name: pg_bio_querying
-description: Teaches the agent how to construct SQL queries using the custom pg_bio PostgreSQL extension for Z-Order spatial searches and AI vector embeddings.
+description: Teaches the agent how to construct SQL queries using the custom pg_bio PostgreSQL extension for Z-Order spatial searches and Vector embeddings.
 ---
 
 # Querying the pg_bio Extension
@@ -33,7 +33,7 @@ ORDER BY distance ASC LIMIT 5;
 ```
 
 ## 3. Sparse Attention Maps
-To find which amino acids have the highest AI attention weights against a target residue, use the `get_top_interacting_residues` function against a `SparseAttentionMap` type.
+To find which amino acids have the highest Attention weights against a target residue, use the `get_top_interacting_residues` function against a `SparseAttentionMap` type.
 
 **SQL Pattern:**
 ```sql

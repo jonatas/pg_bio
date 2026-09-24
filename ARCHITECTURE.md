@@ -1,6 +1,6 @@
 # pg_bio Architecture
 
-`pg_bio` is a specialized PostgreSQL extension designed to natively understand protein physics, 3D spatial coordinates, and evolutionary embeddings. By bringing bioinformatics directly into the database engine, we eliminate the need for fragile pipelines of flat files (FASTA, PDB) and fragmented scripts, enabling scientists to run massive protein AI models and spatial queries on local hardware.
+`pg_bio` is a specialized PostgreSQL extension designed to natively understand protein physics, 3D spatial coordinates, and evolutionary embeddings. By bringing bioinformatics directly into the database engine, we eliminate the need for fragile pipelines of flat files (FASTA, PDB) and fragmented scripts, enabling scientists to run massive protein Computational models and spatial queries on local hardware.
 
 ## Core Concepts & Mechanisms
 

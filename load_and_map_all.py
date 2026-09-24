@@ -23,7 +23,7 @@ MODEL_NAME = "facebook/esm2_t6_8M_UR50D"
 
 def map_all_locally():
     device = "mps" if torch.backends.mps.is_available() else "cpu"
-    print(f"Loading AI Model ({MODEL_NAME}) on {device}...")
+    print(f"Loading Computational model ({MODEL_NAME}) on {device}...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     model = EsmModel.from_pretrained(MODEL_NAME).to(device)
     model.eval()
@@ -71,7 +71,7 @@ def map_all_locally():
         proteins = [p for p in proteins if p[0] not in existing_ids]
         print(f"⏩ Resuming... {len(proteins)} proteins remaining to map.")
         
-        print("\nStarting Local AI Mapping (Generating biological vector embeddings)...")
+        print("\nStarting Local Mapping (Generating biological vector embeddings)...")
         
         # Process in batches to leverage GPU parallelism
         batch_size = 50
@@ -109,7 +109,7 @@ def map_all_locally():
             if torch.backends.mps.is_available():
                 torch.mps.empty_cache()
                 
-    print("\n🎉 Mapped ALL proteins locally and saved AI embeddings to the database!")
+    print("\n🎉 Mapped ALL proteins locally and saved Embeddings to the database!")
     conn.close()
 
 if __name__ == "__main__":

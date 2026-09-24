@@ -72,7 +72,7 @@ def run_benchmark():
     adapter_pg = PgBioAdapter(DB_URI)
     adapter_py = PythonBruteForceAdapter(DB_URI)
 
-    # Generate a mock 320-dimensional AI embedding (Simulating an ESM-2 vector query)
+    # Generate a mock 320-dimensional embedding (Simulating an ESM-2 vector query)
     target_emb = np.random.rand(320).astype(np.float32)
 
     print("\n--- Standard Python / Numpy Data Science Approach ---")

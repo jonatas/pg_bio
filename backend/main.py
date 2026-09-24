@@ -119,7 +119,7 @@ def full_research_workflow(query: ResearchWorkflowRequest):
         "step_2_attention": {
             "target_residue": target_residue,
             "strongly_interacting_residues": interacting_residues,
-            "insight": "These residues likely form the functional active site based on AI evolutionary weights."
+            "insight": "These residues likely form the functional active site based on Evolutionary weights."
         },
         "step_3_spatial_pocket": {
             "center_coordinate": center_coord,

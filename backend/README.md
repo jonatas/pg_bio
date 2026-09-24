@@ -22,4 +22,4 @@ uvicorn main:app --reload --port 8000
 * **`POST /api/homologues`**: Find structural homologues using K-mer vector embeddings.
 * **`GET /api/proteins/{id}/attention/{idx}`**: Traverse Sparse Attention Maps natively in Postgres.
 * **`GET /api/spatial/radius`**: Ultra-fast Z-Order indexed 3D spatial queries.
-* **`POST /api/research/workflow`**: A massive aggregated endpoint that combines all three features to demonstrate a full research pipeline: predicting homologues, finding the active site via AI attention, and fetching the 3D binding pocket coordinates!
+* **`POST /api/research/workflow`**: A massive aggregated endpoint that combines all three features to demonstrate a full research pipeline: predicting homologues, finding the active site via Attention, and fetching the 3D binding pocket coordinates!

@@ -1,5 +1,5 @@
 -- Experiment 2: Sparse Attention Matrices & Structural Alignment
--- This script demonstrates querying AI Attention Weights natively in PostgreSQL.
+-- This script demonstrates querying Attention Weights natively in PostgreSQL.
 
 CREATE EXTENSION IF NOT EXISTS pg_bio;
 
@@ -25,7 +25,7 @@ INSERT INTO protein_attention_maps (name, attention_data) VALUES
 -- Experiment:
 -- A biologist wants to know which amino acids are physically forcing 
 -- Residue 105 (Aspartate, part of our active site) into its unique shape.
--- By querying the compressed AI attention map, Postgres instantly returns 
+-- By querying the compressed Attention map, Postgres instantly returns 
 -- the top 2 residues with the strongest evolutionary/spatial interaction.
 
 SELECT 

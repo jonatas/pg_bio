@@ -89,7 +89,7 @@ def validate_contacts():
                         print(f"  -> Connected to Residue #{partner:03d} | Physical 3D Distance: {distance:6.2f} Å | Is Contact? {is_contact}")
 
     print("\n✅ VALIDATION COMPLETE.")
-    print("pg_bio successfully bridges the gap between 1D AI Attention networks and 3D absolute spatial physics!")
+    print("pg_bio successfully bridges the gap between 1D Attention networks and 3D absolute spatial physics!")
 
 if __name__ == '__main__':
     validate_contacts()
