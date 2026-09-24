@@ -231,6 +231,45 @@ pub fn center_of_mass(atoms: Vec<ResidueCoord>) -> ResidueCoord {
     }
 }
 
+/// Computes the dihedral angle (in degrees) formed by four atoms (e.g. for Ramachandran Phi/Psi angles).
+#[pg_extern(immutable, parallel_safe)]
+pub fn dihedral_angle(a: ResidueCoord, b: ResidueCoord, c: ResidueCoord, d: ResidueCoord) -> f64 {
+    let b1 = (b.x - a.x, b.y - a.y, b.z - a.z);
+    let b2 = (c.x - b.x, c.y - b.y, c.z - b.z);
+    let b3 = (d.x - c.x, d.y - c.y, d.z - c.z);
+
+    let cross = |v1: (f64, f64, f64), v2: (f64, f64, f64)| -> (f64, f64, f64) {
+        (
+            v1.1 * v2.2 - v1.2 * v2.1,
+            v1.2 * v2.0 - v1.0 * v2.2,
+            v1.0 * v2.1 - v1.1 * v2.0,
+        )
+    };
+
+    let dot = |v1: (f64, f64, f64), v2: (f64, f64, f64)| -> f64 {
+        v1.0 * v2.0 + v1.1 * v2.1 + v1.2 * v2.2
+    };
+
+    let n1 = cross(b1, b2);
+    let n2 = cross(b2, b3);
+
+    let b2_mag = (b2.0 * b2.0 + b2.1 * b2.1 + b2.2 * b2.2).sqrt();
+    let x = dot(n1, n2);
+    let y = dot(b1, n2) * b2_mag;
+    
+    y.atan2(x).to_degrees()
+}
+
+/// Checks if two atoms are clashing sterically (closer than sum of Van der Waals radii minus some tolerance)
+#[pg_extern(immutable, parallel_safe)]
+pub fn is_steric_clash(a: ResidueCoord, b: ResidueCoord, vdw_radius_sum: f64) -> bool {
+    // Avoid checking an atom against itself
+    if a.x == b.x && a.y == b.y && a.z == b.z {
+        return false;
+    }
+    crate::distance_angstroms(a, b) < vdw_radius_sum
+}
+
 /// A highly simplified native regex builder for biological PROSITE patterns.
 /// E.g. [ST]-x(2)-[RK] -> matches Sequences natively in the database.
 #[pg_extern(immutable, parallel_safe)]
@@ -390,6 +429,28 @@ mod tests {
         let pattern2 = "{ST}-x-[RK]";
         assert!(crate::prosite_match("AAAR", pattern2) == true); 
         assert!(crate::prosite_match("ASAR", pattern2) == false); 
+    }
+
+    #[pg_test]
+    fn test_dihedral_angle() {
+        let p1 = crate::ResidueCoord { x: 0.0, y: 0.0, z: 0.0, name: "A".to_string() };
+        let p2 = crate::ResidueCoord { x: 1.0, y: 0.0, z: 0.0, name: "B".to_string() };
+        let p3 = crate::ResidueCoord { x: 1.0, y: 1.0, z: 0.0, name: "C".to_string() };
+        let p4 = crate::ResidueCoord { x: 1.0, y: 1.0, z: 1.0, name: "D".to_string() };
+        
+        let angle = crate::dihedral_angle(p1, p2, p3, p4);
+        assert!((angle - 90.0).abs() < 1e-6);
+    }
+
+    #[pg_test]
+    fn test_is_steric_clash() {
+        let p1 = crate::ResidueCoord { x: 0.0, y: 0.0, z: 0.0, name: "A".to_string() };
+        let p2 = crate::ResidueCoord { x: 1.5, y: 0.0, z: 0.0, name: "B".to_string() };
+        
+        // Sum of VdW radii = 2.0. Distance = 1.5. So they clash.
+        assert!(crate::is_steric_clash(p1.clone(), p2.clone(), 2.0));
+        // Sum of VdW radii = 1.0. Distance = 1.5. So they don't clash.
+        assert!(!crate::is_steric_clash(p1.clone(), p2.clone(), 1.0));
     }
 }
 
