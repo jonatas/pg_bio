@@ -63,10 +63,43 @@ docker-compose up -d
 uv run seed_bio_demo.py
 ```
 
-## 📚 Documentation & Tutorials
-To help you and your team transition to in-database bioinformatics, we have written comprehensive, step-by-step tutorials:
-* [Tutorial 1: The Magic of Vector Homology](docs/01_vector_homology.md)
-* [Tutorial 2: Attention Traversal & Allostery](docs/02_attention_traversal.md)
-* [Tutorial 3: Z-Order Spatial Indexing & Clashes](docs/03_spatial_indexing.md)
+## 📚 Resources & Next Steps
 
-*(For an animated visual introduction to the project, open `docs/intro_blog_post.html` in your web browser!)*
+Whether you are a researcher looking to run benchmarks or an engineer deploying the engine, everything you need is linked below.
+
+### 📖 Tutorials & Manuals
+* **[Tutorial 1: The Magic of Vector Homology](docs/01_vector_homology.md)** - Understanding biological sequence embeddings.
+* **[Tutorial 2: Attention Traversal & Allostery](docs/02_attention_traversal.md)** - Traversing massive interaction networks instantly.
+* **[Tutorial 3: Z-Order Spatial Indexing](docs/03_spatial_indexing.md)** - Finding 3D binding pockets and collisions.
+* **[Python SDK Manual](pgbio-py/README.md)** - Full documentation for the `pgbio-py` Python client.
+* **[FastAPI Backend Manual](backend/README.md)** - Setup instructions for the web API engine.
+* *(For an animated visual introduction to the project, open `docs/intro_blog_post.html` in your web browser!)*
+
+### 🔬 Research & Experiments
+We have provided raw SQL notes and Python benchmarks proving `pg_bio`'s capabilities across different biological domains:
+* **[Experiment 1: Z-Order vs B-Tree](experiment_1.sql)** - Proof of spatial indexing performance.
+* **[Experiment 2: Sparse Attention](experiment_2.sql)** - Creating and querying compressed neural network weights.
+* **[Experiment 3: Hi-C ORCA Genomics](experiment_3_orca_genomics.sql)** - Using `pg_bio` to query 3D genome architecture and chromatin contact maps.
+* **[Benchmark: pg_bio vs Python](benchmark_pgbio.py)** - A rigorous benchmark script proving in-database Cosine Similarity is **6.4x faster** than fetching vectors to Python.
+
+### 🛠️ Setting Up the Database Locally
+Choose the method that best fits your workflow:
+
+1. **Zero-Click Docker (Recommended)**
+   Spin up the pre-configured environment in seconds:
+   ```bash
+   docker-compose up -d
+   ```
+
+2. **Native Rust Compilation (For Developers)**
+   If you want to compile the extension from source against your local PostgreSQL 18 instance:
+   ```bash
+   cargo pgrx install --release
+   # Then in psql: CREATE EXTENSION pg_bio;
+   ```
+
+3. **Seeding Live Data (RCSB PDB)**
+   Once your database is running, you can seed it with real 3D coordinates directly from the Protein Data Bank:
+   ```bash
+   uv run seed_bio_demo.py
+   ```
