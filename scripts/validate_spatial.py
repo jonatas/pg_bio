@@ -1,3 +1,9 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "psycopg",
+# ]
+# ///
 import psycopg
 import requests
 import math

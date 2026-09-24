@@ -1,3 +1,9 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "psycopg",
+# ]
+# ///
 import psycopg
 
 DB_URI = "postgresql://localhost:28818/bio_demo"

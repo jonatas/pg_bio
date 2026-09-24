@@ -1,3 +1,10 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "psycopg",
+#     "biopython",
+# ]
+# ///
 import time
 import psycopg
 import json

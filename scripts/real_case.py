@@ -1,3 +1,10 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "psycopg",
+#     "pgbio @ file://./pgbio-py",
+# ]
+# ///
 import psycopg
 import json
 from pgbio import PgBioClient
