@@ -7,6 +7,7 @@
 # ///
 
 import psycopg
+import subprocess
 import requests
 import random
 import argparse
@@ -72,7 +73,12 @@ def interactive_prompt():
     reset_choice = input("Reset [N]: ").strip().lower()
     reset = reset_choice == "y" or reset_choice == "yes"
 
-    return source, organism, limit, reset
+    # Full
+    print("\nDo you want to run the full pipeline (setup attention maps after)? (y/N)")
+    full_choice = input("Full pipeline [N]: ").strip().lower()
+    full = full_choice == "y" or full_choice == "yes"
+
+    return source, organism, limit, reset, full
 
 def create_database(reset=False):
     print("Connecting to local pgrx cluster...")
@@ -134,20 +140,25 @@ def fetch_pdb_data(pdb_id):
     # 1. Fetch FASTA
     fasta_resp = session.get(f"https://www.rcsb.org/fasta/entry/{pdb_id}")
     if fasta_resp.status_code != 200:
-        return None, None
+        return None, None, None
         
     lines = fasta_resp.text.splitlines()
-    if not lines: return None, None
+    if not lines: return None, None, None
     
     sequence = ""
+    name = f"PDB Structure {pdb_id}"
     for line in lines:
-        if not line.startswith(">"):
+        if line.startswith(">"):
+            parts = line.split("|")
+            if len(parts) > 2:
+                name = parts[2].strip()
+        else:
             sequence += line.strip()
             
     # 2. Fetch PDB coordinates
     pdb_resp = session.get(f"https://files.rcsb.org/download/{pdb_id}.pdb")
     if pdb_resp.status_code != 200:
-        return sequence, []
+        return sequence, [], name
         
     atoms = []
     for line in pdb_resp.text.splitlines():
@@ -161,7 +172,7 @@ def fetch_pdb_data(pdb_id):
             except ValueError:
                 continue
                 
-    return sequence, atoms
+    return sequence, atoms, name
 
 def setup_schema_and_seed(source, organism_id, organism_raw, limit):
     print(f"\nConnecting to 'bio_demo' to seed {limit if limit > 0 else 'all'} proteins from {source.upper()}...")
@@ -284,7 +295,7 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
                         continue
 
                     print(f"Fetching {pdb_id}...", end=" ", flush=True)
-                    seq, atoms = fetch_pdb_data(pdb_id)
+                    seq, atoms, name = fetch_pdb_data(pdb_id)
                     
                     if not seq:
                         print("Failed (No sequence found).")
@@ -298,7 +309,7 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
                         ON CONFLICT (uniprot_id) DO NOTHING
                         RETURNING uniprot_id;
                         """,
-                        (pdb_id, f"PDB Structure {pdb_id}", seq, seq)
+                        (pdb_id, name, seq, seq)
                     )
                     
                     if not cur.fetchone():
@@ -338,6 +349,7 @@ if __name__ == "__main__":
         parser.add_argument("--organism", type=str, default="human", help="Organism to filter by (e.g. human, mouse, ecoli). Can also be a taxonomy ID.")
         parser.add_argument("--limit", type=int, default=100, help="Number of proteins to download. Set to -1 for all.")
         parser.add_argument("--reset", action="store_true", help="Drop and recreate the database from scratch.")
+        parser.add_argument("--full", action="store_true", help="Run the full pipeline (setup attention maps automatically after seeding).")
         
         args = parser.parse_args()
         
@@ -345,11 +357,16 @@ if __name__ == "__main__":
         organism_raw = args.organism
         limit = args.limit
         reset = args.reset
+        full = args.full
     else:
         # Interactive mode
-        source, organism_raw, limit, reset = interactive_prompt()
+        source, organism_raw, limit, reset, full = interactive_prompt()
         
     organism_id = ORGANISM_MAP.get(organism_raw.lower(), organism_raw)
     
     create_database(reset=reset)
     setup_schema_and_seed(source=source, organism_id=organism_id, organism_raw=organism_raw, limit=limit)
+    
+    if full:
+        print("\nExecuting --full pipeline: Automatically setting up ground-truth attention maps...")
+        subprocess.run(["uv", "run", "scripts/setup_attention_maps.py"])
