@@ -317,6 +317,38 @@ pub fn prosite_match(sequence: &str, pattern: &str) -> bool {
 }
 
 // =====================================================================
+// 5. SMALL MOLECULE CHEMISTRY (Cheminformatics)
+// =====================================================================
+
+/// Represents a small molecule parsed from a SMILES string.
+#[derive(PostgresType, Serialize, Deserialize, Debug, Clone)]
+pub struct Molecule {
+    pub smiles: String,
+    pub is_valid: bool,
+}
+
+/// Parses and validates a SMILES chemical string.
+#[pg_extern(immutable, parallel_safe)]
+pub fn parse_smiles(smiles_str: &str) -> Molecule {
+    let mut builder = purr::graph::Builder::new();
+    let is_valid = purr::read::read(smiles_str, &mut builder, None).is_ok();
+    Molecule {
+        smiles: smiles_str.to_string(),
+        is_valid,
+    }
+}
+
+/// Computes a very basic boolean "substructure match".
+/// Note: In a production extension, this would do a full molecular graph isomorphism check.
+#[pg_extern(immutable, parallel_safe)]
+pub fn smiles_contains(target: Molecule, substructure: &str) -> bool {
+    if !target.is_valid {
+        return false;
+    }
+    target.smiles.contains(substructure)
+}
+
+// =====================================================================
 // TESTS
 // =====================================================================
 
@@ -451,6 +483,19 @@ mod tests {
         assert!(crate::is_steric_clash(p1.clone(), p2.clone(), 2.0));
         // Sum of VdW radii = 1.0. Distance = 1.5. So they don't clash.
         assert!(!crate::is_steric_clash(p1.clone(), p2.clone(), 1.0));
+    }
+
+    #[pg_test]
+    fn test_parse_smiles() {
+        // Aspirin SMILES
+        let valid_mol = crate::parse_smiles("CC(=O)OC1=CC=CC=C1C(=O)O");
+        assert!(valid_mol.is_valid);
+        assert!(crate::smiles_contains(valid_mol.clone(), "C1=CC=CC=C1")); // Benzene ring
+
+        // Invalid SMILES
+        let invalid_mol = crate::parse_smiles("C(C"); // Unclosed parenthesis
+        assert!(!invalid_mol.is_valid);
+        assert!(!crate::smiles_contains(invalid_mol, "C"));
     }
 }
 
