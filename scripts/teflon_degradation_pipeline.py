@@ -7,6 +7,7 @@
 
 import psycopg
 import time
+import json
 
 DB_URI = "postgresql://localhost:28818/bio_demo"
 
@@ -26,19 +27,26 @@ def run_teflon_pipeline():
             print("   fluoroacetate dehalogenases using High-Dimensional Vector Homology...")
             time.sleep(1)
             
+            # We explicitly JOIN with protein_atoms to ensure we pick a protein with 3D structural data
             cur.execute("""
-                SELECT uniprot_id, name, embedding 
-                FROM proteins 
-                WHERE embedding IS NOT NULL
+                SELECT p.uniprot_id, p.name, p.embedding, a.coord::text
+                FROM proteins p
+                JOIN protein_atoms a ON p.uniprot_id = a.uniprot_id
+                WHERE p.embedding IS NOT NULL
                 LIMIT 1;
             """)
             target = cur.fetchone()
             
             if not target:
-                print("   [!] No proteins found in database. Run seed_bio_demo.py first.")
+                print("   [!] No 3D structures found in database. Run seed_bio_demo.py first.")
                 return
                 
-            t_id, t_name, t_emb = target
+            t_id, t_name, t_emb, raw_coord = target
+            
+            # Parse the real coordinate to ensure our spatial search hits a dense pocket
+            coord_dict = json.loads(raw_coord)
+            TGT_X, TGT_Y, TGT_Z = coord_dict['x'], coord_dict['y'], coord_dict['z']
+            
             print(f"\n   [+] Found wild-type candidate: {t_id} ({t_name[:30]}...)")
             print("       This enzyme can break single C-F bonds, but its pocket is")
             print("       too small for massive Teflon polymers. We must redesign it.\n")
@@ -68,12 +76,11 @@ def run_teflon_pipeline():
             
             # --- STEP 3: SPATIAL DOCKING ---
             print("⚙️ STEP 3: In-Database Teflon Docking & Clash Detection")
-            print("   Loading a massive PTFE (Teflon) polymer coordinate string into")
-            print("   the database and using the Z-Order Morton index to instantly")
-            print("   detect if it physically fits inside our newly widened pocket.")
+            print(f"   Loading a massive PTFE (Teflon) polymer coordinate string into")
+            print(f"   pocket center ({TGT_X:.1f}, {TGT_Y:.1f}, {TGT_Z:.1f}) and using the Z-Order Morton")
+            print("   index to instantly detect if it physically fits inside our enzyme.")
             time.sleep(1)
             
-            TGT_X, TGT_Y, TGT_Z = 12.5, 45.1, -8.3
             RADIUS = 6.0
             
             try:
