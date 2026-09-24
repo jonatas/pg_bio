@@ -383,9 +383,9 @@ mod tests {
     #[pg_test]
     fn test_prosite_match() {
         let pattern = "[ST]-x(2)-[RK]";
-        assert!(crate::prosite_match("ASAAAR", pattern) == true); 
-        assert!(crate::prosite_match("ATAAAR", pattern) == true); 
-        assert!(crate::prosite_match("AGGGGD", pattern) == false); 
+        assert!(crate::prosite_match("ASAAR", pattern) == true); 
+        assert!(crate::prosite_match("ATAAR", pattern) == true); 
+        assert!(crate::prosite_match("ASAAAR", pattern) == false); // 3 chars instead of 2
         
         let pattern2 = "{ST}-x-[RK]";
         assert!(crate::prosite_match("AAAR", pattern2) == true); 
