@@ -171,6 +171,113 @@ pub fn get_top_interacting_residues(map: SparseAttentionMap, target: i32, limit:
 }
 
 // =====================================================================
+// 4. BASIC CHEMISTRY & SEQUENCE MATH
+// =====================================================================
+
+/// Computes the molecular weight of an amino acid sequence (in Daltons).
+#[pg_extern(immutable, parallel_safe)]
+pub fn molecular_weight(sequence: &str) -> f64 {
+    let mut weight = 18.015; // H2O (N-term H and C-term OH)
+    for c in sequence.chars() {
+        weight += match c.to_ascii_uppercase() {
+            'A' => 71.079,
+            'R' => 156.188,
+            'N' => 114.104,
+            'D' => 115.089,
+            'C' => 103.145,
+            'E' => 129.116,
+            'Q' => 128.131,
+            'G' => 57.052,
+            'H' => 137.141,
+            'I' => 113.160,
+            'L' => 113.160,
+            'K' => 128.174,
+            'M' => 131.199,
+            'F' => 147.177,
+            'P' => 97.117,
+            'S' => 87.078,
+            'T' => 101.105,
+            'W' => 186.213,
+            'Y' => 163.176,
+            'V' => 99.133,
+            _ => 0.0, // Ignore unknown characters
+        };
+    }
+    weight
+}
+
+/// Calculates the center of mass for a collection of atoms
+#[pg_extern(immutable, parallel_safe)]
+pub fn center_of_mass(atoms: Vec<ResidueCoord>) -> ResidueCoord {
+    if atoms.is_empty() {
+        return ResidueCoord { x: 0.0, y: 0.0, z: 0.0, name: "COM".to_string() };
+    }
+    let mut sum_x = 0.0;
+    let mut sum_y = 0.0;
+    let mut sum_z = 0.0;
+    let count = atoms.len() as f64;
+
+    for atom in &atoms {
+        sum_x += atom.x;
+        sum_y += atom.y;
+        sum_z += atom.z;
+    }
+
+    ResidueCoord {
+        x: sum_x / count,
+        y: sum_y / count,
+        z: sum_z / count,
+        name: "COM".to_string(),
+    }
+}
+
+/// A highly simplified native regex builder for biological PROSITE patterns.
+/// E.g. [ST]-x(2)-[RK] -> matches Sequences natively in the database.
+#[pg_extern(immutable, parallel_safe)]
+pub fn prosite_match(sequence: &str, pattern: &str) -> bool {
+    let mut regex_pattern = String::new();
+    let mut chars = pattern.chars().peekable();
+    
+    while let Some(c) = chars.next() {
+        match c {
+            '-' => continue,
+            'x' | 'X' => {
+                regex_pattern.push('.');
+            },
+            '(' => {
+                regex_pattern.push('{');
+                while let Some(&next_c) = chars.peek() {
+                    if next_c == ')' {
+                        chars.next();
+                        regex_pattern.push('}');
+                        break;
+                    }
+                    regex_pattern.push(chars.next().unwrap());
+                }
+            },
+            '{' => {
+                regex_pattern.push_str("[^");
+                while let Some(&next_c) = chars.peek() {
+                    if next_c == '}' {
+                        chars.next();
+                        regex_pattern.push(']');
+                        break;
+                    }
+                    regex_pattern.push(chars.next().unwrap());
+                }
+            },
+            _ => regex_pattern.push(c)
+        }
+    }
+    
+    if let Ok(re) = regex::Regex::new(&regex_pattern) {
+        re.is_match(sequence)
+    } else {
+        false
+    }
+}
+
+// =====================================================================
 // TESTS
 // =====================================================================
 
@@ -251,6 +358,38 @@ mod tests {
         assert_eq!(top.len(), 2);
         assert_eq!(top[0], 12); // Highest weight
         assert_eq!(top[1], 10); // Second highest
+    }
+
+    #[pg_test]
+    fn test_molecular_weight() {
+        let w = crate::molecular_weight("A");
+        assert!((w - 89.094).abs() < 1e-3);
+        let w2 = crate::molecular_weight("ARND");
+        assert!(w2 > 300.0);
+    }
+
+    #[pg_test]
+    fn test_center_of_mass() {
+        let atoms = vec![
+            crate::ResidueCoord { x: 0.0, y: 0.0, z: 0.0, name: "C".to_string() },
+            crate::ResidueCoord { x: 10.0, y: 10.0, z: 10.0, name: "C".to_string() },
+        ];
+        let com = crate::center_of_mass(atoms);
+        assert!((com.x - 5.0).abs() < 1e-6);
+        assert!((com.y - 5.0).abs() < 1e-6);
+        assert!((com.z - 5.0).abs() < 1e-6);
+    }
+
+    #[pg_test]
+    fn test_prosite_match() {
+        let pattern = "[ST]-x(2)-[RK]";
+        assert!(crate::prosite_match("ASAAAR", pattern) == true); 
+        assert!(crate::prosite_match("ATAAAR", pattern) == true); 
+        assert!(crate::prosite_match("AGGGGD", pattern) == false); 
+        
+        let pattern2 = "{ST}-x-[RK]";
+        assert!(crate::prosite_match("AAAR", pattern2) == true); 
+        assert!(crate::prosite_match("ASAR", pattern2) == false); 
     }
 }
 
