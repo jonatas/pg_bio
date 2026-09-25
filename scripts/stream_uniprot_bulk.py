@@ -83,60 +83,81 @@ def stream_fasta(dataset: str):
 
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
     
-    batch = []
-    count = 0
     BATCH_SIZE = 10000
     
-    with urllib.request.urlopen(req) as response:
-        dctx = zlib.decompressobj(16 + zlib.MAX_WBITS)
-        
-        current_id = ""
-        current_name = ""
-        current_seq = []
-        
-        # Read stream in chunks
-        for chunk in iter(lambda: response.read(8192 * 4), b""):
-            text = dctx.decompress(chunk).decode('utf-8')
-            lines = text.split('\n')
+    import time
+    max_retries = 10
+    attempts = 0
+    
+    while attempts < max_retries:
+        try:
+            chk = load_checkpoint()
+            skip_count = chk.get(dataset, 0)
+            batch = []
+            count = 0
             
-            for line in lines:
-                if not line: continue
+            if attempts > 0:
+                console.print(f"[yellow]Retrying connection... (Attempt {attempts}/{max_retries}). Fast-forwarding to protein {skip_count}...[/yellow]")
                 
-                if line.startswith('>'):
-                    if current_id:
-                        count += 1
-                        if count > skip_count:
-                            seq_str = "".join(current_seq)
-                            batch.append((current_id, current_name, seq_str, f"[{','.join(map(str, get_esm_embedding(seq_str)))}]"))
-                            
-                            if len(batch) >= BATCH_SIZE:
-                                insert_batch(batch)
-                                save_checkpoint(dataset, count)
-                                console.print(f"[+] Inserted {count} proteins from {dataset}...")
-                                batch = []
-                                
-                    parts = line.split('|')
-                    if len(parts) >= 3:
-                        current_id = parts[1]
-                        current_name = parts[2].strip()
-                    else:
-                        current_id = "UNKNOWN"
-                        current_name = line[1:].strip()
-                    current_seq = []
-                else:
-                    current_seq.append(line.strip())
+            with urllib.request.urlopen(req) as response:
+                dctx = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                
+                current_id = ""
+                current_name = ""
+                current_seq = []
+                
+                for chunk in iter(lambda: response.read(8192 * 4), b""):
+                    text = dctx.decompress(chunk).decode('utf-8')
+                    lines = text.split('\n')
                     
-        # Final flush
-        if current_id:
-            count += 1
-            if count > skip_count:
-                seq_str = "".join(current_seq)
-                batch.append((current_id, current_name, seq_str, f"[{','.join(map(str, get_esm_embedding(seq_str)))}]"))
-                
-        if batch:
-            insert_batch(batch)
-            save_checkpoint(dataset, count)
-            console.print(f"[+] Final flush. Inserted {count} total proteins.")
+                    for line in lines:
+                        if not line: continue
+                        
+                        if line.startswith('>'):
+                            if current_id:
+                                count += 1
+                                if count > skip_count:
+                                    seq_str = "".join(current_seq)
+                                    batch.append((current_id, current_name, seq_str, f"[{','.join(map(str, get_esm_embedding(seq_str)))}]"))
+                                    
+                                    if len(batch) >= BATCH_SIZE:
+                                        insert_batch(batch)
+                                        save_checkpoint(dataset, count)
+                                        console.print(f"[+] Inserted {count} proteins from {dataset}...")
+                                        batch = []
+                                        
+                            parts = line.split('|')
+                            if len(parts) >= 3:
+                                current_id = parts[1]
+                                current_name = parts[2].strip()
+                            else:
+                                current_id = "UNKNOWN"
+                                current_name = line[1:].strip()
+                            current_seq = []
+                        else:
+                            current_seq.append(line.strip())
+                            
+                # Final flush
+                if current_id:
+                    count += 1
+                    if count > skip_count:
+                        seq_str = "".join(current_seq)
+                        batch.append((current_id, current_name, seq_str, f"[{','.join(map(str, get_esm_embedding(seq_str)))}]"))
+                        
+                if batch:
+                    insert_batch(batch)
+                    save_checkpoint(dataset, count)
+                    console.print(f"[+] Final flush. Inserted {count} total proteins.")
+                    
+            break # Success, break out of retry loop
+            
+        except Exception as e:
+            attempts += 1
+            console.print(f"[red]Network error encountered: {e}.[/red]")
+            if attempts >= max_retries:
+                console.print("[red]Max retries reached. Exiting.[/red]")
+                return
+            time.sleep(3)
             
     console.print(f"🎉 INGESTION COMPLETE for {dataset}!")
     
