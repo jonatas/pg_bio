@@ -27,7 +27,7 @@ def run_discovery():
             
             cur.execute("""
                 WITH target AS (
-                    SELECT get_esm_embedding(%s)::vector(1280) as emb
+                    SELECT get_esm_embedding(%s)::halfvec(1280) as emb
                 )
                 SELECT p.uniprot_id, p.name, (p.embedding <=> t.emb) as distance
                 FROM proteins p, target t

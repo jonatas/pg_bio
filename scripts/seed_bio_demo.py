@@ -188,7 +188,7 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
                     uniprot_id VARCHAR(20) PRIMARY KEY,
                     name TEXT,
                     sequence TEXT,
-                    embedding vector(1280)
+                    embedding halfvec(1280)
                 );
             """)
             
@@ -238,7 +238,7 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
                         cur.execute(
                             """
                             INSERT INTO proteins (uniprot_id, name, sequence, embedding) 
-                            VALUES (%s, %s, %s, get_esm_embedding(%s)::vector(1280))
+                            VALUES (%s, %s, %s, get_esm_embedding(%s)::halfvec(1280))
                             ON CONFLICT (uniprot_id) DO NOTHING
                             RETURNING uniprot_id;
                             """,
@@ -306,7 +306,7 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
                     cur.execute(
                         """
                         INSERT INTO proteins (uniprot_id, name, sequence, embedding) 
-                        VALUES (%s, %s, %s, get_esm_embedding(%s)::vector(1280))
+                        VALUES (%s, %s, %s, get_esm_embedding(%s)::halfvec(1280))
                         ON CONFLICT (uniprot_id) DO NOTHING
                         RETURNING uniprot_id;
                         """,
