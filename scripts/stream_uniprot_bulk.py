@@ -56,7 +56,18 @@ def stream_fasta(dataset: str):
         url = "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz"
     elif dataset.startswith("trembl_"):
         division = dataset.split("_")[1]
-        url = f"https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/taxonomic_divisions/uniprot_trembl_{division}.fasta.gz"
+        taxonomies = {
+            "archaea": "2157",
+            "bacteria": "2",
+            "fungi": "4751",
+            "viruses": "10239",
+            "plants": "3193"
+        }
+        if division not in taxonomies:
+            console.print(f"[red]Unknown TrEMBL division: {division}. Try archaea, bacteria, fungi, viruses, or plants.[/red]")
+            return
+        tax_id = taxonomies[division]
+        url = f"https://rest.uniprot.org/uniprotkb/stream?format=fasta&compressed=true&query=reviewed:false+AND+taxonomy_id:{tax_id}"
     else:
         console.print(f"[red]Unknown dataset: {dataset}. Use 'sprot' or 'trembl_archaea', 'trembl_viruses', etc.[/red]")
         return
