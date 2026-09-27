@@ -200,6 +200,11 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
                     z_index BIGINT GENERATED ALWAYS AS (residue_z_index(coord)) STORED
                 );
             """)
+            
+            # Create Indices BEFORE insertion so they update incrementally across batches
+            print("Ensuring spatial Z-Order index and HNSW vector index exist...")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_spatial_z_order ON protein_atoms (z_index);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_protein_embedding ON proteins USING hnsw (embedding halfvec_cosine_ops);")
 
             # 2. Download Data
             inserted_count = 0
@@ -336,11 +341,6 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
                     
             print(f"\nCompleted! Inserted {inserted_count} new entries.")
             
-            print("Ensuring spatial Z-Order index exists...")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_spatial_z_order ON protein_atoms (z_index);")
-            
-            print("Ensuring HNSW vector index exists for lightning-fast homology searches...")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_protein_embedding ON proteins USING hnsw (embedding vector_cosine_ops);")
                 
             print("\n🎉 Database 'bio_demo' successfully seeded and highly optimized!")
             print("You can now connect to it via `psql -p 28818 -d bio_demo` to run spatial queries.")

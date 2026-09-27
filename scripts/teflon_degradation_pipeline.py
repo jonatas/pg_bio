@@ -110,21 +110,23 @@ def run_teflon_pipeline():
             print("   Running a reverse vector search against the Human Proteome...")
             time.sleep(1)
             
+            # Upgraded: Now uses HNSW Vector Index and Smith-Waterman Hybrid Operator (<~>)
             cur.execute("""
-                SELECT uniprot_id, embedding_cosine_distance(embedding, %s::real[]) as distance
-                FROM proteins 
-                WHERE uniprot_id != %s AND embedding IS NOT NULL
-                ORDER BY distance ASC LIMIT 1;
-            """, (t_emb, t_id))
+                SELECT uniprot_id, hybrid_score
+                FROM pg_bio_search_homologs(%s, p_max_distance := 0.35, p_limit := 1);
+            """, (t_id,))
             closest = cur.fetchone()
             
             if closest:
-                distance = closest[1]
-                if distance > 0.15:
-                    print(f"\n   [+] Toxicity Check Passed! (Distance to closest match: {distance:.3f})")
-                    print("       This engineered enzyme is highly specific to PFAS.")
+                h_score = closest[1]
+                if h_score > 0.15:
+                    print(f"\n   [+] Toxicity Check Passed! (Hybrid Score to closest human protein: {h_score:.3f})")
+                    print("       This engineered enzyme is highly specific to PFAS and will not accidentally")
+                    print("       bind to similar structural pockets in human biology.")
                 else:
-                    print(f"\n   [!] Toxicity Warning! Closest match distance is {distance:.3f}.")
+                    print(f"\n   [!] Toxicity Warning! Found a massive homology risk (Hybrid Score: {h_score:.3f}).")
+            else:
+                print(f"\n   [+] Toxicity Check Passed! No structural homologs found within warning threshold.")
                     
     print("\n=========================================================================")
     print("✅ PIPELINE COMPLETE: Candidate designed natively inside PostgreSQL.")

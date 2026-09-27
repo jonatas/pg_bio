@@ -16,7 +16,7 @@ class PgBioClient:
         """
         query = """
             SELECT uniprot_id, name, sequence, 
-                   embedding_cosine_distance(embedding, get_esm_embedding(%s)) as distance
+                   embedding_cosine_distance(embedding, get_esm_embedding(%s)::halfvec) as distance
             FROM proteins
             ORDER BY distance ASC
             LIMIT %s;
