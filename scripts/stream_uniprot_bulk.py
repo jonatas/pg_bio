@@ -40,6 +40,9 @@ def init_db():
                     embedding halfvec(1280) NOT NULL
                 );
             """)
+            
+            # Create HNSW Index BEFORE insertion so it updates incrementally across batches
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_protein_embedding ON proteins USING hnsw (embedding halfvec_cosine_ops);")
 
 def load_checkpoint():
     if os.path.exists(CHECKPOINT_FILE):
@@ -161,14 +164,6 @@ def stream_fasta(dataset: str):
             
     console.print(f"🎉 INGESTION COMPLETE for {dataset}!")
     
-    # Rebuild index
-    console.print("[cyan]Rebuilding HNSW halfvec index (this may take a few minutes)...[/cyan]")
-    with psycopg.connect(DB_URI) as conn:
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute("DROP INDEX IF EXISTS idx_protein_embedding;")
-            cur.execute("CREATE INDEX idx_protein_embedding ON proteins USING hnsw (embedding halfvec_cosine_ops);")
-    console.print("✅ Index built successfully.")
 
 def insert_batch(batch):
     with psycopg.connect(DB_URI) as conn:

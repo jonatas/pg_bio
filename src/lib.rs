@@ -349,8 +349,171 @@ pub fn smiles_contains(target: Molecule, substructure: &str) -> bool {
 }
 
 // =====================================================================
+// 6. SEQUENCE COMPLEXITY
+// =====================================================================
+
+/// Computes the Shannon entropy of a sequence (0.0 to ~4.32 for 20 amino acids)
+/// Low complexity sequences (like poly-G) will have very low entropy.
+#[pg_extern(immutable, parallel_safe)]
+pub fn sequence_entropy(sequence: &str) -> f64 {
+    if sequence.is_empty() {
+        return 0.0;
+    }
+    
+    let mut counts = [0; 256];
+    for b in sequence.bytes() {
+        counts[b as usize] += 1;
+    }
+    
+    let len = sequence.len() as f64;
+    let mut entropy = 0.0;
+    
+    for &count in counts.iter() {
+        if count > 0 {
+            let p = count as f64 / len;
+            entropy -= p * p.log2();
+        }
+    }
+    
+    entropy
+}
+
+// =====================================================================
+// 7. HIGH-PERFORMANCE SEARCH HELPER
+// =====================================================================
+
+pgrx::extension_sql!(
+    r#"
+-- 1. Create a composite type to hold both structural and sequence data
+CREATE TYPE bio_feature AS (
+    emb vector,
+    seq text
+);
+
+-- 2. Define the Hybrid Distance Function
+-- Fuses Structural Distance (cosine) and Sequence Identity (Smith-Waterman)
+-- 0.7 weight to Structure, 0.3 weight to Sequence.
+CREATE OR REPLACE FUNCTION hybrid_bio_distance(a bio_feature, b bio_feature) RETURNS float8
+LANGUAGE sql IMMUTABLE PARALLEL SAFE
+AS $$
+    SELECT (0.7 * (a.emb <=> b.emb)) + (0.3 * (100.0 / (100.0 + sequence_alignment_score(a.seq, b.seq)::float8)));
+$$;
+
+-- 3. Create the Custom Operator
+CREATE OPERATOR <~> (
+    LEFTARG = bio_feature,
+    RIGHTARG = bio_feature,
+    PROCEDURE = hybrid_bio_distance,
+    COMMUTATOR = <~>
+);
+
+-- 4. Upgrade the High-Performance Search Helper to use the Hybrid Operator for re-ranking!
+CREATE OR REPLACE FUNCTION pg_bio_search_homologs(
+    p_target_id text,
+    p_max_distance float8 DEFAULT 0.35,
+    p_len_tolerance float8 DEFAULT 0.3,
+    p_min_entropy float8 DEFAULT 2.0,
+    p_limit integer DEFAULT 1,
+    p_oversample_factor integer DEFAULT 50
+)
+RETURNS TABLE(uniprot_id text, name text, distance float8, hybrid_score float8)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_target_emb vector;
+    v_target_seq text;
+    v_target_len float8;
+    v_oversample integer := p_limit * p_oversample_factor;
+BEGIN
+    SELECT embedding, sequence, LENGTH(sequence)::float8 
+    INTO v_target_emb, v_target_seq, v_target_len
+    FROM proteins WHERE proteins.uniprot_id = p_target_id;
+
+    IF v_target_emb IS NULL THEN
+        RETURN;
+    END IF;
+
+    -- Oversample using fast HNSW structural search, then Re-rank using Hybrid Operator (<~>)
+    RETURN QUERY
+    WITH closest AS (
+        SELECT p.uniprot_id, p.name, p.embedding, p.sequence, (p.embedding <=> v_target_emb) as dist
+        FROM proteins p
+        ORDER BY p.embedding <=> v_target_emb ASC
+        LIMIT v_oversample + 1
+    )
+    SELECT c.uniprot_id::text, c.name, c.dist,
+           (ROW(c.embedding, c.sequence)::bio_feature <~> ROW(v_target_emb, v_target_seq)::bio_feature) as h_score
+    FROM closest c
+    WHERE c.uniprot_id != p_target_id
+      AND c.dist <= p_max_distance
+      AND (c.name ILIKE '%uncharacterized%' OR c.name ILIKE '%hypothetical%')
+      AND LENGTH(c.sequence) BETWEEN v_target_len * (1.0 - p_len_tolerance) AND v_target_len * (1.0 + p_len_tolerance)
+      AND sequence_entropy(c.sequence) >= p_min_entropy
+    ORDER BY h_score ASC
+    LIMIT p_limit;
+END;
+$$;
+"#,
+    name = "pg_bio_search_homologs",
+    requires = [sequence_entropy, sequence_alignment_score]
+);
+
+// =====================================================================
+// 8. SEQUENCE ALIGNMENT (Smith-Waterman)
+// =====================================================================
+
+/// Core Smith-Waterman local alignment algorithm with O(N) space.
+/// Returns the maximum local alignment score.
+#[pg_extern(immutable, parallel_safe)]
+pub fn smith_waterman_score(
+    seq1: &str, 
+    seq2: &str, 
+    match_score: i32, 
+    mismatch_penalty: i32, 
+    gap_penalty: i32
+) -> i32 {
+    let b1 = seq1.as_bytes();
+    let b2 = seq2.as_bytes();
+    let m = b1.len();
+    let n = b2.len();
+
+    if m == 0 || n == 0 {
+        return 0;
+    }
+
+    let mut prev = vec![0; n + 1];
+    let mut curr = vec![0; n + 1];
+    let mut max_score = 0;
+
+    for i in 1..=m {
+        curr[0] = 0; // The 0th column is always 0 in Smith-Waterman
+        for j in 1..=n {
+            let score_diag = prev[j - 1] + if b1[i - 1] == b2[j - 1] { match_score } else { mismatch_penalty };
+            let score_up = prev[j] + gap_penalty;
+            let score_left = curr[j - 1] + gap_penalty;
+
+            curr[j] = 0.max(score_diag).max(score_up).max(score_left);
+            
+            if curr[j] > max_score {
+                max_score = curr[j];
+            }
+        }
+        prev.copy_from_slice(&curr);
+    }
+
+    max_score
+}
+
+/// Convenience function that uses standard biological defaults (Match: 3, Mismatch: -1, Gap: -2)
+#[pg_extern(immutable, parallel_safe)]
+pub fn sequence_alignment_score(seq1: &str, seq2: &str) -> i32 {
+    smith_waterman_score(seq1, seq2, 3, -1, -2)
+}
+
+// =====================================================================
 // TESTS
 // =====================================================================
+
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
@@ -496,6 +659,31 @@ mod tests {
         let invalid_mol = crate::parse_smiles("C(C"); // Unclosed parenthesis
         assert!(!invalid_mol.is_valid);
         assert!(!crate::smiles_contains(invalid_mol, "C"));
+    }
+
+    #[pg_test]
+    fn test_sequence_entropy() {
+        let poly_g = "GGGGGGGGGG";
+        let entropy_g = crate::sequence_entropy(poly_g);
+        assert!((entropy_g - 0.0).abs() < 1e-6); // entropy of 1 char is 0
+
+        let complex = "ACDEFGHIKLMNPQRSTVWY";
+        let entropy_complex = crate::sequence_entropy(complex);
+        assert!(entropy_complex > 4.0); // very high entropy
+    }
+
+    #[pg_test]
+    fn test_smith_waterman() {
+        // Perfect match
+        assert_eq!(crate::sequence_alignment_score("ACDEF", "ACDEF"), 15); // 5 * 3
+        
+        // Partial match
+        // ACDEF
+        // AC-EF
+        assert_eq!(crate::sequence_alignment_score("ACDEF", "ACEF"), 10); // AC=6, EF=6, gap=-2 = 10
+        
+        // No match
+        assert_eq!(crate::sequence_alignment_score("AAAAA", "CCCCC"), 0);
     }
 }
 

@@ -31,40 +31,27 @@ def batch_discover(keyword: str, max_distance: float = 0.35):
                 return
                 
             console.print(f"Found [yellow]{len(targets)}[/yellow] known '{keyword}' proteins to use as bait...")
-            
-            discoveries = []
-            
-            # 2. Loop over targets and do KNN search against uncharacterized proteins
-            # We use LIMIT 1 for maximum HNSW speed
             query = """
-                WITH target AS (
-                    SELECT embedding as emb FROM proteins WHERE uniprot_id = %s
-                )
-                SELECT 
-                    p.uniprot_id, 
-                    p.name, 
-                    (p.embedding <=> t.emb) as distance
-                FROM proteins p, target t
-                WHERE (p.name ILIKE '%%uncharacterized%%' OR p.name ILIKE '%%hypothetical%%')
-                ORDER BY p.embedding <=> t.emb ASC
-                LIMIT 1;
+                SELECT uniprot_id, name, distance, hybrid_score 
+                FROM pg_bio_search_homologs(%s, p_max_distance := %s, p_limit := 1);
             """
             
             start_time = time.time()
+            discoveries = []
             
             for t_id, t_name in track(targets, description="Mining Dark Proteome..."):
-                cur.execute(query, (t_id,))
+                cur.execute(query, (t_id, max_distance))
                 res = cur.fetchone()
                 
                 if res:
-                    u_id, u_name, dist = res
+                    u_id, u_name, dist, h_score = res
                     if dist <= max_distance:
                         discoveries.append({
                             "target_id": t_id,
                             "target_name": t_name.split(" OS=")[0],
                             "orphan_id": u_id,
                             "orphan_name": u_name.split(" OS=")[0],
-                            "distance": dist
+                            "distance": dist, "hybrid_score": h_score
                         })
             
             elapsed = time.time() - start_time
@@ -80,6 +67,7 @@ def batch_discover(keyword: str, max_distance: float = 0.35):
             table.add_column("Known Target (Bait)", style="cyan")
             table.add_column("Orphan Discovery", style="magenta")
             table.add_column("Vector Distance", style="green", justify="right")
+            table.add_column("Hybrid Score", style="yellow", justify="right")
             
             # Sort by closest distance
             discoveries.sort(key=lambda x: x["distance"])
@@ -88,7 +76,7 @@ def batch_discover(keyword: str, max_distance: float = 0.35):
                 table.add_row(
                     f"{d['target_id']}\n[dim]{d['target_name']}[/dim]",
                     f"{d['orphan_id']}\n[dim]{d['orphan_name']}[/dim]",
-                    f"{d['distance']:.4f}"
+                    f"{d['distance']:.4f}", f"{d['hybrid_score']:.4f}"
                 )
                 
             console.print(table)
