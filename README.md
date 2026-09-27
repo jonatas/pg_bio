@@ -96,7 +96,7 @@ Vector indexing is fully tunable to hardware profiles.
 You don't need to write raw SQL to leverage this power.
 
 * **`pgbio-py`:** A seamless Python SDK that connects directly to the Rust engine.
-* **Jupyter Integration:** Full compatibility with Pandas and Matplotlib. View our complete tutorial notebook demonstrating all four layers in action: `experiments/teaflon/teaflon_multiomics_tutorial.ipynb`.
+* **Jupyter Integration:** Full compatibility with Pandas and Matplotlib. View our complete tutorial notebook demonstrating all four layers in action: `https://github.com/jonatas/teaflon/blob/main/pg_bio_multiomics_pipeline/teaflon_multiomics_tutorial.ipynb`.
 
 ```python
 from pgbio import PgBioClient
@@ -119,7 +119,7 @@ cd pg_bio
 docker-compose up -d
 
 # 3. Compile the Database and Interactive Notebooks
-uv run jupyter nbconvert --execute experiments/teaflon/teaflon_multiomics_tutorial.ipynb
+uv run jupyter nbconvert --execute https://github.com/jonatas/teaflon/blob/main/pg_bio_multiomics_pipeline/teaflon_multiomics_tutorial.ipynb
 ```
 
 *(For an extended deep-dive into the architectural theory, read `docs/MULTIOMICS_ARCHITECTURE.md`)*

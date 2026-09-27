@@ -1,0 +1,54 @@
+Starting Overnight Dark Proteome Mining...
+sáb 26 set 2026 21:36:34 -03
+========================================
+Mining Family: Argonaute
+========================================
+🧬 pg_bio: Batch Dark Proteome De-Orphanizer
+Targeting Family: Argonaute (Distance threshold < 0.35)
+
+Found 77 known 'Argonaute' proteins to use as bait...
+Mining Dark Proteome... ━━━━╸                                     12% 0:12:21
+Traceback (most recent call last):
+  File "/Users/jonatas/code/pg_bio/scripts/batch_deorphanizer.py", line 87, in <module>
+    batch_discover(kw, max_distance=0.35)
+  File "/Users/jonatas/code/pg_bio/scripts/batch_deorphanizer.py", line 43, in batch_discover
+    cur.execute(query, (t_id, max_distance))
+  File "/Users/jonatas/.cache/uv/environments-v2/batch-deorphanizer-ea1a799f406ea100/lib/python3.12/site-packages/psycopg/cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+psycopg.errors.QueryCanceled: canceling statement due to user request
+CONTEXTO:  SQL statement "WITH closest AS (
+                    SELECT p.uniprot_id, p.name, p.embedding, p.sequence, (p.embedding <=> v_target_emb) as dist
+                    FROM proteins p
+                    ORDER BY p.embedding <=> v_target_emb ASC
+                    LIMIT v_oversample + 1
+                )
+                SELECT c.uniprot_id::text, c.name, c.dist,
+                       (ROW(c.embedding, c.sequence)::bio_feature <~> ROW(v_target_emb, v_target_seq)::bio_feature) as h_score
+                FROM closest c
+                WHERE c.uniprot_id != p_target_id
+                  AND c.dist <= p_max_distance
+                  AND (c.name ILIKE '%uncharacterized%' OR c.name ILIKE '%hypothetical%')
+                  AND LENGTH(c.sequence) BETWEEN v_target_len * (1.0 - p_len_tolerance) AND v_target_len * (1.0 + p_len_tolerance)
+                  AND sequence_entropy(c.sequence) >= p_min_entropy
+                ORDER BY h_score ASC
+                LIMIT p_limit"
+PL/pgSQL function pg_bio_search_homologs(text,double precision,double precision,double precision,integer,integer) line 16 at RETURN QUERY
+========================================
+Mining Family: Telomerase
+========================================
+🧬 pg_bio: Batch Dark Proteome De-Orphanizer
+Targeting Family: Telomerase (Distance threshold < 0.35)
+
+Found 43 known 'Telomerase' proteins to use as bait...
+Mining Dark Proteome... ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:06:39
+
+✅ Batch Mining Complete in 399.33 seconds!
+
+No structural homologues found in the Dark Proteome for 'Telomerase'.
+========================================
+Mining Family: Polymerase
+========================================
+🧬 pg_bio: Batch Dark Proteome De-Orphanizer
+Targeting Family: Polymerase (Distance threshold < 0.35)
+
+Found 21685 known 'Polymerase' proteins to use as bait...
