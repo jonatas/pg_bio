@@ -578,27 +578,18 @@ pub fn smith_waterman_score(
         return 0;
     }
 
-    let mut prev = vec![0; n + 1];
-    let mut curr = vec![0; n + 1];
-    let mut max_score = 0;
+    // rust-bio Aligner uses gap_open and gap_extend. 
+    // Our old signature just took a single gap_penalty for both open and extend.
+    let mut aligner = bio::alignment::pairwise::Aligner::with_capacity(
+        m, 
+        n, 
+        gap_penalty, 
+        gap_penalty, 
+        |a: u8, b: u8| if a == b { match_score } else { mismatch_penalty }
+    );
 
-    for i in 1..=m {
-        curr[0] = 0; // The 0th column is always 0 in Smith-Waterman
-        for j in 1..=n {
-            let score_diag = prev[j - 1] + if b1[i - 1] == b2[j - 1] { match_score } else { mismatch_penalty };
-            let score_up = prev[j] + gap_penalty;
-            let score_left = curr[j - 1] + gap_penalty;
-
-            curr[j] = 0.max(score_diag).max(score_up).max(score_left);
-            
-            if curr[j] > max_score {
-                max_score = curr[j];
-            }
-        }
-        prev.copy_from_slice(&curr);
-    }
-
-    max_score
+    let alignment = aligner.local(b1, b2);
+    alignment.score
 }
 
 /// Convenience function that uses standard biological defaults (Match: 3, Mismatch: -1, Gap: -2)

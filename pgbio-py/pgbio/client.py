@@ -34,6 +34,31 @@ class PgBioClient:
                     ))
         return results
 
+    def align_sequence(self, target_sequence: str, threshold: int = 50, limit: int = 5) -> List[dict]:
+        """
+        Uses pg_bio's native rust-bio Smith-Waterman alignment to search proteins by local alignment.
+        """
+        query = """
+            SELECT uniprot_id, name, sequence,
+                   smith_waterman_score(sequence, %s, 3, -1, -2) as alignment_score
+            FROM proteins
+            WHERE smith_waterman_score(sequence, %s, 3, -1, -2) >= %s
+            ORDER BY alignment_score DESC
+            LIMIT %s;
+        """
+        results = []
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (target_sequence, target_sequence, threshold, limit))
+                for row in cur.fetchall():
+                    results.append({
+                        "uniprot_id": row[0],
+                        "name": row[1],
+                        "sequence": row[2],
+                        "alignment_score": row[3]
+                    })
+        return results
+
     def find_atoms_in_radius(self, target_x: float, target_y: float, target_z: float, radius: float) -> List[Atom]:
         """
         Uses pg_bio's massive Z-Order B-Tree spatial index to instantly find atoms within a 3D bounding box.
