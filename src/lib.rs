@@ -348,6 +348,103 @@ pub fn smiles_contains(target: Molecule, substructure: &str) -> bool {
     target.smiles.contains(substructure)
 }
 
+/// Native Morgan (ECFP) Fingerprint generation in Rust
+#[pg_extern(immutable, parallel_safe)]
+pub fn smiles_to_fingerprint(smiles: &str) -> Vec<f32> {
+    let mut builder = purr::graph::Builder::new();
+    if purr::read::read(smiles, &mut builder, None).is_err() {
+        return vec![0.0; 1024]; // Return empty on parse fail
+    }
+    let atoms = match builder.build() {
+        Ok(a) => a,
+        Err(_) => return vec![0.0; 1024]
+    };
+    let mut fp = vec![0.0; 1024];
+
+    let mut hashes: Vec<u64> = atoms.iter().enumerate().map(|(i, a)| {
+        let mut h = (i as u64).wrapping_add(1) * 13;
+        let kind_str = format!("{:?}", a.kind);
+        for byte in kind_str.bytes() {
+            h = h.wrapping_mul(31).wrapping_add(byte as u64);
+        }
+        h = h.wrapping_mul(31).wrapping_add(a.bonds.len() as u64);
+        // Set bit for radius 0
+        fp[(h as usize) % 1024] = 1.0;
+        h
+    }).collect();
+
+    for _radius in 1..=2 {
+        let mut new_hashes = hashes.clone();
+        for (i, a) in atoms.iter().enumerate() {
+            let mut neighbor_hashes: Vec<u64> = a.bonds.iter().map(|b| {
+                let neighbor_id = b.tid;
+                let bond_hash = match b.kind {
+                    purr::feature::BondKind::Single => 1,
+                    purr::feature::BondKind::Double => 2,
+                    purr::feature::BondKind::Triple => 3,
+                    purr::feature::BondKind::Quadruple => 4,
+                    purr::feature::BondKind::Aromatic => 5,
+                    purr::feature::BondKind::Up => 6,
+                    purr::feature::BondKind::Down => 7,
+                    purr::feature::BondKind::Elided => 8,
+                };
+                hashes[neighbor_id].wrapping_mul(17).wrapping_add(bond_hash)
+            }).collect();
+            
+            neighbor_hashes.sort_unstable();
+            
+            let mut h = hashes[i];
+            for nh in neighbor_hashes {
+                h = h.wrapping_mul(31).wrapping_add(nh);
+            }
+            new_hashes[i] = h;
+            // Set bit
+            fp[(h as usize) % 1024] = 1.0;
+        }
+        hashes = new_hashes;
+    }
+    
+    fp
+}
+
+/// Tanimoto similarity function for chemical fingerprints
+#[pg_extern(immutable, parallel_safe)]
+pub fn tanimoto_similarity(a: Vec<f32>, b: Vec<f32>) -> f64 {
+    if a.len() != b.len() || a.is_empty() { return 0.0; }
+    
+    let mut dot_product: f64 = 0.0;
+    let mut norm_a: f64 = 0.0;
+    let mut norm_b: f64 = 0.0;
+
+    for i in 0..a.len() {
+        let val_a = a[i] as f64;
+        let val_b = b[i] as f64;
+        dot_product += val_a * val_b;
+        norm_a += val_a * val_a;
+        norm_b += val_b * val_b;
+    }
+
+    if norm_a == 0.0 && norm_b == 0.0 { return 1.0; }
+    let denominator = norm_a + norm_b - dot_product;
+    if denominator == 0.0 { return 0.0; }
+    
+    dot_product / denominator
+}
+
+pgrx::extension_sql!(
+    r#"
+-- 5. Create Tanimoto similarity operator for float arrays
+CREATE OPERATOR % (
+    LEFTARG = real[],
+    RIGHTARG = real[],
+    PROCEDURE = tanimoto_similarity,
+    COMMUTATOR = %
+);
+"#,
+    name = "pg_bio_tanimoto_operator",
+    requires = [tanimoto_similarity]
+);
+
 // =====================================================================
 // 6. SEQUENCE COMPLEXITY
 // =====================================================================
@@ -519,7 +616,7 @@ pub fn sequence_alignment_score(seq1: &str, seq2: &str) -> i32 {
 #[pg_schema]
 mod tests {
     use pgrx::prelude::*;
-    use crate::{ResidueCoord, z_order_encode, residue_z_index, embedding_cosine_distance};
+    use crate::{ResidueCoord, residue_z_index, embedding_cosine_distance};
     use crate::{AttentionEntry, SparseAttentionMap, get_top_interacting_residues};
 
     #[pg_test]
@@ -684,6 +781,19 @@ mod tests {
         
         // No match
         assert_eq!(crate::sequence_alignment_score("AAAAA", "CCCCC"), 0);
+    }
+    #[pg_test]
+    fn test_smiles_to_fingerprint() {
+        let fp1 = crate::smiles_to_fingerprint("C1=CC=CC=C1"); // Benzene
+        let fp2 = crate::smiles_to_fingerprint("CC1=CC=CC=C1"); // Toluene
+        assert_eq!(fp1.len(), 1024);
+        assert_eq!(fp2.len(), 1024);
+        
+        let sim = crate::tanimoto_similarity(fp1.clone(), fp2.clone());
+        assert!(sim > 0.0 && sim < 1.0); // Should be somewhat similar but not identical
+        
+        let sim_self = crate::tanimoto_similarity(fp1.clone(), fp1.clone());
+        assert!((sim_self - 1.0).abs() < 1e-6);
     }
 }
 
