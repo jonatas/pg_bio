@@ -809,6 +809,23 @@ mod tests {
     }
 
 
+
+    #[pg_test]
+    fn test_uniprot_search_gene() {
+        // Search for human BRCA1 (gene:BRCA1 AND taxonomy_id:9606 AND reviewed:true)
+        let results: Vec<_> = crate::bio_search_uniprot("gene:BRCA1 AND taxonomy_id:9606 AND reviewed:true").collect();
+        assert!(results.len() > 0);
+        assert_eq!(results[0].0, "P38398"); // Human BRCA1 accession
+    }
+
+    #[pg_test]
+    fn test_uniprot_search_length_filter() {
+        // Search for very short human proteins
+        let results: Vec<_> = crate::bio_search_uniprot("length:[1 TO 50] AND taxonomy_id:9606 AND reviewed:true").collect();
+        assert!(results.len() > 0);
+        assert!(results[0].3.len() <= 50);
+    }
+
     #[pg_test]
     fn test_bio_search_uniprot() {
         let results: Vec<_> = crate::bio_search_uniprot("taxonomy_id:2594042").collect();
