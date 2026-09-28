@@ -510,9 +510,65 @@ pub fn sequence_alignment_score(seq1: &str, seq2: &str) -> i32 {
     smith_waterman_score(seq1, seq2, 3, -1, -2)
 }
 
+
+// =====================================================================
+// UNIPROT INTEGRATION
+// =====================================================================
+
+#[derive(PostgresType, Serialize, Deserialize, Debug)]
+pub struct UniprotEntry {
+    pub id: String,
+    pub organism: String,
+    pub taxonomy: Vec<String>,
+    pub sequence: String,
+}
+
+#[pg_extern]
+pub fn bio_fetch_uniprot(accession: &str) -> UniprotEntry {
+    let url = format!("https://rest.uniprot.org/uniprotkb/{}.json", accession);
+    
+    // We use ureq for synchronous HTTP requests inside postgres
+    let mut resp = match ureq::get(&url).call() {
+        Ok(r) => r,
+        Err(e) => pgrx::error!("HTTP request to UniProt failed: {}", e),
+    };
+    
+    let body_str = match resp.body_mut().read_to_string() {
+        Ok(s) => s,
+        Err(e) => pgrx::error!("Failed to read response body: {}", e),
+    };
+    
+    let json: serde_json::Value = match serde_json::from_str(&body_str) {
+        Ok(j) => j,
+        Err(e) => pgrx::error!("Failed to parse UniProt JSON: {}", e),
+    };
+    
+    let id = json["primaryAccession"].as_str().unwrap_or("").to_string();
+    let organism = json["organism"]["scientificName"].as_str().unwrap_or("").to_string();
+    
+    let mut taxonomy = Vec::new();
+    if let Some(arr) = json["organism"]["lineage"].as_array() {
+        for t in arr {
+            if let Some(s) = t.as_str() {
+                taxonomy.push(s.to_string());
+            }
+        }
+    }
+    
+    let sequence = json["sequence"]["value"].as_str().unwrap_or("").to_string();
+
+    UniprotEntry {
+        id,
+        organism,
+        taxonomy,
+        sequence,
+    }
+}
+
 // =====================================================================
 // TESTS
 // =====================================================================
+
 
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -672,6 +728,7 @@ mod tests {
         assert!(entropy_complex > 4.0); // very high entropy
     }
 
+
     #[pg_test]
     fn test_smith_waterman() {
         // Perfect match
@@ -685,6 +742,13 @@ mod tests {
         // No match
         assert_eq!(crate::sequence_alignment_score("AAAAA", "CCCCC"), 0);
     }
+
+    #[pg_test(error = "HTTP request to UniProt failed: http status: 400")]
+    fn test_bio_fetch_uniprot_invalid() {
+        // Should panic with HTTP error
+        crate::bio_fetch_uniprot("INVALID_ID_123");
+    }
+
 }
 
 #[cfg(test)]
