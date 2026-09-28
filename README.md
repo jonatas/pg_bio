@@ -75,6 +75,42 @@ Traditionally, DNA sequences and 3D Protein folds live in different worlds. `pg_
   ORDER BY cross_omic_distance ASC LIMIT 1;
   ```
 
+### Layer 5: Direct Biological Database Integration (UniProt API inside SQL)
+Instead of relying on external Python scripts to fetch biological metadata, `pg_bio` contains a native Rust-powered synchronous HTTP client (`ureq`). It can fetch and parse JSON from the UniProt API directly into specialized PostgreSQL Composite Types dynamically.
+
+* **The Engine:** The `bio_fetch_uniprot()` function queries `rest.uniprot.org`, parses the JSON via `serde`, and projects it instantly into a Postgres `UniprotEntry` type (`id`, `organism`, `taxonomy`, `sequence`).
+* **The Advantage:** Zero external scripts. You can enrich millions of orphan protein IDs dynamically inside pure SQL pipelines. 
+* **SQL Example (Multi-Row Batch Fetch & Insert):**
+
+  Using a `CROSS JOIN LATERAL`, you can map the HTTP fetch over a batch of IDs, evaluate it exactly once per row (saving network calls), and `INSERT` the results directly into your metadata table in a single atomic SQL transaction!
+
+  ```sql
+  -- 1. Create a table for the newly discovered metadata
+  CREATE TABLE dark_proteome_metadata (
+      uniprot_id VARCHAR(20) PRIMARY KEY,
+      organism TEXT,
+      taxonomy TEXT[],
+      sequence TEXT
+  );
+
+  -- 2. The Batch Fetch & Insert Pipeline
+  WITH new_discoveries(uniprot_id) AS (
+      VALUES 
+          ('A0A5B9DCV6'), -- Deep-sea Asgard archaeon (RuBisCO)
+          ('L0JL84')      -- Halophilic archaeon
+  ),
+  enriched_data AS (
+      -- The LATERAL join ensures the HTTP request evaluates exactly once per ID
+      SELECT u.id, u.organism, u.taxonomy, u.sequence
+      FROM new_discoveries d
+      CROSS JOIN LATERAL bio_fetch_uniprot(d.uniprot_id) u
+  )
+  INSERT INTO dark_proteome_metadata (uniprot_id, organism, taxonomy, sequence)
+  SELECT id, organism, taxonomy, sequence 
+  FROM enriched_data
+  RETURNING uniprot_id, organism;
+  ```
+
 ---
 
 ## 🛠️ Scale & Optimization Infrastructure
