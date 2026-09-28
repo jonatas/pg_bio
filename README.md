@@ -75,7 +75,70 @@ Traditionally, DNA sequences and 3D Protein folds live in different worlds. `pg_
   ORDER BY cross_omic_distance ASC LIMIT 1;
   ```
 
-### Layer 5: Cheminformatics (Molecular Graph Search & Fingerprinting)
+### Layer 5: Direct Biological Database Integration (UniProt API inside SQL)
+Instead of relying on external Python scripts to fetch biological metadata, `pg_bio` contains a native Rust-powered synchronous HTTP client (`ureq`). It can fetch and parse JSON from the UniProt API directly into specialized PostgreSQL Composite Types dynamically.
+
+* **The Engine:** The `bio_fetch_uniprot()` function queries `rest.uniprot.org`, parses the JSON via `serde`, and projects it instantly into a Postgres `UniprotEntry` type (`id`, `organism`, `taxonomy`, `sequence`).
+* **The Advantage:** Zero external scripts. You can enrich millions of orphan protein IDs dynamically inside pure SQL pipelines. 
+* **SQL Example (Multi-Row Batch Fetch & Insert):**
+
+  Using a `CROSS JOIN LATERAL`, you can map the HTTP fetch over a batch of IDs, evaluate it exactly once per row (saving network calls), and `INSERT` the results directly into your metadata table in a single atomic SQL transaction!
+
+  ```sql
+  -- 1. Create a table for the newly discovered metadata
+  CREATE TABLE dark_proteome_metadata (
+      uniprot_id VARCHAR(20) PRIMARY KEY,
+      organism TEXT,
+      taxonomy TEXT[],
+      sequence TEXT
+  );
+
+  -- 2. The Batch Fetch & Insert Pipeline
+  WITH new_discoveries(uniprot_id) AS (
+      VALUES 
+          ('A0A5B9DCV6'), -- Deep-sea Asgard archaeon (RuBisCO)
+          ('L0JL84')      -- Halophilic archaeon
+  ),
+  enriched_data AS (
+      -- The LATERAL join ensures the HTTP request evaluates exactly once per ID
+      SELECT u.id, u.organism, u.taxonomy, u.sequence
+      FROM new_discoveries d
+      CROSS JOIN LATERAL bio_fetch_uniprot(d.uniprot_id) u
+  )
+  INSERT INTO dark_proteome_metadata (uniprot_id, organism, taxonomy, sequence)
+  SELECT id, organism, taxonomy, sequence 
+  FROM enriched_data
+  RETURNING uniprot_id, organism;
+  ```
+
+* **SQL Example (Native API Search via Virtual Tables):**
+
+  We also provide a **Set Returning Function (SRF)**, which acts mechanically identical to a read-only Foreign Data Wrapper (FDW). You can pass standard UniProt Lucene query parameters directly into the function and query it exactly like a local table.
+  
+  ```sql
+  -- Find the top 5 longest curated proteins for the BRCA1 gene in Humans
+  SELECT id, organism, length(sequence) AS seq_len 
+  FROM bio_search_uniprot('gene:BRCA1 AND taxonomy_id:9606 AND reviewed:true')
+  ORDER BY seq_len DESC 
+  LIMIT 5;
+
+  -- Filter archaeal proteins by exact length and sequence
+  SELECT id, sequence
+  FROM bio_search_uniprot('taxonomy_id:2594042 AND length:[1 TO 50]')
+  WHERE sequence LIKE 'M%'; -- standard SQL filters apply to the returning set
+  ```
+  
+  **Supported UniProt Query Parameters:**
+  The `query` argument supports all standard UniProtKB REST API search fields, including:
+  * `gene:BRCA1` (Filter by gene name)
+  * `taxonomy_id:9606` (Filter by taxonomic ID, e.g., 9606 = Homo sapiens)
+  * `organism_name:"Homo sapiens"` (Filter by exact organism string)
+  * `length:[1 TO 200]` (Filter by amino acid sequence length)
+  * `reviewed:true` (Only return manually curated Swiss-Prot entries)
+  * `keyword:KW-0002` (Filter by specific biological keywords, e.g., 3D-structure)
+
+---
+### Layer 6: Cheminformatics (Molecular Graph Search & Fingerprinting)
 To discover novel drugs, you must traverse massive libraries of chemical compounds, traditionally requiring you to serialize millions of strings into Python for parsing via RDKit.
 
 * **The Engine:** `pg_bio` integrates the native Rust `purr` crate to parse **SMILES** (Simplified Molecular-Input Line-Entry System) strings directly in the database. It instantly converts chemical graphs into **1024-bit Morgan Fingerprints** (ECFP) entirely inside Postgres.
