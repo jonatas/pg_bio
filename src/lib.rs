@@ -795,6 +795,18 @@ mod tests {
         let sim_self = crate::tanimoto_similarity(fp1.clone(), fp1.clone());
         assert!((sim_self - 1.0).abs() < 1e-6);
     }
+
+    #[pg_test]
+    fn test_tanimoto_sql() {
+        // We use SPI to test if the custom operator `%` was properly registered
+        // and returns the expected tanimoto calculation
+        let sim = Spi::get_one::<f64>(
+            "SELECT smiles_to_fingerprint('C1=CC=CC=C1') % smiles_to_fingerprint('CC1=CC=CC=C1');"
+        ).expect("SPI failed to execute tanimoto % operator");
+        
+        let sim = sim.expect("Tanimoto similarity should not be NULL");
+        assert!(sim > 0.0 && sim < 1.0);
+    }
 }
 
 #[cfg(test)]
