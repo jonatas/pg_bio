@@ -747,12 +747,96 @@ pub fn bio_fold_sequence(sequence: &str) -> String {
 
 
 
+#[pg_extern]
+fn parse_vcf(filepath: &str) -> pgrx::iter::TableIterator<'static, (
+    name!(chrom, String), 
+    name!(pos, i32), 
+    name!(id, Option<String>), 
+    name!(ref_allele, String), 
+    name!(alt_allele, String),
+    name!(qual, Option<f32>),
+    name!(filter, Option<String>),
+    name!(info, Option<String>)
+)> {
+    use noodles::vcf;
+    use noodles::bgzf;
+    use std::fs::File;
+    use std::io::BufReader;
+
+    let file = File::open(filepath).unwrap_or_else(|e| panic!("Failed to open VCF file {}: {}", filepath, e));
+    
+    let boxed_reader: Box<dyn std::io::BufRead> = if filepath.ends_with(".gz") || filepath.ends_with(".bgz") {
+        Box::new(noodles::bgzf::io::Reader::new(file))
+    } else {
+        Box::new(BufReader::new(file))
+    };
+
+    let mut reader = vcf::io::Reader::new(boxed_reader);
+    let header = reader.read_header().unwrap_or_else(|e| panic!("Failed to read VCF header: {}", e));
+
+    struct VcfIterator {
+        reader: vcf::io::Reader<Box<dyn std::io::BufRead>>,
+        header: vcf::Header,
+    }
+
+    impl Iterator for VcfIterator {
+        type Item = (String, i32, Option<String>, String, String, Option<f32>, Option<String>, Option<String>);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let mut record = vcf::variant::RecordBuf::default();
+            match self.reader.read_record_buf(&self.header, &mut record) {
+                Ok(0) => None,
+                Ok(_) => {
+                    let chrom = record.reference_sequence_name().to_string();
+                    let pos: usize = record.variant_start().map(|p| p.get()).unwrap_or(0);
+                    let id = {
+                        let ids = record.ids().as_ref();
+                        if ids.is_empty() { None } else { Some(ids.iter().cloned().collect::<Vec<_>>().join(",")) }
+                    };
+                    let ref_allele = record.reference_bases().to_string();
+                    let alt_allele = record.alternate_bases().as_ref().join(",");
+                    let qual = record.quality_score();
+                    let filter = {
+                        let filters = record.filters().as_ref();
+                        if filters.is_empty() { None } else { Some(filters.iter().cloned().collect::<Vec<_>>().join(",")) }
+                    };
+                    let info = {
+                        let info_map = record.info().as_ref();
+                        if info_map.is_empty() { None } 
+                        else {
+                            let parts: Vec<String> = info_map.iter().map(|(k, v)| {
+                                if let Some(val) = v { format!("{}={:?}", k, val) } else { k.to_string() }
+                            }).collect();
+                            Some(parts.join(";"))
+                        }
+                    };
+                    Some((chrom, pos as i32, id, ref_allele, alt_allele, qual, filter, info))
+                }
+                Err(_) => None,
+            }
+        }
+    }
+
+    pgrx::iter::TableIterator::new(VcfIterator { reader, header })
+}
+
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
 mod tests {
     use pgrx::prelude::*;
     use crate::{ResidueCoord, residue_z_index, embedding_cosine_distance};
     use crate::{AttentionEntry, SparseAttentionMap, get_top_interacting_residues};
+
+    #[pg_test]
+    fn test_parse_vcf_sql() {
+        use std::io::Write;
+        // create a temporary file
+        let mut file = std::fs::File::create("/tmp/test_parse.vcf").unwrap();
+        file.write_all(b"##fileformat=VCFv4.2\n##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Total Depth\">\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t10000\trs123\tA\tT\t50\tPASS\tDP=100\n").unwrap();
+        
+        let result = Spi::get_one::<String>("SELECT chrom FROM parse_vcf('/tmp/test_parse.vcf');");
+        assert_eq!(result.unwrap().unwrap(), "chr1");
+    }
 
     #[pg_test]
     fn test_distance() {
