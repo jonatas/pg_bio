@@ -811,6 +811,33 @@ fn parse_vcf(filepath: &str) -> pgrx::iter::TableIterator<'static, (
     pgrx::iter::TableIterator::new(VcfIterator { reader, header })
 }
 
+#[pg_extern]
+fn parse_pdb_file(filepath: &str) -> pgrx::iter::TableIterator<'static, (
+    name!(atom_id, i32),
+    name!(residue, String),
+    name!(x, f64),
+    name!(y, f64),
+    name!(z, f64)
+)> {
+    let (pdb, _errors) = pdbtbx::open(filepath).unwrap_or_else(|e| panic!("Failed to open PDB file {}: {:?}", filepath, e));
+    
+    let mut records = Vec::new();
+    for residue in pdb.residues() {
+        let res_name = residue.name().map(|n| n.to_string()).unwrap_or_default();
+        for atom in residue.atoms() {
+            records.push((
+                atom.serial_number() as i32,
+                res_name.clone(),
+                atom.x(),
+                atom.y(),
+                atom.z()
+            ));
+        }
+    }
+    
+    pgrx::iter::TableIterator::new(records.into_iter())
+}
+
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
 mod tests {
@@ -827,6 +854,18 @@ mod tests {
         
         let result = Spi::get_one::<String>("SELECT chrom FROM parse_vcf('/tmp/test_parse.vcf');");
         assert_eq!(result.unwrap().unwrap(), "chr1");
+    }
+
+    #[pg_test]
+    fn test_parse_pdb_sql() {
+        use std::io::Write;
+        let mut file = std::fs::File::create("/tmp/test_parse.pdb").unwrap();
+        // A simple valid PDB atom record
+        // ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00           N
+        file.write_all(b"ATOM      1  N   ALA A   1       1.234   5.678   9.012  1.00  0.00           N\n").unwrap();
+        
+        let result = Spi::get_one::<f64>("SELECT x FROM parse_pdb_file('/tmp/test_parse.pdb');");
+        assert_eq!(result.unwrap().unwrap(), 1.234);
     }
 
     #[pg_test]

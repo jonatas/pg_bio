@@ -125,6 +125,28 @@ class PgBioClient:
                     return row[0]
         return []
 
+    def parse_pdb_file(self, filepath: str) -> List[dict]:
+        """
+        Parse a PDB or mmCIF file natively using the pg_bio Rust parser.
+        """
+        query = """
+        SELECT atom_id, residue, x, y, z 
+        FROM parse_pdb_file(%s);
+        """
+        results = []
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (filepath,))
+                for row in cur.fetchall():
+                    results.append({
+                        "atom_id": row[0],
+                        "residue": row[1],
+                        "x": row[2],
+                        "y": row[3],
+                        "z": row[4]
+                    })
+        return results
+
     def parse_vcf(self, filepath: str) -> List[dict]:
         """
         Parse a VCF file directly using the pg_bio native rust noodles parser.
