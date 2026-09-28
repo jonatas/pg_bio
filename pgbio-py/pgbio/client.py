@@ -100,6 +100,31 @@ class PgBioClient:
                     return row[0]
         return []
 
+    def parse_vcf(self, filepath: str) -> List[dict]:
+        """
+        Parse a VCF file directly using the pg_bio native rust noodles parser.
+        """
+        query = """
+        SELECT chrom, pos, id, ref_allele, alt_allele, qual, filter, info 
+        FROM parse_vcf(%s);
+        """
+        results = []
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (filepath,))
+                for row in cur.fetchall():
+                    results.append({
+                        "chrom": row[0],
+                        "pos": row[1],
+                        "id": row[2],
+                        "ref": row[3],
+                        "alt": row[4],
+                        "qual": row[5],
+                        "filter": row[6],
+                        "info": row[7]
+                    })
+        return results
+
     def calculate_tanimoto_similarity(self, smiles_a: str, smiles_b: str) -> float:
         """
         Uses pg_bio's native Tanimoto similarity operator `%` to compare two SMILES strings.
