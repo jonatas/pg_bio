@@ -721,6 +721,26 @@ pub fn bio_search_uniprot(
 }
 
 
+
+#[pg_extern]
+pub fn bio_fold_sequence(sequence: &str) -> String {
+    let url = "https://api.esmatlas.com/foldSequence/v1/pdb/";
+    
+    let mut resp = match ureq::post(url)
+        .header("Content-Type", "text/plain")
+        .send(sequence)
+    {
+        Ok(r) => r,
+        Err(e) => pgrx::error!("ESMFold API request failed: {}", e),
+    };
+    
+    match resp.body_mut().read_to_string() {
+        Ok(s) => s,
+        Err(e) => pgrx::error!("Failed to read ESMFold PDB response: {}", e),
+    }
+}
+
+
 // =====================================================================
 // TESTS
 // =====================================================================
@@ -921,6 +941,14 @@ mod tests {
         let results: Vec<_> = crate::bio_search_uniprot("length:[1 TO 50] AND taxonomy_id:9606 AND reviewed:true").collect();
         assert!(results.len() > 0);
         assert!(results[0].3.len() <= 50);
+    }
+
+
+    #[pg_test]
+    fn test_bio_fold_sequence() {
+        // Fold a very short micropeptide (6 amino acids) so the API returns instantly
+        let pdb = crate::bio_fold_sequence("MKVLYL");
+        assert!(pdb.contains("ATOM"));
     }
 
     #[pg_test]
