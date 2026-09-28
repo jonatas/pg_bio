@@ -99,3 +99,40 @@ class PgBioClient:
                 if row and row[0]:
                     return row[0]
         return []
+
+    def calculate_tanimoto_similarity(self, smiles_a: str, smiles_b: str) -> float:
+        """
+        Uses pg_bio's native Tanimoto similarity operator `%` to compare two SMILES strings.
+        """
+        query = "SELECT smiles_to_fingerprint(%s) %% smiles_to_fingerprint(%s);"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (smiles_a, smiles_b))
+                row = cur.fetchone()
+                if row:
+                    return float(row[0])
+        return 0.0
+
+    def find_similar_compounds(self, target_smiles: str, threshold: float = 0.85, limit: int = 10) -> List[dict]:
+        """
+        Queries a 'library_compounds' table for compounds similar to the target SMILES.
+        """
+        query = """
+            SELECT compound_name, smiles, 
+                   (smiles_to_fingerprint(smiles) %% smiles_to_fingerprint(%s)) AS similarity
+            FROM library_compounds
+            WHERE (smiles_to_fingerprint(smiles) %% smiles_to_fingerprint(%s)) >= %s
+            ORDER BY similarity DESC
+            LIMIT %s;
+        """
+        results = []
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (target_smiles, target_smiles, threshold, limit))
+                for row in cur.fetchall():
+                    results.append({
+                        "compound_name": row[0],
+                        "smiles": row[1],
+                        "similarity": float(row[2])
+                    })
+        return results

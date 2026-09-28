@@ -52,7 +52,35 @@ SELECT smiles_contains(
  t
 ```
 
+## 3. Morgan Fingerprints & Tanimoto Similarity
+While substructure searching is great for finding exact scaffolds, modern drug discovery relies heavily on finding *similar* compounds. To do this, we transform the molecular graph into a **Morgan Fingerprint** (an Extended-Connectivity Fingerprint, or ECFP), which is a numerical representation of the molecule's substructures.
+
+`pg_bio` can natively compute a 1024-dimensional Morgan Fingerprint from a SMILES string, returning it as a vector of floats, which allows us to natively score structural similarity using our custom **Tanimoto Operator (`%`)**.
+
+```sql
+-- Generate fingerprints and compute their Tanimoto similarity
+SELECT 
+    ROUND((smiles_to_fingerprint('C1=CC=CC=C1') % smiles_to_fingerprint('CC1=CC=CC=C1'))::numeric, 4) AS tanimoto_similarity;
+```
+**Output:**
+```text
+ tanimoto_similarity 
+---------------------
+              0.1143
+```
+*Note: Benzene (`C1=CC=CC=C1`) and Toluene (`CC1=CC=CC=C1`) share some ring substructure invariants, yielding a measurable structural overlap natively calculated in PostgreSQL.*
+
+### Virtual Screening Workflow
+This native integration allows us to build powerful virtual screening queries directly in SQL, avoiding the expensive overhead of transferring millions of rows to Python.
+
+```sql
+-- Ultimate SQL Vision: Find all library compounds with > 85% structural similarity to our target scaffold
+SELECT compound_name, smiles                                              
+FROM library_compounds                                                    
+WHERE smiles_to_fingerprint(smiles) % smiles_to_fingerprint('CC(=O)OC1=CC=CC=C1C(=O)O') > 0.85;
+```
+
 ## Conclusion
-With native Spatial Math for 3D proteins, and native Cheminformatics for Small Molecules, we now have all the primitives needed to perform end-to-end biological simulations inside a SQL query. 
+With native Spatial Math for 3D proteins, and native Cheminformatics for Small Molecules (SMILES parsing, Morgan Fingerprints, and Tanimoto Similarity), we now have all the primitives needed to perform end-to-end biological simulations and drug discovery inside a SQL query. 
 
 You can now cross-reference billions of ChEMBL small molecules against AlphaFold proteins!
