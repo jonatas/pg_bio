@@ -528,7 +528,7 @@ pub fn bio_fetch_uniprot(accession: &str) -> UniprotEntry {
     let url = format!("https://rest.uniprot.org/uniprotkb/{}.json", accession);
     
     // We use ureq for synchronous HTTP requests inside postgres
-    let mut resp = match ureq::get(&url).call() {
+    let mut resp = match ureq::get(&url).header("Accept-Encoding", "identity").call() {
         Ok(r) => r,
         Err(e) => pgrx::error!("HTTP request to UniProt failed: {}", e),
     };
@@ -564,6 +564,65 @@ pub fn bio_fetch_uniprot(accession: &str) -> UniprotEntry {
         sequence,
     }
 }
+
+
+#[pg_extern]
+pub fn bio_search_uniprot(
+    query: &str,
+) -> TableIterator<
+    'static,
+    (
+        name!(id, String),
+        name!(organism, String),
+        name!(taxonomy, Vec<String>),
+        name!(sequence, String),
+    ),
+> {
+    let mut resp = match ureq::get("https://rest.uniprot.org/uniprotkb/search")
+        .query("query", query)
+        .query("format", "json")
+        .query("size", "50").header("Accept-Encoding", "identity")
+        .call()
+    {
+        Ok(r) => r,
+        Err(e) => pgrx::error!("HTTP request to UniProt Search failed: {}", e),
+    };
+    
+    let body_str = match resp.body_mut().read_to_string() {
+        Ok(s) => s,
+        Err(e) => pgrx::error!("Failed to read response body: {}", e),
+    };
+    
+    let json: serde_json::Value = match serde_json::from_str(&body_str) {
+        Ok(j) => j,
+        Err(e) => pgrx::error!("Failed to parse UniProt JSON: {}", e),
+    };
+    
+    let mut results = Vec::new();
+    
+    if let Some(arr) = json["results"].as_array() {
+        for entry in arr {
+            let id = entry["primaryAccession"].as_str().unwrap_or("").to_string();
+            let organism = entry["organism"]["scientificName"].as_str().unwrap_or("").to_string();
+            
+            let mut taxonomy = Vec::new();
+            if let Some(lin) = entry["organism"]["lineage"].as_array() {
+                for t in lin {
+                    if let Some(s) = t.as_str() {
+                        taxonomy.push(s.to_string());
+                    }
+                }
+            }
+            
+            let sequence = entry["sequence"]["value"].as_str().unwrap_or("").to_string();
+            
+            results.push((id, organism, taxonomy, sequence));
+        }
+    }
+    
+    TableIterator::new(results.into_iter())
+}
+
 
 // =====================================================================
 // TESTS
@@ -748,6 +807,17 @@ mod tests {
         // Should panic with HTTP error
         crate::bio_fetch_uniprot("INVALID_ID_123");
     }
+
+
+    #[pg_test]
+    fn test_bio_search_uniprot() {
+        let results: Vec<_> = crate::bio_search_uniprot("taxonomy_id:2594042").collect();
+        assert!(results.len() > 0);
+        let first = &results[0];
+        
+        assert_eq!(first.1, "Promethearchaeum syntrophicum"); // organism
+    }
+
 
 }
 
