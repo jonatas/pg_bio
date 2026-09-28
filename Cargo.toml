@@ -21,8 +21,10 @@ pg18 = ["pgrx/pg18", "pgrx-tests/pg18" ]
 pg_test = []
 
 [dependencies]
+bio = "4.0.1"
 noodles = { version = "0.116.0", features = ["vcf", "bgzf", "core"] }
 noodles-bgzf = "0.51.0"
+pdbtbx = "0.12.0"
 pgrx = "=0.17.0"
 purr = "0.9.0"
 regex = "1.13.1"
