@@ -14,11 +14,13 @@ Use this skill whenever documenting a new protein discovery made via `pg_bio` in
 * You must use your reasoning capabilities to analyze the specific findings (the proteins, the organisms, the vector distances) and dynamically craft original, flowing prose for every single post. 
 * Write naturally in a blog style that sounds like a real human (the author) sharing an exciting new discovery, adapting the structure and narrative to fit the actual biology of the discovery rather than filling in blanks in a pre-written paragraph.
 
-### 1. Tone, SEO & Frontmatter
-* **Enthusiastic Tone:** The writing must be passionate and enthusiastic! Highlight the excitement of using AI and SQL to bypass months of wet-lab work and uncover hidden secrets of the dark proteome. Make it sound organic and tailored to the specific discovery.
-* Create a catchy, highly searchable title that is unique to the specific finding.
-* Include strong keywords in the Jekyll `categories:` tag (e.g., `bioinformatics`, `pgvector`, `machine-learning`, `structural-biology`).
-* Use `<!--more-->` after the introduction to ensure the blog index preview works perfectly.
+### 1. Tone, SEO & Frontmatter (Targeting Bioinformatics Teams)
+* **Enthusiastic yet Technical Tone:** The writing must be passionate but technically rigorous. You are writing for bioinformatics researchers, structural biologists, and data scientists.
+* **SEO-Optimized Titles:** Create titles that combine a catchy hook with high-traffic bioinformatics keywords (e.g., "Vector Search in the Dark Proteome: Discovering Cold-Active Cellulase Orthologs").
+* **SEO-Optimized Headers (H2/H3):** Instead of generic headers like "The Bait", use highly searchable structural biology headers (e.g., `## Structural Alignment: Mapping the Catalytic Cleft`, `## Evolutionary Divergence: Extremophile Orthologs`, `## pgvector SQL Query for Structural Homology`).
+* **Technical Vocabulary:** Naturally weave in terms that researchers search for: *AlphaFold2 models, structural orthologs, RMSD, embeddings, vector search, extremophile enzyme engineering, catalytic triads*.
+* Include strong keywords in the Jekyll `categories:` tag (e.g., `bioinformatics`, `pgvector`, `machine-learning`, `structural-biology`, `alphafold`).
+* Use `<!--more-->` after a keyword-rich introduction paragraph to ensure the blog index preview is SEO-friendly.
 
 ### 2. Deep Dive: Dynamic Reasoning on Biology
 * **Analyze the Bait:** Do not just list the function; weave a narrative around *why* the bait's role is fascinating in its native ecosystem. What makes it biologically significant?
@@ -39,7 +41,7 @@ Use this skill whenever documenting a new protein discovery made via `pg_bio` in
 * You MUST use curl to download representative `.pdb` files from RCSB PDB or AF DB and save them to `/Users/jonatas/code/ideia.me/assets/models/`.
 * Configure the 3D viewer in the HTML block to load the local assets (`data-href="/assets/models/your_file.pdb"`).
 * Put the Bait and the Discovery side-by-side using the flexbox layout, colored differently (e.g., cyan vs magenta).
-* **MANDATORY TEACHING INJECTION:** You MUST include an interactive `<script>` block and HTML UI below the viewers. This UI must have buttons (e.g., "Highlight Conserved Core", "Highlight Adaptations") that execute JS to manipulate the 3Dmol.js viewer (`$3Dmol.viewers`).
+* **MANDATORY TEACHING INJECTION:** You MUST include an interactive `<script>` block and HTML UI below the viewers. This UI must have buttons (e.g., "Highlight Conserved Core", "Highlight Adaptations") that execute JS to manipulate the 3Dmol.js viewer (`$3Dmol.viewers`). Note: `$3Dmol.viewers` is an Object, not an Array, so you MUST iterate using `Object.values(window.$3Dmol.viewers).forEach(viewer => { ... })` instead of `.forEach` directly.
 * The JS must use methods like `.setStyle()` and `.addLabel()` to highlight specific chemical features (e.g., active sites, hydrophobic cores, acidic surfaces).
 * **DYNAMIC LEARNING PARAGRAPHS:** When a user clicks a button, a hidden text `div` below the buttons must dynamically update with a paragraph explaining *what the chemistry means* (e.g., explaining what a conserved active site is, or why acidic shells help in salt flats). Always use this to teach real chemistry!
 
