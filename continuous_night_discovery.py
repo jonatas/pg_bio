@@ -140,7 +140,8 @@ FROM closest c
 CROSS JOIN LATERAL bio_search_uniprot('accession:' || c.uniprot_id) u;
 ```
 
-{% include pg_bio_promo.md %}
+
+{{% include pg_bio_promo.md %}}
 """
     with open(filepath, "w") as f:
         f.write(content)
