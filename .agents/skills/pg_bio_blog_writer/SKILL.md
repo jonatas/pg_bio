@@ -43,8 +43,11 @@ Use this skill whenever documenting a new protein discovery made via `pg_bio` in
 * The JS must use methods like `.setStyle()` and `.addLabel()` to highlight specific chemical features (e.g., active sites, hydrophobic cores, acidic surfaces).
 * **DYNAMIC LEARNING PARAGRAPHS:** When a user clicks a button, a hidden text `div` below the buttons must dynamically update with a paragraph explaining *what the chemistry means* (e.g., explaining what a conserved active site is, or why acidic shells help in salt flats). Always use this to teach real chemistry!
 
-### 6. The Learning/Conclusion
-* Synthesize what this means for computational biology. Remind the reader of the immense power of native PostgreSQL multiomics engines scanning millions of vectors in milliseconds.
+### 6. The Learning/Conclusion: Future Research Ideas
+* Instead of a generic conclusion, you MUST end the post with a dedicated section (e.g., `## The Horizon: Future Research Ideas`) that deeply reflects on the differences between the Bait's and the Discovery's environments.
+* Use this exact logical framework to brainstorm practical ideas: *"The Bait can do [Function X] but fails when [Condition Z/Limitation], whereas our new Discovery might do [Function X] under [Extreme Condition A], making it perfect for [Specific Industrial/Medical Application Y]."*
+* Provide a bulleted list of 2-3 highly specific, actionable research ideas or industrial pipelines where this newly discovered protein variant could be slotted in immediately by researchers.
+* Synthesize what this means for computational biology and remind the reader of the immense power of native PostgreSQL multiomics engines scanning millions of vectors in milliseconds.
 
 ### 7. Interactive 3Dmol.js Features (Built-in)
 * Mention to the user that the blog features an interactive 3D plugin (`pg_bio_sync.js`).
