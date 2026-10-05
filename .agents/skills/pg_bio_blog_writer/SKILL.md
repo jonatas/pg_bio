@@ -9,12 +9,20 @@ Use this skill whenever documenting a new protein discovery made via `pg_bio` in
 
 ## Requirements for Every Post
 
-### 0. NO STATIC TEMPLATES (Dynamic Reasoning Required)
+### 0. MANDATORY PRE-FLIGHT CHECK (Grep & Double Check)
+* **CRITICAL:** Before you start drafting *any* new content, you MUST use terminal tools (`grep`, `rg`, etc.) to search the `_posts/` directory and double-check if this protein family, bait, or specific discovery has already been documented.
+* If existing content is found: evaluate whether you should append to the existing post, cross-link the new discovery to the old post, improve the existing research with deeper insights, or simply ignore the prompt if it's completely redundant. Do NOT blindly create new posts without checking the existing blog ecosystem.
+
+### 1. NO STATIC TEMPLATES (Dynamic Reasoning Required)
 * **CRITICAL:** Do NOT use static text templates (e.g., "Unearthing [Family]..." or "As the pg_bio autonomous night pipeline continues...").
 * You must use your reasoning capabilities to analyze the specific findings (the proteins, the organisms, the vector distances) and dynamically craft original, flowing prose for every single post. 
 * Write naturally in a blog style that sounds like a real human (the author) sharing an exciting new discovery, adapting the structure and narrative to fit the actual biology of the discovery rather than filling in blanks in a pre-written paragraph.
 
-### 1. Tone, SEO & Frontmatter (Targeting Bioinformatics Teams)
+### 1. File Naming & Appending Findings
+* **MANDATORY JEKYLL FILENAME:** All new blog posts MUST be created with a date prefix in the filename format `YYYY-MM-DD-seo-friendly-slug.md` (e.g., `2026-10-01-mining-cellulase-dark-proteome.md`). This ensures Jekyll parses the date correctly.
+* **APPENDING TO EXISTING POSTS:** If the user asks you to document a new finding for a protein family that already has an existing blog post, do NOT create a new file. Instead, open the existing post and append the new discovery (new headers, new 3Dmol.js blocks, new SQL tables) to the end, updating the frontmatter `date` to today if necessary.
+
+### 2. Tone, SEO & Frontmatter (Targeting Bioinformatics Teams)
 * **Enthusiastic yet Technical Tone:** The writing must be passionate but technically rigorous. You are writing for bioinformatics researchers, structural biologists, and data scientists.
 * **SEO-Optimized Titles:** Create titles that combine a catchy hook with high-traffic bioinformatics keywords (e.g., "Vector Search in the Dark Proteome: Discovering Cold-Active Cellulase Orthologs").
 * **SEO-Optimized Headers (H2/H3):** Instead of generic headers like "The Bait", use highly searchable structural biology headers (e.g., `## Structural Alignment: Mapping the Catalytic Cleft`, `## Evolutionary Divergence: Extremophile Orthologs`, `## pgvector SQL Query for Structural Homology`).
