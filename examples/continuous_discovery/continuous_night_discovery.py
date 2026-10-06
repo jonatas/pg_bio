@@ -249,6 +249,12 @@ def run_loop():
                             if generated_today < 3:
                                 generate_blog_post(family, b_id, b_org, b_seq, o_id, o_org, o_seq, o_dist)
                                 print(f"Generated blog post for {family}.")
+                                
+                                # Auto-commit and push so the live site gets the markdown and the PDB assets!
+                                os.system("git -C /Users/jonatas/code/ideia.me add _posts/ assets/models/")
+                                os.system(f'git -C /Users/jonatas/code/ideia.me commit -m "Auto-publish discovery for {family}"')
+                                os.system("git -C /Users/jonatas/code/ideia.me push")
+                                print("Pushed new post and assets to GitHub!")
                             else:
                                 print(f"Max 3 blog posts per day reached ({generated_today} so far). Skipping post generation for {family}.")
                             
