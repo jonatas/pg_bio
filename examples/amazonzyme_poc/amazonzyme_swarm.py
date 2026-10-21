@@ -203,13 +203,14 @@ def run_swarm_step(conn, cur):
                 p.uniprot_id,
                 p.name,
                 p.sequence,
+                p.embedding,
                 (p.embedding <=> %s) AS v_dist
             FROM proteins p
             WHERE p.uniprot_id != %s
               AND p.name ILIKE '%%[AmazonZyme-Organism%%'
               AND length(p.sequence) BETWEEN GREATEST(180, (%s * 0.65)::int) AND (%s * 1.35)::int
             ORDER BY p.embedding <=> %s ASC
-            LIMIT 25
+            LIMIT 45
         )
         SELECT 
             nc.uniprot_id,
@@ -219,29 +220,29 @@ def run_swarm_step(conn, cur):
             round((molecular_weight(nc.sequence) / 1000.0)::numeric, 2) AS mw_kda,
             round(isoelectric_point(nc.sequence)::numeric, 2) AS pi,
             round(gravy_score(nc.sequence)::numeric, 3) AS gravy,
-            round(sequence_entropy(nc.sequence)::numeric, 3) AS entropy
+            round(sequence_entropy(nc.sequence)::numeric, 3) AS entropy,
+            nc.embedding
         FROM nearest_candidates nc
-        WHERE nc.v_dist <= 0.72
+        WHERE nc.v_dist BETWEEN 0.025 AND 0.72
           AND sequence_entropy(nc.sequence) >= 3.85
           AND gravy_score(nc.sequence) BETWEEN -0.55 AND 0.35
         ORDER BY h_score ASC
-        LIMIT 12;
+        LIMIT 25;
     """, (parent_emb, current_id, parent_len, parent_len, parent_emb, parent_seq))
 
     candidates = cur.fetchall()
     added = 0
 
-    for cand_id, cand_name, v_dist, h_score, mw_kda, pi, gravy, entropy in candidates:
+    def base_species(org_str: str) -> str:
+        s = org_str.split(" (")[0].strip()
+        parts = s.split()
+        return " ".join(parts[:2]).lower() if len(parts) >= 2 else s.lower()
+
+    parent_sp = base_species(current_org)
+
+    for cand_id, cand_name, v_dist, h_score, mw_kda, pi, gravy, entropy, cand_emb in candidates:
         if added >= 3:
             break
-
-        # Gate 3D structure: reject coiled-coils, single-helix rods, and low-pLDDT disordered structures
-        is_globular, plddt, rg, comp_ratio = evaluate_3d_globular_compactness(cand_id)
-        if not is_globular:
-            print(
-                f"  - Rejected coil/disordered {cand_id}: pLDDT={plddt}, Rg={rg}A, compactness={comp_ratio} (>1.28 or elongated rod)"
-            )
-            continue
 
         org_name = "Unknown Amazonian/Extremophile Taxon"
         if "OS=" in cand_name and "OX=" in cand_name:
@@ -254,6 +255,35 @@ def run_swarm_step(conn, cur):
                     org_name = r[0]
             except Exception:
                 pass
+
+        cand_sp = base_species(org_name)
+
+        # 1. If same species as parent bait, require v_dist >= 0.07 so it is a genuinely distinct paralog/isoenzyme, not a strain allele
+        if cand_sp == parent_sp and float(v_dist) < 0.07:
+            print(f"  - Skipped same-species strain allele {cand_id} ({org_name}, dist={v_dist:.4f} < 0.07)")
+            continue
+
+        # 2. Reject if too close (cosine dist < 0.025 or identical MW+pI) to ANY already-queued node in amazonzyme_swarm_discoveries
+        cur.execute("""
+            SELECT a.orphan_id, a.orphan_organism, (p.embedding <=> %s) AS d_existing
+            FROM amazonzyme_swarm_discoveries a
+            JOIN proteins p ON p.uniprot_id = a.orphan_id
+            WHERE (p.embedding <=> %s) < 0.025
+               OR (abs(a.mw_kda - %s) < 0.08 AND abs(a.isoelectric_pi - %s) < 0.03)
+            LIMIT 1;
+        """, (cand_emb, cand_emb, float(mw_kda), float(pi)))
+        dup = cur.fetchone()
+        if dup:
+            print(f"  - Skipped redundant clone {cand_id} ({org_name}): near-identical to {dup[0]} ({dup[1]}, dist={dup[2]:.4f})")
+            continue
+
+        # 3. Gate 3D structure: reject coiled-coils, single-helix rods, and low-pLDDT disordered structures
+        is_globular, plddt, rg, comp_ratio = evaluate_3d_globular_compactness(cand_id)
+        if not is_globular:
+            print(
+                f"  - Rejected coil/disordered {cand_id}: pLDDT={plddt}, Rg={rg}A, compactness={comp_ratio} (>1.45 or elongated rod)"
+            )
+            continue
 
         reactor_profile = (
             "Acidic_SSF (pH 3.5-5.5)" if float(pi) < 5.8 else "Neutral_Alkaline (pH 6.0-8.5)"
@@ -281,13 +311,13 @@ def run_swarm_step(conn, cur):
         if cur.fetchone():
             added += 1
             print(
-                f"  + Verified 3D Globular {cand_id} ({org_name}) | dist={v_dist:.4f} | pLDDT={plddt} "
+                f"  + Verified Distinct 3D Globular {cand_id} ({org_name}) | dist={v_dist:.4f} | pLDDT={plddt} "
                 f"| Rg={rg}A (ratio={comp_ratio}) | MW={mw_kda}kDa | pI={pi}"
             )
 
     cur.execute("UPDATE amazonzyme_swarm_discoveries SET status = 'Explored' WHERE id = %s", (node_id,))
     conn.commit()
-    print(f"  -> Node {current_id} explored ({added} verified globular enzymes queued).")
+    print(f"  -> Node {current_id} explored ({added} distinct globular enzymes queued).")
     return True
 
 
