@@ -475,6 +475,80 @@ pub fn sequence_entropy(sequence: &str) -> f64 {
     entropy
 }
 
+/// Calculates the Grand Average of Hydropathicity (GRAVY) score using the Kyte-Doolittle scale.
+/// Positive values indicate hydrophobicity; negative values indicate hydrophilicity.
+#[pg_extern(immutable, parallel_safe)]
+pub fn gravy_score(sequence: &str) -> f64 {
+    let mut score = 0.0;
+    let mut valid_len = 0.0;
+
+    for c in sequence.chars() {
+        let val = match c.to_ascii_uppercase() {
+            'I' => 4.5, 'V' => 4.2, 'L' => 3.8, 'F' => 2.8, 'C' => 2.5,
+            'M' => 1.9, 'A' => 1.8, 'G' => -0.4, 'T' => -0.7, 'S' => -0.8,
+            'W' => -0.9, 'Y' => -1.3, 'P' => -1.6, 'H' => -3.2, 'E' => -3.5,
+            'Q' => -3.5, 'D' => -3.5, 'N' => -3.5, 'K' => -3.9, 'R' => -4.5,
+            _ => continue,
+        };
+        score += val;
+        valid_len += 1.0;
+    }
+
+    if valid_len == 0.0 { 0.0 } else { score / valid_len }
+}
+
+/// Estimates the Isoelectric Point (pI) of a protein sequence.
+/// This uses an iterative bisection algorithm to find the pH where net charge is 0.
+#[pg_extern(immutable, parallel_safe)]
+pub fn isoelectric_point(sequence: &str) -> f64 {
+    let mut count_k = 0.0; let mut count_r = 0.0; let mut count_h = 0.0;
+    let mut count_d = 0.0; let mut count_e = 0.0; let mut count_c = 0.0; let mut count_y = 0.0;
+
+    for c in sequence.chars() {
+        match c.to_ascii_uppercase() {
+            'K' => count_k += 1.0, 'R' => count_r += 1.0, 'H' => count_h += 1.0,
+            'D' => count_d += 1.0, 'E' => count_e += 1.0, 'C' => count_c += 1.0, 'Y' => count_y += 1.0,
+            _ => {}
+        }
+    }
+
+    // pKa values (approximate standard scale)
+    let pka_n_term = 8.0; let pka_k = 10.0; let pka_r = 12.0; let pka_h = 6.5;
+    let pka_c_term = 3.1; let pka_d = 4.4; let pka_e = 4.4; let pka_c = 8.5; let pka_y = 10.0;
+
+    let net_charge = |ph: f64| -> f64 {
+        let pos = 
+            1.0 / (1.0 + 10_f64.powf(ph - pka_n_term)) +
+            count_k / (1.0 + 10_f64.powf(ph - pka_k)) +
+            count_r / (1.0 + 10_f64.powf(ph - pka_r)) +
+            count_h / (1.0 + 10_f64.powf(ph - pka_h));
+        
+        let neg = 
+            1.0 / (1.0 + 10_f64.powf(pka_c_term - ph)) +
+            count_d / (1.0 + 10_f64.powf(pka_d - ph)) +
+            count_e / (1.0 + 10_f64.powf(pka_e - ph)) +
+            count_c / (1.0 + 10_f64.powf(pka_c - ph)) +
+            count_y / (1.0 + 10_f64.powf(pka_y - ph));
+            
+        pos - neg
+    };
+
+    let mut min_ph = 0.0;
+    let mut max_ph = 14.0;
+    let mut pi = 7.0;
+
+    for _ in 0..50 {
+        pi = (min_ph + max_ph) / 2.0;
+        if net_charge(pi) > 0.0 {
+            min_ph = pi;
+        } else {
+            max_ph = pi;
+        }
+    }
+    
+    pi
+}
+
 // =====================================================================
 // 7. HIGH-PERFORMANCE SEARCH HELPER
 // =====================================================================
@@ -733,6 +807,332 @@ pub fn bio_fold_sequence(sequence: &str) -> String {
 
 
 // =====================================================================
+// 9. MASS SPECTROMETRY & PROTEOMICS
+// =====================================================================
+
+/// Represents a mass spectrum with m/z (mass-to-charge) and intensity arrays.
+#[derive(PostgresType, Serialize, Deserialize, Debug, Clone)]
+pub struct Spectrum {
+    pub m_z: Vec<f64>,
+    pub intensity: Vec<f64>,
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn create_spectrum(m_z: Vec<f64>, intensity: Vec<f64>) -> Spectrum {
+    Spectrum { m_z, intensity }
+}
+
+/// Calculates the mass error in parts-per-million (ppm) between two masses.
+#[pg_extern(immutable, parallel_safe)]
+pub fn ppm_difference(mass1: f64, mass2: f64) -> f64 {
+    if mass1 == 0.0 {
+        return 0.0;
+    }
+    ((mass1 - mass2).abs() / mass1) * 1_000_000.0
+}
+
+/// Checks if two masses are within a given ppm tolerance.
+#[pg_extern(immutable, parallel_safe)]
+pub fn is_mass_within_ppm(mass1: f64, mass2: f64, ppm_tolerance: f64) -> bool {
+    ppm_difference(mass1, mass2) <= ppm_tolerance
+}
+
+/// Represents a theoretical fragment ion (like b3 or y5)
+#[derive(PostgresType, Serialize, Deserialize, Debug, Clone)]
+pub struct TheoreticalFragment {
+    pub ion_type: String, // e.g., "b3", "y5"
+    pub mass: f64,        // This is actually m/z
+    pub charge: i32,
+}
+
+/// Generates theoretical fragment ions for a given peptide sequence up to a max charge state.
+/// Supports 'HCD' (b and y ions) and 'ETD' (c and z ions) fragmentation methods.
+#[pg_extern(immutable, parallel_safe)]
+pub fn generate_theoretical_fragments(sequence: &str, max_charge: i32, method: &str) -> pgrx::iter::TableIterator<'static, (
+    name!(ion_type, String),
+    name!(mass, f64),
+    name!(charge, i32)
+)> {
+    let mut fragments = Vec::new();
+    let bytes = sequence.as_bytes();
+    let len = bytes.len();
+    
+    if len == 0 {
+        return pgrx::iter::TableIterator::new(fragments.into_iter());
+    }
+    
+    // Amino acid monoisotopic masses (residue masses)
+    let aa_mass = |c: u8| -> f64 {
+        match c.to_ascii_uppercase() {
+            b'A' => 71.03711, b'R' => 156.10111, b'N' => 114.04293, b'D' => 115.02694,
+            b'C' => 103.00919, b'E' => 129.04259, b'Q' => 128.05858, b'G' => 57.02146,
+            b'H' => 137.05891, b'I' => 113.08406, b'L' => 113.08406, b'K' => 128.09496,
+            b'M' => 131.04049, b'F' => 147.06841, b'P' => 97.05276, b'S' => 87.03203,
+            b'T' => 101.04768, b'W' => 186.07931, b'Y' => 163.06333, b'V' => 99.06841,
+            _ => 0.0,
+        }
+    };
+
+    let proton_mass = 1.007276;
+    let h2o_mass = 18.010565;
+    let nh3_mass = 17.026549;
+    
+    let is_etd = method.eq_ignore_ascii_case("ETD");
+
+    let mut b_mass = 0.0;
+    // Generate N-terminal ions (b-ions for HCD, c-ions for ETD)
+    for i in 0..len - 1 {
+        b_mass += aa_mass(bytes[i]);
+        let neutral_mass = if is_etd { b_mass + nh3_mass } else { b_mass };
+        let prefix = if is_etd { "c" } else { "b" };
+        
+        for charge in 1..=max_charge {
+            let mz = (neutral_mass + (charge as f64 * proton_mass)) / charge as f64;
+            fragments.push((
+                format!("{}{}", prefix, i + 1),
+                mz,
+                charge,
+            ));
+        }
+    }
+
+    let mut y_mass = 0.0;
+    // Generate C-terminal ions (y-ions for HCD, z-ions for ETD)
+    for i in 0..len - 1 {
+        let rev_i = len - 1 - i;
+        y_mass += aa_mass(bytes[rev_i]);
+        
+        let neutral_mass = if is_etd { 
+            (y_mass + h2o_mass) - nh3_mass + proton_mass // z-ion
+        } else { 
+            y_mass + h2o_mass // y-ion
+        };
+        let prefix = if is_etd { "z" } else { "y" };
+        
+        for charge in 1..=max_charge {
+            let mz = (neutral_mass + (charge as f64 * proton_mass)) / charge as f64;
+            fragments.push((
+                format!("{}{}", prefix, i + 1),
+                mz,
+                charge,
+            ));
+        }
+    }
+
+    pgrx::iter::TableIterator::new(fragments.into_iter())
+}
+
+/// Computes an Isotope Fit Score (0.0 to 1.0) using the Averagine model to predict 
+/// the isotopic envelope, and compares it to observed spectral peaks via cosine similarity.
+#[pg_extern(immutable, parallel_safe)]
+pub fn isotope_fit_score(observed: Spectrum, theoretical_mz: f64, charge: i32, ppm_tolerance: f64) -> f64 {
+    if charge <= 0 || observed.m_z.is_empty() || observed.m_z.len() != observed.intensity.len() {
+        return 0.0;
+    }
+
+    // 1. Calculate approximate number of carbons using the Averagine model
+    // Average amino acid mass is ~111.1 Da, which contains ~4.9384 Carbons.
+    let neutral_mass = (theoretical_mz * charge as f64) - (charge as f64 * 1.007276);
+    let num_carbons = (neutral_mass / 111.125) * 4.9384;
+    
+    // 2. Predict relative abundances for M, M+1, M+2 (ignoring minor isotopes for simplicity)
+    let prob_c13 = 0.0107; // Natural abundance of Carbon-13
+    let m0 = 1.0;
+    let m1 = num_carbons * prob_c13;
+    let m2 = (m1 * m1) / 2.0;
+    
+    let total = m0 + m1 + m2;
+    let theoretical_env = vec![m0 / total, m1 / total, m2 / total];
+    
+    // 3. Find observed peaks matching M, M+1, M+2
+    // The m/z difference for each neutron is ~1.00335 Da / charge
+    let neutron_mass = 1.00335;
+    let mut observed_env = vec![0.0, 0.0, 0.0];
+    
+    for (i, &mz) in observed.m_z.iter().enumerate() {
+        for isotope_idx in 0..3 {
+            let target_mz = theoretical_mz + (isotope_idx as f64 * neutron_mass) / (charge as f64);
+            if ppm_difference(mz, target_mz) <= ppm_tolerance {
+                // If multiple peaks match within ppm, take the highest intensity
+                if observed.intensity[i] > observed_env[isotope_idx] {
+                    observed_env[isotope_idx] = observed.intensity[i];
+                }
+            }
+        }
+    }
+    
+    // 4. Normalize observed envelope
+    let obs_sum = observed_env[0] + observed_env[1] + observed_env[2];
+    if obs_sum == 0.0 {
+        return 0.0; // No matching peaks found at all
+    }
+    
+    for obs in observed_env.iter_mut() {
+        *obs /= obs_sum;
+    }
+    
+    // 5. Calculate Cosine Similarity between theoretical and observed envelopes
+    let mut dot_product = 0.0;
+    let mut norm_t = 0.0;
+    let mut norm_o = 0.0;
+    for i in 0..3 {
+        dot_product += theoretical_env[i] * observed_env[i];
+        norm_t += theoretical_env[i] * theoretical_env[i];
+        norm_o += observed_env[i] * observed_env[i];
+    }
+    
+    if norm_t == 0.0 || norm_o == 0.0 {
+        return 0.0;
+    }
+    
+    dot_product / (norm_t.sqrt() * norm_o.sqrt())
+}
+
+/// Generates a decoy sequence for False Discovery Rate (FDR) estimations.
+/// Supported methods:
+/// - 'reverse': Tryptic-aware reversal (keeps C-terminal K/R fixed per Elias & Gygi 2007 so y1 ion is conserved; reverses full sequence if non-tryptic)
+/// - 'pseudo_reverse': Always reverses 0..len-1 while keeping the C-terminal residue fixed
+/// - 'full_reverse': Naive full-string reversal (0..len)
+/// - 'shuffle': Deterministic shuffle (preserves C-terminal K/R if present)
+/// - 'random': Generates a deterministic random amino acid sequence of the same length
+#[pg_extern(immutable, parallel_safe)]
+pub fn generate_decoy_sequence(sequence: &str, method: &str) -> String {
+    let mut chars: Vec<char> = sequence.chars().collect();
+    if chars.is_empty() {
+        return String::new();
+    }
+
+    let n = chars.len();
+    let is_tryptic_cterm = n > 2 && matches!(chars[n - 1], 'K' | 'R' | 'k' | 'r');
+
+    if method.eq_ignore_ascii_case("reverse") {
+        if is_tryptic_cterm {
+            chars[..n - 1].reverse();
+        } else {
+            chars.reverse();
+        }
+    } else if method.eq_ignore_ascii_case("pseudo_reverse") {
+        if n > 2 {
+            chars[..n - 1].reverse();
+        } else {
+            chars.reverse();
+        }
+    } else if method.eq_ignore_ascii_case("full_reverse") {
+        chars.reverse();
+    } else if method.eq_ignore_ascii_case("shuffle") {
+        // Deterministic shuffle based on the sequence itself to maintain immutability
+        let mut seed: u32 = 0;
+        for c in &chars {
+            seed = seed.wrapping_add(*c as u32).wrapping_mul(31);
+        }
+
+        let shuffle_len = if is_tryptic_cterm { n - 1 } else { n };
+        for i in (1..shuffle_len).rev() {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223); // Simple LCG
+            let j = (seed as usize) % (i + 1);
+            chars.swap(i, j);
+        }
+        // Guarantee the prefix actually changed when possible
+        if shuffle_len > 1 && chars.iter().copied().collect::<String>() == sequence {
+            chars.swap(0, shuffle_len - 1);
+        }
+    } else if method.eq_ignore_ascii_case("random") {
+        // Generates a random sequence of 20 standard amino acids based on deterministic seed
+        let mut seed: u32 = 0;
+        for c in sequence.chars() {
+            seed = seed.wrapping_add(c as u32).wrapping_mul(17);
+        }
+
+        let aas = b"ARNDCEQGHILKMFPSTWYV";
+        for i in 0..chars.len() {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            chars[i] = aas[(seed as usize) % 20] as char;
+        }
+    }
+
+    chars.into_iter().collect()
+}
+
+
+/// Parses an MGF (Mascot Generic Format) file containing static MS/MS datasets.
+/// This allows users to ingest real experimental datasets into Postgres tables
+/// to ensure fair testing and benchmarking of algorithms.
+#[pg_extern]
+fn parse_mgf(filepath: &str) -> pgrx::iter::TableIterator<'static, (
+    name!(title, String),
+    name!(pepmass, f64),
+    name!(charge, i32),
+    name!(spectrum, Spectrum)
+)> {
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+    
+    let file = File::open(filepath).unwrap_or_else(|e| panic!("Failed to open MGF file {}: {}", filepath, e));
+    let reader = BufReader::new(file);
+    
+    let mut records = Vec::new();
+    
+    let mut in_ion = false;
+    let mut title = String::new();
+    let mut pepmass = 0.0;
+    let mut charge = 0;
+    let mut m_z = Vec::new();
+    let mut intensity = Vec::new();
+    
+    for line_res in reader.lines() {
+        let line = line_res.unwrap_or_default();
+        let trimmed = line.trim();
+        if trimmed.is_empty() { continue; }
+        
+        if trimmed == "BEGIN IONS" {
+            in_ion = true;
+            title.clear();
+            pepmass = 0.0;
+            charge = 0;
+            m_z.clear();
+            intensity.clear();
+        } else if trimmed == "END IONS" {
+            in_ion = false;
+            let spec = Spectrum {
+                m_z: m_z.clone(),
+                intensity: intensity.clone(),
+            };
+            records.push((title.clone(), pepmass, charge, spec));
+        } else if in_ion {
+            if trimmed.starts_with("TITLE=") {
+                title = trimmed[6..].to_string();
+            } else if trimmed.starts_with("PEPMASS=") {
+                let parts: Vec<&str> = trimmed[8..].split_whitespace().collect();
+                if let Some(mass_str) = parts.first() {
+                    pepmass = mass_str.parse().unwrap_or(0.0);
+                }
+            } else if trimmed.starts_with("CHARGE=") {
+                let c_str = &trimmed[7..];
+                let mut num_str = String::new();
+                for ch in c_str.chars() {
+                    if ch.is_ascii_digit() || ch == '-' {
+                        num_str.push(ch);
+                    }
+                }
+                charge = num_str.parse().unwrap_or(0);
+            } else if trimmed.contains('=') {
+                // Ignore other headers
+            } else {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let (Ok(m), Ok(i)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
+                        m_z.push(m);
+                        intensity.push(i);
+                    }
+                }
+            }
+        }
+    }
+    
+    pgrx::iter::TableIterator::new(records.into_iter())
+}
+
+// =====================================================================
 // TESTS
 // =====================================================================
 
@@ -836,6 +1236,100 @@ fn parse_pdb_file(filepath: &str) -> pgrx::iter::TableIterator<'static, (
     }
     
     pgrx::iter::TableIterator::new(records.into_iter())
+}
+
+
+// =====================================================================
+// NEW: STRUCTURAL BIOLOGY (PDB Parsing & RMSD)
+// =====================================================================
+
+#[pg_extern]
+pub fn bio_parse_pdb(pdb_text: &str) -> TableIterator<'static, (name!(atom_name, String), name!(res_name, String), name!(res_id, i32), name!(x, f64), name!(y, f64), name!(z, f64))> {
+    use std::io::{BufReader, Cursor};
+    let reader = BufReader::new(Cursor::new(pdb_text.as_bytes()));
+    let (pdb, _errors) = pdbtbx::ReadOptions::new().set_format(pdbtbx::Format::Pdb).read_raw(reader).unwrap();
+    
+    let mut results = Vec::new();
+    for model in pdb.models() {
+        for chain in model.chains() {
+            for residue in chain.residues() {
+                for atom in residue.atoms() {
+                    results.push((
+                        atom.name().to_string(),
+                        residue.name().unwrap_or("").to_string(),
+                        residue.serial_number() as i32,
+                        atom.pos().0,
+                        atom.pos().1,
+                        atom.pos().2
+                    ));
+                }
+            }
+        }
+    }
+    TableIterator::new(results.into_iter())
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_rmsd(coords_a: Vec<ResidueCoord>, coords_b: Vec<ResidueCoord>) -> f64 {
+    if coords_a.len() != coords_b.len() || coords_a.is_empty() {
+        return 0.0;
+    }
+    let mut sum_sq = 0.0;
+    let n = coords_a.len() as f64;
+    for (a, b) in coords_a.iter().zip(coords_b.iter()) {
+        let dx = a.x - b.x;
+        let dy = a.y - b.y;
+        let dz = a.z - b.z;
+        sum_sq += dx*dx + dy*dy + dz*dz;
+    }
+    (sum_sq / n).sqrt()
+}
+
+// =====================================================================
+// NEW: SEQUENCE ANALYSIS (GC Content & Translation)
+// =====================================================================
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_gc_content(sequence: &str) -> f64 {
+    bio::seq_analysis::gc::gc_content(sequence.as_bytes()) as f64
+}
+
+fn translate_codon(codon: &[u8]) -> char {
+    match codon {
+        b"TTT" | b"TTC" => 'F',
+        b"TTA" | b"TTG" | b"CTT" | b"CTC" | b"CTA" | b"CTG" => 'L',
+        b"ATT" | b"ATC" | b"ATA" => 'I',
+        b"ATG" => 'M',
+        b"GTT" | b"GTC" | b"GTA" | b"GTG" => 'V',
+        b"TCT" | b"TCC" | b"TCA" | b"TCG" | b"AGT" | b"AGC" => 'S',
+        b"CCT" | b"CCC" | b"CCA" | b"CCG" => 'P',
+        b"ACT" | b"ACC" | b"ACA" | b"ACG" => 'T',
+        b"GCT" | b"GCC" | b"GCA" | b"GCG" => 'A',
+        b"TAT" | b"TAC" => 'Y',
+        b"TAA" | b"TAG" | b"TGA" => '*', // Stop codon
+        b"CAT" | b"CAC" => 'H',
+        b"CAA" | b"CAG" => 'Q',
+        b"AAT" | b"AAC" => 'N',
+        b"AAA" | b"AAG" => 'K',
+        b"GAT" | b"GAC" => 'D',
+        b"GAA" | b"GAG" => 'E',
+        b"TGT" | b"TGC" => 'C',
+        b"TGG" => 'W',
+        b"CGT" | b"CGC" | b"CGA" | b"CGG" | b"AGA" | b"AGG" => 'R',
+        b"GGT" | b"GGC" | b"GGA" | b"GGG" => 'G',
+        _ => 'X',
+    }
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_translate_dna(sequence: &str) -> String {
+    let mut aa = String::with_capacity(sequence.len() / 3);
+    for chunk in sequence.as_bytes().chunks(3) {
+        if chunk.len() == 3 {
+            aa.push(translate_codon(chunk));
+        }
+    }
+    aa
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -1018,6 +1512,26 @@ mod tests {
         assert!(entropy_complex > 4.0); // very high entropy
     }
 
+    #[pg_test]
+    fn test_gravy_score() {
+        let g1 = crate::gravy_score("IVLF"); // Highly hydrophobic
+        assert!(g1 > 3.0);
+        let g2 = crate::gravy_score("RKDE"); // Highly hydrophilic
+        assert!(g2 < -3.0);
+    }
+
+    #[pg_test]
+    fn test_isoelectric_point() {
+        // Simple peptide with known pI
+        // Poly-Lysine should be very basic (high pI)
+        let pi1 = crate::isoelectric_point("KKKKK");
+        assert!(pi1 > 9.0);
+        
+        // Poly-Glutamic acid should be very acidic (low pI)
+        let pi2 = crate::isoelectric_point("EEEEE");
+        assert!(pi2 < 5.0);
+    }
+
 
     #[pg_test]
     fn test_smith_waterman() {
@@ -1099,6 +1613,172 @@ mod tests {
         
         let sim = sim.expect("Tanimoto similarity should not be NULL");
         assert!(sim > 0.0 && sim < 1.0);
+    }
+
+    #[pg_test]
+    fn test_spectrum_creation() {
+        let mz = vec![100.0, 200.0];
+        let intensity = vec![10.0, 50.0];
+        let spec = crate::create_spectrum(mz.clone(), intensity.clone());
+        assert_eq!(spec.m_z.len(), 2);
+        assert_eq!(spec.intensity.len(), 2);
+    }
+
+    #[pg_test]
+    fn test_ppm_difference() {
+        let mass1 = 1000.0;
+        let mass2 = 1000.0032; // 3.2 ppm diff
+        let diff = crate::ppm_difference(mass1, mass2);
+        assert!((diff - 3.2).abs() < 1e-4);
+        
+        assert!(crate::is_mass_within_ppm(mass1, mass2, 3.5));
+        assert!(!crate::is_mass_within_ppm(mass1, mass2, 3.0));
+    }
+
+    #[pg_test]
+    fn test_theoretical_fragments() {
+        let frags_hcd: Vec<_> = crate::generate_theoretical_fragments("ACD", 1, "HCD").collect();
+        assert_eq!(frags_hcd.len(), 4);
+        
+        let b1 = frags_hcd.iter().find(|f| f.0 == "b1").unwrap();
+        assert!((b1.1 - 72.044386).abs() < 1e-4);
+        assert_eq!(b1.2, 1);
+        
+        let y1 = frags_hcd.iter().find(|f| f.0 == "y1").unwrap();
+        assert!((y1.1 - 134.044781).abs() < 1e-4);
+        assert_eq!(y1.2, 1);
+        
+        let frags_etd: Vec<_> = crate::generate_theoretical_fragments("ACD", 1, "ETD").collect();
+        assert_eq!(frags_etd.len(), 4);
+        
+        let c1 = frags_etd.iter().find(|f| f.0 == "c1").unwrap();
+        assert!((c1.1 - 89.070935).abs() < 1e-4);
+    }
+
+    #[pg_test]
+    fn test_isotope_fit_score() {
+        let charge = 2;
+        let theoretical_mz = 1000.0;
+        let ppm_tol = 10.0;
+        
+        // Exact match with expected averagine envelope for mass ~2000
+        // num_carbons = (1998 / 111.125) * 4.9384 = ~88.8 carbons
+        // m1 = 88.8 * 0.0107 = ~0.95
+        // m2 = 0.95^2 / 2 = ~0.45
+        // total = 1 + 0.95 + 0.45 = 2.4
+        // env: M=0.41, M+1=0.39, M+2=0.19
+        
+        let observed_perfect = crate::create_spectrum(
+            vec![1000.0, 1000.0 + (1.00335/2.0), 1000.0 + (2.0067/2.0)],
+            vec![41.0, 39.0, 19.0]
+        );
+        let score1 = crate::isotope_fit_score(observed_perfect, theoretical_mz, charge, ppm_tol);
+        assert!(score1 > 0.98); // High cosine similarity expected
+        
+        // Poor match (only M peak found)
+        let observed_poor = crate::create_spectrum(
+            vec![1000.0],
+            vec![100.0]
+        );
+        let score2 = crate::isotope_fit_score(observed_poor, theoretical_mz, charge, ppm_tol);
+        assert!(score2 > 0.0 && score2 < 0.8); // Should be much lower
+
+        // No match
+        let observed_none = crate::create_spectrum(
+            vec![1200.0],
+            vec![100.0]
+        );
+        let score3 = crate::isotope_fit_score(observed_none, theoretical_mz, charge, ppm_tol);
+        assert_eq!(score3, 0.0);
+    }
+
+    #[pg_test]
+    fn test_decoy_sequence() {
+        let seq = "ACDEFGH";
+        
+        // Reverse (non-tryptic C-terminus reverses full sequence)
+        let rev = crate::generate_decoy_sequence(seq, "reverse");
+        assert_eq!(rev, "HGFEDCA");
+        
+        // Tryptic peptide ending in R or K preserves C-terminal cleavage site (Elias & Gygi pseudo-reversal)
+        let tryptic = "SIYFLLTDR";
+        let rev_tryptic = crate::generate_decoy_sequence(tryptic, "reverse");
+        assert_eq!(rev_tryptic, "DTLLFYISR");
+        assert_eq!(crate::generate_decoy_sequence(tryptic, "full_reverse"), "RDTLLFYIS");
+
+        // Verify y1 ion (m/z 175.1190 for R) is conserved between tryptic target and decoy
+        let target_frags: Vec<_> = crate::generate_theoretical_fragments(tryptic, 1, "HCD").collect();
+        let decoy_frags: Vec<_> = crate::generate_theoretical_fragments(&rev_tryptic, 1, "HCD").collect();
+        let target_y1 = target_frags.iter().find(|f| f.0 == "y1").unwrap().1;
+        let decoy_y1 = decoy_frags.iter().find(|f| f.0 == "y1").unwrap().1;
+        assert!((target_y1 - decoy_y1).abs() < 1e-6);
+
+        // Shuffle
+        let shuff = crate::generate_decoy_sequence(seq, "shuffle");
+        assert_eq!(shuff.len(), seq.len());
+        assert_ne!(shuff, seq);
+        // Ensure same characters
+        let mut sorted_seq: Vec<char> = seq.chars().collect();
+        let mut sorted_shuff: Vec<char> = shuff.chars().collect();
+        sorted_seq.sort();
+        sorted_shuff.sort();
+        assert_eq!(sorted_seq, sorted_shuff);
+
+        // Tryptic shuffle preserves C-terminal K/R
+        let shuff_tryptic = crate::generate_decoy_sequence(tryptic, "shuffle");
+        assert!(shuff_tryptic.ends_with('R'));
+        assert_ne!(shuff_tryptic, tryptic);
+        
+        // Random
+        let rand_seq = crate::generate_decoy_sequence(seq, "random");
+        assert_eq!(rand_seq.len(), seq.len());
+        assert_ne!(rand_seq, seq);
+    }
+
+    #[pg_test]
+    fn test_parse_mgf() {
+        use std::io::Write;
+        let mut file = std::fs::File::create("/tmp/test_parse.mgf").unwrap();
+        file.write_all(b"BEGIN IONS\nTITLE=Test Spectrum\nPEPMASS=1000.5\nCHARGE=2+\n100.0 5000\n200.0 10000\nEND IONS\n").unwrap();
+        
+        let result = pgrx::Spi::get_one::<String>("SELECT title FROM parse_mgf('/tmp/test_parse.mgf');");
+        assert_eq!(result.unwrap().unwrap(), "Test Spectrum");
+        
+        let pepmass = pgrx::Spi::get_one::<f64>("SELECT pepmass FROM parse_mgf('/tmp/test_parse.mgf');");
+        assert_eq!(pepmass.unwrap().unwrap(), 1000.5);
+    }
+
+    #[pg_test]
+    fn test_bio_gc_content() {
+        let gc = crate::bio_gc_content("ATGCGC");
+        assert!((gc - 0.666666).abs() < 1e-4);
+    }
+
+    #[pg_test]
+    fn test_bio_translate_dna() {
+        let aa = crate::bio_translate_dna("ATGCGT");
+        assert_eq!(aa, "MR");
+        let aa_stop = crate::bio_translate_dna("TAATAG");
+        assert_eq!(aa_stop, "**");
+    }
+
+    #[pg_test]
+    fn test_bio_rmsd() {
+        let c1 = crate::ResidueCoord { x: 0.0, y: 0.0, z: 0.0, name: "CA".to_string() };
+        let c2 = crate::ResidueCoord { x: 3.0, y: 4.0, z: 0.0, name: "CA".to_string() };
+        let rmsd = crate::bio_rmsd(vec![c1.clone()], vec![c2.clone()]);
+        assert_eq!(rmsd, 5.0);
+    }
+
+    #[pg_test]
+    fn test_bio_parse_pdb() {
+        let pdb_text = "ATOM      1  N   MET A   1      27.340  24.430   2.614  1.00 49.33           N  \nATOM      2  CA  MET A   1      26.266  25.413   2.842  1.00 49.19           C  ";
+        let iter = crate::bio_parse_pdb(pdb_text);
+        let items: Vec<_> = iter.collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].0, "N");
+        assert_eq!(items[0].1, "MET");
+        assert_eq!(items[1].0, "CA");
     }
 }
 
