@@ -1,0 +1,33 @@
+{
+  "query_id" : "d9b963d7-004c-4c74-83f0-a57e6c7330d6",
+  "result_type" : "entry",
+  "total_count" : 9,
+  "result_set" : [ {
+    "identifier" : "3O8Y",
+    "score" : 1.0
+  }, {
+    "identifier" : "3V92",
+    "score" : 1.0
+  }, {
+    "identifier" : "3V98",
+    "score" : 1.0
+  }, {
+    "identifier" : "3V99",
+    "score" : 1.0
+  }, {
+    "identifier" : "6N2W",
+    "score" : 1.0
+  }, {
+    "identifier" : "6NCF",
+    "score" : 1.0
+  }, {
+    "identifier" : "7TTJ",
+    "score" : 1.0
+  }, {
+    "identifier" : "7TTK",
+    "score" : 1.0
+  }, {
+    "identifier" : "7TTL",
+    "score" : 1.0
+  } ]
+}

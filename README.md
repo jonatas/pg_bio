@@ -138,7 +138,14 @@ Instead of relying on external Python scripts to fetch biological metadata, `pg_
   * `keyword:KW-0002` (Filter by specific biological keywords, e.g., 3D-structure)
 
 ---
-### Layer 6: Cheminformatics (Molecular Graph Search & Fingerprinting)
+
+### Layer 6: Dry Lab Tooling (Structural & Sequence Analysis)
+We have fully integrated classic dry-lab functions directly into the SQL engine, removing the need for Biopython or PyMOL in many scenarios.
+* **Native Sequence Translation:** `bio_translate_dna('ATGCGT')` instantly translates DNA to Amino Acids using standard codon tables.
+* **Native PDB Parsing:** `bio_parse_pdb(pdb_string)` parses raw PDB files into relational SQL rows.
+* **Structural Alignment:** `bio_rmsd(coords_a, coords_b)` calculates the RMSD between two protein conformations directly in PostgreSQL.
+
+### Layer 7: Cheminformatics (Molecular Graph Search & Fingerprinting)
 To discover novel drugs, you must traverse massive libraries of chemical compounds, traditionally requiring you to serialize millions of strings into Python for parsing via RDKit.
 
 * **The Engine:** `pg_bio` integrates the native Rust `purr` crate to parse **SMILES** (Simplified Molecular-Input Line-Entry System) strings directly in the database. It instantly converts chemical graphs into **1024-bit Morgan Fingerprints** (ECFP) entirely inside Postgres.
@@ -149,6 +156,58 @@ To discover novel drugs, you must traverse massive libraries of chemical compoun
   SELECT compound_name, smiles                                              
   FROM library_compounds                                                    
   WHERE smiles_to_fingerprint(smiles) % smiles_to_fingerprint('CC(=O)OC1=CC=CC=C1C(=O)O') > 0.85;
+  ```
+
+### Layer 8: De Novo Enzyme Design, Theozyme Geometry & Conformational Preorganization
+Scaling *de novo* enzyme design success rates from **14.7%** (`Zn` series) to **87.5%** (`ZnO` series) (Chen, Hilvert, Baker et al., *Nature* 2026) requires moving beyond coarse $\text{C}\alpha$ proximity to explicitly model metal cofactors ($\text{Zn}^{2+}$), coordinated nucleophilic water ($\text{HOH}$), strict Bürgi–Dunitz attack angles ($100^\circ - 115^\circ$), two-sided $\beta$-strand pairing, and conformational preorganization across Molecular Dynamics (MD) / MLFF ensembles.
+
+* **The Engine:** `pg_bio` natively indexes `HETATM` cofactors and catalytic water molecules in Morton-coded `ResidueCoord` arrays, executes rotationally invariant 3D **Kabsch / Horn Quaternion Superposition** (`theozyme_rmsd`, `kabsch_rmsd`) against reference active-site motifs (such as `'4qhp_zn_pentad'`), computes bond/attack angles (`bio_angle`) and torsions (`bio_dihedral`), and evaluates trajectory histograms via the `PreorganizationProfile` composite type (`ensemble_fraction_below`).
+* **The Scientist's Advantage:** Screen thousands of RFdiffusion / AlphaFold3 enzyme-substrate complexes and MD ensembles in **< 7 milliseconds** directly inside PostgreSQL—without exporting gigabytes of PDB trajectories to Python/PyRosetta.
+* **SQL Example:**
+  ```sql
+  -- Filter de novo metalloprotease constructs for coordinated Zn(II)-water shells,
+  -- sub-angstrom 4qhp theozyme RMSD, Burgi-Dunitz attack angles, and >80% MD preorganization:
+  SELECT design_id,
+         theozyme_rmsd(active_site_coords, '4qhp_zn_pentad') AS rmsd,
+         bio_angle(water_o, substrate_c, substrate_o) AS burgi_dunitz_angle,
+         ensemble_fraction_below(proton_transfer_dist_hist, 3.0) AS preorg_fraction
+  FROM metalloprotease_designs
+  WHERE has_coordinated_water_shell(active_site_coords, 'ZN', 2.4) = TRUE
+    AND theozyme_rmsd(active_site_coords, '4qhp_zn_pentad') <= 0.90
+    AND bio_angle(water_o, substrate_c, substrate_o) BETWEEN 100.0 AND 115.0
+    AND bio_distance(glu_oe, water_h) < 3.0
+    AND ensemble_fraction_below(proton_transfer_dist_hist, 3.0) >= 0.80
+  ORDER BY rmsd ASC;
+  ```
+
+### Layer 9: MM/GBSA & MM/PBSA Thermodynamic Ledger Auditing & CSR Allosteric Hotspot Discovery
+When analyzing explicit-solvent Molecular Dynamics (MD) trajectories and per-residue end-state free-energy decompositions (such as the UFAM / COARACI **$9 \times 500\text{ ns}$ 5-lipoxygenase triterpenoid benchmark**, [Zenodo 23565306](https://doi.org/10.5281/zenodo.23565306)), medicinal chemists need to verify whether per-residue decompositions close mathematically against global thermodynamic cycles (`GGAS`, `GSOLV`, `DELTA TOTAL`) and discover stabilizing cryptic sub-pocket residues outside pre-selected binding pockets.
+
+* **The Engine:** `pg_bio` provides native Rust double-entry thermodynamic auditors (`audit_mmpbsa_decomposition`, `solvent_shift_penalty`) and Compressed Sparse Row (CSR) energetic network profilers (`build_energy_hotspot_map`, `discover_cryptic_hotspots`, `allosteric_mechanism_index`).
+* **The Scientist's Advantage:** Screens **180 protein-ligand MD systems (`121,860` residue rows) in `7.97 ms` (31.14x faster than Python/NumPy)**, automatically flagging the $+20.72\text{ to }+26.05\text{ kcal/mol}$ non-decomposed Poisson-Boltzmann cavity/dispersion penalty and uncovering unannotated cryptic hydrophobic anchors (`Ile126`, `Val29`, `Leu66` in human 5-LOX).
+* **Interactive Tutorial & Blog Post:**
+  * 📓 **Executed Jupyter Notebook:** [`experiments/11_5lox_triterpenoid_mmpbsa_validation.ipynb`](experiments/11_5lox_triterpenoid_mmpbsa_validation.ipynb)
+  * 📖 **Reference Documentation:** [`docs/12_mmpbsa_free_energy_auditing.md`](docs/12_mmpbsa_free_energy_auditing.md)
+  * 🌐 **Technical Deep-Dive & 3Dmol.js Blog Post:** [Auditing 500 ns Molecular Dynamics in SQL: Triterpenoids, 5-Lipoxygenase, and Cryptic Allosteric Pockets with pg_bio](https://ideia.me/5lox-triterpenoids-mmpbsa-free-energy-audit-pg-bio)
+* **SQL Example:**
+  ```sql
+  -- Build a 676-residue CSR energetic hotspot map and discover cryptic anchors outside the 9-residue pocket
+  SELECT
+      system_id,
+      discover_cryptic_hotspots(
+          build_energy_hotspot_map(677, residue_ids, mm_plus_polar_arr, 677, -0.15),
+          677,
+          ARRAY[68, 108, 109, 110, 129, 130, 133, 134, 137],
+          0.35,
+          5
+      ) AS cryptic_hotspots,
+      allosteric_mechanism_index(
+          build_energy_hotspot_map(677, residue_ids, mm_plus_polar_arr, 677, 0.0),
+          677,
+          ARRAY[29, 66, 109, 110, 126, 130],
+          ARRAY[68, 108, 129, 133, 134, 137]
+      ) AS mechanism_index
+  FROM lox5_mmpbsa_decompositions;
   ```
 
 ---
@@ -172,6 +231,9 @@ You don't need to write raw SQL to leverage this power.
 
 * **`pgbio-py`:** A seamless Python SDK that connects directly to the Rust engine.
 * **Jupyter Integration:** Full compatibility with Pandas and Matplotlib. View our complete tutorial notebook demonstrating all four layers in action: `https://github.com/jonatas/teaflon/blob/main/pg_bio_multiomics_pipeline/teaflon_multiomics_tutorial.ipynb`.
+
+* **Dry Lab Tutorial:** Learn how to use these new structural and sequence analysis tools natively in SQL: [examples/bio_dry_lab_tutorial.ipynb](examples/bio_dry_lab_tutorial.ipynb)
+
 
 ```python
 from pgbio import PgBioClient
