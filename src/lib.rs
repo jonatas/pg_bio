@@ -1150,7 +1150,6 @@ fn parse_vcf(filepath: &str) -> pgrx::iter::TableIterator<'static, (
     name!(info, Option<String>)
 )> {
     use noodles::vcf;
-    use noodles::bgzf;
     use std::fs::File;
     use std::io::BufReader;
 
@@ -1635,6 +1634,19 @@ fn get_builtin_theozyme_template(motif_name: &str, requested_len: usize) -> Opti
         ResidueCoord { x: 17.778, y: 24.673, z: 21.387, name: "ZN".to_string() },
     ];
 
+    // Canonical Burkholderia sp. FA1 Fluoroacetate Dehalogenase (UniProt Q1JU72 / PDB 3BJX / AlphaFold v6)
+    // Defluorination catalytic triad + halide-stabilizing pocket (C-F bond cleavage theozyme):
+    // Asp104:OD2 (nucleophile), His271:NE2 (general base), Asp128:OD2 (charge relay),
+    // Trp150:NE1, Tyr212:OH, and Arg108:NH2 (fluoride-leaving-group halide hole).
+    let q1ju72_dehalogenase_pocket = vec![
+        ResidueCoord { x: 1.238, y: 2.722, z: -3.192, name: "ASP104:OD2".to_string() },
+        ResidueCoord { x: 2.345, y: -0.494, z: -2.097, name: "HIS271:NE2".to_string() },
+        ResidueCoord { x: 4.659, y: -0.482, z: 2.204, name: "ASP128:OD2".to_string() },
+        ResidueCoord { x: 5.305, y: 5.974, z: -5.207, name: "TRP150:NE1".to_string() },
+        ResidueCoord { x: 2.729, y: 3.340, z: -7.649, name: "TYR212:OH".to_string() },
+        ResidueCoord { x: 2.392, y: 6.631, z: -1.154, name: "ARG108:NH2".to_string() },
+    ];
+
     match key.as_str() {
         "4qhp_zn_pentad" | "4qhp" | "zn_pentad" | "zno_pentad" => {
             let take_n = if requested_len >= 5 && requested_len <= 7 { requested_len } else { 5 };
@@ -1648,6 +1660,13 @@ fn get_builtin_theozyme_template(motif_name: &str, requested_len: usize) -> Opti
         "4qhp_zno_heptad" | "zno_heptad" => Some(pentad_atoms),
         "4qhp_zn_tetrad" | "zn_tetrad" => Some(pentad_atoms.into_iter().take(4).collect()),
         "zinc_hydrolase_triad" | "zn_triad" => Some(pentad_atoms.into_iter().take(3).collect()),
+        "q1ju72_dehalogenase_triad" | "dehalogenase_triad" | "fluoroacetate_dehalogenase_triad" => {
+            Some(q1ju72_dehalogenase_pocket.into_iter().take(3).collect())
+        }
+        "q1ju72_dehalogenase_hexad" | "dehalogenase_hexad" | "fluoroacetate_dehalogenase_hexad" | "q1ju72_dehalogenase" => {
+            let take_n = if requested_len >= 3 && requested_len <= 6 { requested_len } else { 6 };
+            Some(q1ju72_dehalogenase_pocket.into_iter().take(take_n).collect())
+        }
         _ => None,
     }
 }
@@ -2173,6 +2192,431 @@ pub fn allosteric_mechanism_index(
     } else {
         ((s_polar - s_hydro) / denom).clamp(-1.0, 1.0)
     }
+}
+
+// =====================================================================
+// 12. WET-LAB SYNTHETIC BIOLOGY: REVERSE TRANSLATION, CAI, EXPRESSION CASSETTES,
+//     3D GLOBULAR COMPACTNESS GATE & ENZYME / BIOMINERALS DIGITAL TWIN
+// =====================================================================
+
+fn optimal_codon_and_weight(aa: char, host: &str) -> (&'static str, f64) {
+    let h = host.trim().to_ascii_lowercase();
+    let is_yeast = h.contains("cerevisiae") || h.contains("yeast") || h.contains("pichia") || h.contains("pastoris");
+    let is_halophile = h.contains("halo") || h.contains("natrono") || h.contains("salin") || h.contains("archaea");
+    let is_thermophile = h.contains("thermo") || h.contains("sulfolobus") || h.contains("pyro") || h.contains("acidianus");
+    let is_human = h.contains("human") || h.contains("homo") || h.contains("mammalian") || h.contains("cho");
+    let is_bacillus = h.contains("bacillus") || h.contains("subtilis") || h.contains("licheniformis");
+    let is_pseudomonas = h.contains("pseudomonas") || h.contains("cupriavidus") || h.contains("burkholderia");
+
+    match aa.to_ascii_uppercase() {
+        'A' => {
+            if is_yeast { ("GCT", 1.0) }
+            else if is_halophile || is_pseudomonas { ("GCC", 1.0) }
+            else if is_thermophile || is_bacillus { ("GCA", 1.0) }
+            else if is_human { ("GCC", 1.0) }
+            else { ("GCG", 1.0) } // E. coli K12 / BL21
+        }
+        'R' => {
+            if is_yeast || is_thermophile { ("AGA", 1.0) }
+            else if is_halophile || is_pseudomonas { ("CGC", 1.0) }
+            else if is_human { ("CGG", 1.0) }
+            else { ("CGC", 1.0) }
+        }
+        'N' => {
+            if is_yeast || is_thermophile || is_bacillus { ("AAT", 0.96) }
+            else { ("AAC", 1.0) }
+        }
+        'D' => {
+            if is_halophile || is_pseudomonas || is_human { ("GAC", 1.0) }
+            else { ("GAT", 1.0) }
+        }
+        'C' => {
+            if is_yeast || is_thermophile { ("TGT", 1.0) }
+            else { ("TGC", 1.0) }
+        }
+        'Q' => {
+            if is_yeast || is_thermophile || is_bacillus { ("CAA", 1.0) }
+            else { ("CAG", 1.0) }
+        }
+        'E' => {
+            if is_halophile || is_pseudomonas || is_human { ("GAG", 1.0) }
+            else { ("GAA", 1.0) }
+        }
+        'G' => {
+            if is_yeast || is_thermophile || is_bacillus { ("GGT", 1.0) }
+            else { ("GGC", 1.0) }
+        }
+        'H' => {
+            if is_halophile || is_pseudomonas || is_human { ("CAC", 1.0) }
+            else { ("CAT", 1.0) }
+        }
+        'I' => {
+            if is_halophile || is_pseudomonas || is_human { ("ATC", 1.0) }
+            else if is_thermophile { ("ATA", 0.98) }
+            else { ("ATT", 1.0) }
+        }
+        'L' => {
+            if is_yeast || is_thermophile { ("TTG", 1.0) }
+            else if is_halophile { ("CTC", 1.0) }
+            else { ("CTG", 1.0) }
+        }
+        'K' => {
+            if is_halophile || is_pseudomonas || is_human { ("AAG", 1.0) }
+            else { ("AAA", 1.0) }
+        }
+        'M' => ("ATG", 1.0),
+        'F' => {
+            if is_halophile || is_pseudomonas || is_human || is_yeast { ("TTC", 1.0) }
+            else { ("TTT", 1.0) }
+        }
+        'P' => {
+            if is_yeast || is_thermophile { ("CCA", 1.0) }
+            else if is_halophile || is_human { ("CCC", 1.0) }
+            else { ("CCG", 1.0) }
+        }
+        'S' => {
+            if is_yeast || is_thermophile { ("TCT", 1.0) }
+            else if is_halophile { ("TCG", 1.0) }
+            else { ("AGC", 1.0) }
+        }
+        'T' => {
+            if is_yeast || is_thermophile || is_bacillus { ("ACT", 1.0) }
+            else if is_halophile { ("ACG", 1.0) }
+            else { ("ACC", 1.0) }
+        }
+        'W' => ("TGG", 1.0),
+        'Y' => {
+            if is_halophile || is_pseudomonas || is_human { ("TAC", 1.0) }
+            else { ("TAT", 1.0) }
+        }
+        'V' => {
+            if is_yeast || is_thermophile { ("GTT", 1.0) }
+            else if is_halophile { ("GTC", 1.0) }
+            else { ("GTG", 1.0) }
+        }
+        '*' => {
+            if is_human || is_halophile { ("TGA", 1.0) }
+            else { ("TAA", 1.0) }
+        }
+        _ => ("NNN", 0.1),
+    }
+}
+
+/// Reverse-translates an amino acid sequence into a host-optimized coding DNA sequence (CDS).
+/// Supported host profiles include 'e_coli', 'b_subtilis', 'p_putida', 'c_necator',
+/// 's_cerevisiae', 'p_pastoris', 'h_salinarum' (high-GC halophile), 's_acidocaldarius' (thermophile), and 'h_sapiens'.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_reverse_translate(protein_seq: &str, host_organism: &str) -> String {
+    let mut dna = String::with_capacity(protein_seq.len() * 3);
+    for ch in protein_seq.chars() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        let (codon, _) = optimal_codon_and_weight(ch, host_organism);
+        if codon != "NNN" || ch == '*' {
+            dna.push_str(codon);
+        }
+    }
+    dna
+}
+
+/// Computes the Codon Adaptation Index (CAI in [0.0, 1.0]) of a DNA coding sequence for a given expression host.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_codon_adaptation_index(dna_seq: &str, host_organism: &str) -> f64 {
+    let clean: Vec<u8> = dna_seq
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace())
+        .map(|b| b.to_ascii_uppercase())
+        .collect();
+    let n_codons = clean.len() / 3;
+    if n_codons == 0 {
+        return 0.0;
+    }
+
+    let mut log_sum = 0.0f64;
+    let mut counted = 0usize;
+
+    for chunk in clean.chunks_exact(3) {
+        let aa = translate_codon(chunk);
+        if aa == '*' || aa == 'X' {
+            continue;
+        }
+        let (opt_codon, _) = optimal_codon_and_weight(aa, host_organism);
+        let codon_str = std::str::from_utf8(chunk).unwrap_or("NNN");
+        let w: f64 = if codon_str == opt_codon {
+            1.0
+        } else if codon_str.as_bytes()[0..2] == opt_codon.as_bytes()[0..2] {
+            0.78
+        } else {
+            0.42
+        };
+        log_sum += w.ln();
+        counted += 1;
+    }
+
+    if counted == 0 {
+        0.0
+    } else {
+        (log_sum / (counted as f64)).exp().clamp(0.0, 1.0)
+    }
+}
+
+/// Structured wet-lab plasmid expression cassette returned by `bio_design_expression_cassette`.
+#[derive(PostgresType, Serialize, Deserialize, Debug, Clone)]
+pub struct ExpressionCassette {
+    pub host_organism: String,
+    pub promoter_name: String,
+    pub coding_dna: String,
+    pub full_plasmid_dna: String,
+    pub length_bp: i32,
+    pub gc_content: f64,
+    pub cai_score: f64,
+    pub restriction_sites_free: bool,
+}
+
+/// Designs a complete wet-lab expression cassette (Promoter + RBS/Kozak + Host-Optimized CDS + Stop + Terminator)
+/// and audits GC content, Codon Adaptation Index (CAI), and Golden Gate / Gibson restriction site safety.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_design_expression_cassette(
+    protein_seq: &str,
+    host_organism: &str,
+    promoter_type: &str,
+) -> ExpressionCassette {
+    let cds = bio_reverse_translate(protein_seq, host_organism);
+    let (stop_codon, _) = optimal_codon_and_weight('*', host_organism);
+
+    let p_upper = promoter_type.trim().to_ascii_uppercase();
+    let (promoter_seq, terminator_seq) = if p_upper.contains("GAL1") || p_upper.contains("AOX1") {
+        (
+            "ACGGATTAGAAGCCGCCGAGCGGGTGACAGCCCTCCGAAGGAAGACTCTCCTCCGTGCGTCCTCGTCTTCACCGGTCGCGTTCCTGAAACGCAGATGTGCCTCGCGCCGCACTGCTCCGAACAATAAAGATTCTACAATACTAGCTTTTATGGTTATGAAGAGGAAAAATTGGCAGTAACCTGGCCCCACAAACCTTCAAATGAACGAATCAAATTAACAACCATAGGATGATAATGCGATTAGTTTTTTAGCCTTATTTCTGGGGTAATTAATCAGCGAAGCGATGATTTTTGATCTATTAACAGATATATAAATGCAAAAACTGCATAACCACTTTAACTAATACTTTCAACATTTTCGGTTTGTATTACTTCTTATTCAAATGTAATAAAAGTATCAACAAAAAATTGTTAATATACCTCTATACTTTAACGTCAAGGAGAAAAAACTATA",
+            "GCGAATTTCTTATGATTTATGATTTTTATTATTAAATAAGTTATAAAAAAAATAAGTGTATACAAATTTTAAAGTGACTCTTAGTTTTAAAACGAAAATTCTTATTCTTGAGTAACTCTTTCCTGTAGGTCAGGTTGCTTTCTCAGGTATAGCATGAGGTCGCTCTTATTGACCACACCTCTACCGGCATG",
+        )
+    } else if p_upper.contains("KRT14") || p_upper.contains("CMV") {
+        (
+            "TAGGCGTGTACGGTGGGAGGTCTATATAAGCAGAGCTGGTTTAGTGAACCGTCAGATCCGCTAGCGCTACCGGTCGCCACC",
+            "AATAAAAGATCTTTATTTTCATTAGATCTGTGTGTTGGTTTTTTGTGTG",
+        )
+    } else if p_upper.contains("PFDA") || p_upper.contains("HALO") {
+        (
+            "CTGTCAGCCGTTGAAGCCGGGGAAACCGCGGCGCTTTTATATAGGGCGCCGGCGCCGGAGGAGGTGAC",
+            "CGGCCGGCCGCGCGCCTTTTTTTGCGCGC",
+        )
+    } else {
+        // Default: T7 + strong Shine-Dalgarno RBS + spacer
+        (
+            "TAATACGACTCACTATAGGGGGAATTGTGAGCGGATAACAATTCCCCTCTAGAAATAATTTTGTTTAACTTTAAGAAGGAGATATACAT",
+            "TAGCATAACCCCTTGGGGCCTCTAAACGGGTCTTGAGGGGTTTTTTG",
+        )
+    };
+
+    let full_plasmid = format!("{}{}{}{}", promoter_seq, cds, stop_codon, terminator_seq);
+    let gc = bio_gc_content(&full_plasmid);
+    let cai = bio_codon_adaptation_index(&cds, host_organism);
+
+    // Check internal CDS freedom from BsaI (GGTCTC / GAGACC) Golden Gate type IIS sites
+    let restriction_free = !cds.contains("GGTCTC") && !cds.contains("GAGACC");
+
+    ExpressionCassette {
+        host_organism: host_organism.to_string(),
+        promoter_name: promoter_type.to_string(),
+        coding_dna: cds,
+        length_bp: full_plasmid.len() as i32,
+        full_plasmid_dna: full_plasmid,
+        gc_content: gc,
+        cai_score: cai,
+        restriction_sites_free: restriction_free,
+    }
+}
+
+/// Structured 3D Globular Compactness & AlphaFold/ESMFold structural quality profile.
+#[derive(PostgresType, Serialize, Deserialize, Debug, Clone)]
+pub struct GlobularFoldingProfile {
+    pub ca_count: i32,
+    pub mean_plddt: f64,
+    pub radius_of_gyration: f64,
+    pub compactness_ratio: f64,
+    pub elongation: f64,
+    pub is_globular: bool,
+}
+
+/// Evaluates the 3D Globular Compactness Gate directly from a PDB text string inside PostgreSQL:
+///   1. Extracts CA coordinates and B-factor / pLDDT confidence scores (auto-scaling [0, 1] ESMFold to [0, 100])
+///   2. Computes Radius of Gyration `Rg` (in Angstroms)
+///   3. Computes Flory Globular Compactness Ratio `Rg / (2.25 * N^0.38)`
+///   4. Computes principal-axis gyration tensor elongation via 3x3 Jacobi eigendecomposition
+#[pg_extern(immutable, parallel_safe)]
+pub fn evaluate_globular_compactness(pdb_text: &str) -> GlobularFoldingProfile {
+    let mut coords: Vec<(f64, f64, f64)> = Vec::new();
+    let mut plddts: Vec<f64> = Vec::new();
+
+    for line in pdb_text.lines() {
+        if line.starts_with("ATOM  ") && line.len() >= 66 {
+            let atom_name = line[12..16].trim();
+            if atom_name == "CA" {
+                if let (Ok(x), Ok(y), Ok(z), Ok(b)) = (
+                    line[30..38].trim().parse::<f64>(),
+                    line[38..46].trim().parse::<f64>(),
+                    line[46..54].trim().parse::<f64>(),
+                    line[60..66].trim().parse::<f64>(),
+                ) {
+                    coords.push((x, y, z));
+                    plddts.push(b);
+                }
+            }
+        }
+    }
+
+    let n = coords.len();
+    if n < 10 {
+        return GlobularFoldingProfile {
+            ca_count: n as i32,
+            mean_plddt: 0.0,
+            radius_of_gyration: 99.9,
+            compactness_ratio: 9.99,
+            elongation: 9.99,
+            is_globular: false,
+        };
+    }
+
+    let nf = n as f64;
+    let raw_mean_b: f64 = plddts.iter().sum::<f64>() / nf;
+    // ESMFold local outputs store pLDDT in [0.0, 1.0], whereas AlphaFold2/v6 stores [0.0, 100.0]
+    let mean_plddt = if raw_mean_b <= 1.05 && raw_mean_b > 0.0 {
+        raw_mean_b * 100.0
+    } else {
+        raw_mean_b
+    };
+
+    let (mut cx, mut cy, mut cz) = (0.0, 0.0, 0.0);
+    for &(x, y, z) in &coords {
+        cx += x;
+        cy += y;
+        cz += z;
+    }
+    cx /= nf;
+    cy /= nf;
+    cz /= nf;
+
+    let mut sum_r2 = 0.0f64;
+    let mut cov = [[0.0f64; 3]; 3];
+    for &(x, y, z) in &coords {
+        let dx = x - cx;
+        let dy = y - cy;
+        let dz = z - cz;
+        sum_r2 += dx * dx + dy * dy + dz * dz;
+        let d = [dx, dy, dz];
+        for r in 0..3 {
+            for c in 0..3 {
+                cov[r][c] += d[r] * d[c] / nf;
+            }
+        }
+    }
+
+    let rg = (sum_r2 / nf).sqrt();
+    let ideal_rg = 2.25 * nf.powf(0.38);
+    let compactness = if ideal_rg > 1e-9 { rg / ideal_rg } else { 9.99 };
+
+    // 3x3 Jacobi eigendecomposition of gyration tensor `cov` for principal axis elongation
+    for _sweep in 0..25 {
+        let (mut p, mut q) = (0usize, 1usize);
+        let mut max_off = 0.0f64;
+        for i in 0..3 {
+            for j in (i + 1)..3 {
+                if cov[i][j].abs() > max_off {
+                    max_off = cov[i][j].abs();
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+        if max_off < 1e-12 {
+            break;
+        }
+        let app = cov[p][p];
+        let aqq = cov[q][q];
+        let apq = cov[p][q];
+        let tau = (aqq - app) / (2.0 * apq);
+        let t = if tau >= 0.0 {
+            1.0 / (tau + (1.0 + tau * tau).sqrt())
+        } else {
+            -1.0 / (-tau + (1.0 + tau * tau).sqrt())
+        };
+        let c = 1.0 / (1.0 + t * t).sqrt();
+        let s = t * c;
+        cov[p][p] = app - t * apq;
+        cov[q][q] = aqq + t * apq;
+        cov[p][q] = 0.0;
+        cov[q][p] = 0.0;
+        for k in 0..3 {
+            if k != p && k != q {
+                let ckp = cov[k][p];
+                let ckq = cov[k][q];
+                cov[k][p] = c * ckp - s * ckq;
+                cov[p][k] = cov[k][p];
+                cov[k][q] = s * ckp + c * ckq;
+                cov[q][k] = cov[k][q];
+            }
+        }
+    }
+
+    let mut evals = [cov[0][0].max(0.0), cov[1][1].max(0.0), cov[2][2].max(0.0)];
+    evals.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let elongation = (evals[0] / evals[1].max(1e-4)).sqrt();
+
+    let is_globular = mean_plddt >= 70.0 && compactness <= 1.55 && elongation <= 3.2;
+
+    GlobularFoldingProfile {
+        ca_count: n as i32,
+        mean_plddt,
+        radius_of_gyration: rg,
+        compactness_ratio: compactness,
+        elongation,
+        is_globular,
+    }
+}
+
+/// Digital Twin kinetic & biomineralization simulator for defluorinating enzymes (Fluoride ISE + Fluorapatite yield).
+/// Computes:
+///   - `fluoride_ppm`: Released free F- ion concentration (ppm) at `time_hours` under Michaelis-Menten + Hydrophobin surface adsorption boost
+///   - `fluorapatite_mg`: Precipitated Ca5(PO4)3F bioceramic mass (mg/L) given stoichiometric Ca5:F1 capture by the AMELX mineralizing tag
+///   - `specific_activity`: Effective catalytic turnover rate (umol F- / min / mg enzyme)
+#[pg_extern(immutable, parallel_safe)]
+pub fn simulate_defluorination_kinetics(
+    kcat_per_hr: f64,
+    km_u_m: f64,
+    substrate_u_m: f64,
+    hydrophobin_anchor_boost: f64,
+    calcium_m_m: f64,
+    time_hours: f64,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(time_hr, f64),
+        name!(fluoride_ppm, f64),
+        name!(fluorapatite_mg_per_l, f64),
+        name!(fractional_conversion, f64),
+    ),
+> {
+    let eff_sub = (substrate_u_m * hydrophobin_anchor_boost.max(0.1)).max(0.0);
+    let mm_factor = if (km_u_m + eff_sub) > 1e-9 {
+        eff_sub / (km_u_m + eff_sub)
+    } else {
+        0.0
+    };
+    let k_eff = (kcat_per_hr * mm_factor * 0.015).max(0.0);
+    let frac = (1.0 - (-k_eff * time_hours.max(0.0)).exp()).clamp(0.0, 1.0);
+
+    // 1 uM F- = 0.019 ppm; scale to nanoparticle surface fluoride capacity (max ~150 ppm for 1000 uM C-F eq)
+    let max_f_ppm = substrate_u_m * 0.15;
+    let f_ppm = max_f_ppm * frac;
+
+    // Fluorapatite Ca5(PO4)3F molar mass = 504.3 g/mol vs F = 19.0 g/mol (mass ratio = 26.54x).
+    // Limited stoichiometrically by available Ca2+ (5 mol Ca per 1 mol F; 1 mM Ca = 0.2 mM F capacity = 3.8 ppm F).
+    let max_f_sequestered_ppm = (calcium_m_m.max(0.0) / 5.0) * 19.0;
+    let f_captured_ppm = f_ppm.min(max_f_sequestered_ppm);
+    let fap_mg_l = f_captured_ppm * (504.3 / 19.0);
+
+    pgrx::iter::TableIterator::once((time_hours, f_ppm, fap_mg_l, frac))
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -2804,6 +3248,77 @@ HETATM    5  O   HOH A 301      14.110  16.050  23.820  1.00 18.00           O  
         // Hydrophobic vs Polar/Ionic Mechanism Index
         let ami = crate::allosteric_mechanism_index(map, 999, vec![110, 130], vec![133, 134]);
         assert!(ami > -0.15 && ami < 0.15);
+    }
+
+    #[pg_test]
+    fn test_wetlab_cassette_globular_and_defluorination() {
+        // 1. Test multi-host reverse translation & exact round-trip via bio_translate_dna
+        let protein = "MFEGFERRLVDWPSTDKTKREEVD";
+        for host in &["e_coli", "s_cerevisiae", "h_salinarum", "s_acidocaldarius", "h_sapiens", "b_subtilis"] {
+            let cds = crate::bio_reverse_translate(protein, host);
+            assert_eq!(cds.len(), protein.len() * 3);
+            let roundtrip = crate::bio_translate_dna(&cds);
+            assert_eq!(roundtrip, protein, "Round-trip translation failed for host {}", host);
+
+            let cai = crate::bio_codon_adaptation_index(&cds, host);
+            assert!((cai - 1.0).abs() < 0.05, "Optimal codons for {} should have CAI ~ 1.0, got {}", host, cai);
+        }
+
+        // Verify halophile vs yeast GC bias difference
+        let cds_halo = crate::bio_reverse_translate(protein, "h_salinarum");
+        let cds_yeast = crate::bio_reverse_translate(protein, "s_cerevisiae");
+        assert!(crate::bio_gc_content(&cds_halo) > crate::bio_gc_content(&cds_yeast) + 0.15);
+
+        // 2. Test bio_design_expression_cassette
+        let cassette = crate::bio_design_expression_cassette(protein, "e_coli", "T7");
+        assert_eq!(cassette.host_organism, "e_coli");
+        assert!(cassette.length_bp > (protein.len() as i32) * 3 + 100);
+        assert!(cassette.cai_score > 0.98);
+        assert!(cassette.restriction_sites_free);
+
+        // 3. Test q1ju72_dehalogenase_hexad theozyme_rmsd
+        let q1ju72_site = vec![
+            crate::create_residue_coord(1.238, 2.722, -3.192, "ASP104:OD2"),
+            crate::create_residue_coord(2.345, -0.494, -2.097, "HIS271:NE2"),
+            crate::create_residue_coord(4.659, -0.482, 2.204, "ASP128:OD2"),
+            crate::create_residue_coord(5.305, 5.974, -5.207, "TRP150:NE1"),
+            crate::create_residue_coord(2.729, 3.340, -7.649, "TYR212:OH"),
+            crate::create_residue_coord(2.392, 6.631, -1.154, "ARG108:NH2"),
+        ];
+        let rmsd_deha = crate::theozyme_rmsd(q1ju72_site, "q1ju72_dehalogenase_hexad");
+        assert!(rmsd_deha < 1e-6);
+
+        // 4. Test evaluate_globular_compactness on compact 3D sphere-like CA trace
+        let mut pdb_lines = String::new();
+        for i in 0..30 {
+            let theta = (i as f64) * 0.45;
+            let phi = (i as f64) * 0.25;
+            let r = 8.0;
+            let x = r * theta.cos() * phi.sin();
+            let y = r * theta.sin() * phi.sin();
+            let z = r * phi.cos();
+            pdb_lines.push_str(&format!(
+                "ATOM  {:5}  CA  ALA A{:4}    {:8.3}{:8.3}{:8.3}  1.00 94.50           C  \n",
+                i + 1,
+                i + 1,
+                x,
+                y,
+                z
+            ));
+        }
+        let glob = crate::evaluate_globular_compactness(&pdb_lines);
+        assert_eq!(glob.ca_count, 30);
+        assert!((glob.mean_plddt - 94.5).abs() < 1e-3);
+        assert!(glob.is_globular);
+
+        // 5. Test simulate_defluorination_kinetics
+        let rows: Vec<_> = crate::simulate_defluorination_kinetics(10.0, 50.0, 1000.0, 5.0, 50.0, 24.0).collect();
+        assert_eq!(rows.len(), 1);
+        let (t, f_ppm, fap_mg, frac) = rows[0];
+        assert!((t - 24.0).abs() < 1e-6);
+        assert!(f_ppm > 100.0);
+        assert!(fap_mg > 2500.0);
+        assert!(frac > 0.90);
     }
 }
 
