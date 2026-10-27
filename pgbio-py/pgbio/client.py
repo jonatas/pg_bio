@@ -1,7 +1,7 @@
 import psycopg
 import json
 from typing import List, Optional
-from .models import Protein, Atom, SpatialBounds
+from .models import Protein, Atom, SpatialBounds, PreorganizationProfile, EnergyDecompositionAudit
 
 class PgBioClient:
     def __init__(self, connection_string: str):
@@ -208,3 +208,245 @@ class PgBioClient:
                         "similarity": float(row[2])
                     })
         return results
+
+    def has_coordinated_water_shell(
+        self, active_site_coords: List[dict], metal_ion: str = "ZN", max_distance: float = 2.4
+    ) -> bool:
+        """
+        Checks whether an active-site coordinate array has an explicit metal cofactor
+        and a coordinated catalytic water shell within `max_distance` Angstroms.
+        """
+        payload = [json.dumps(c) for c in active_site_coords]
+        query = "SELECT has_coordinated_water_shell(%s::ResidueCoord[], %s, %s);"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (payload, metal_ion, max_distance))
+                row = cur.fetchone()
+                return bool(row[0]) if row else False
+
+    def calculate_theozyme_rmsd(
+        self, site_atoms: List[dict], motif_name: str = "4qhp_zn_pentad"
+    ) -> float:
+        """
+        Computes the Kabsch-superimposed active-site RMSD (in Angstroms) against a named
+        theozyme template (e.g. '4qhp_zn_pentad') or custom JSON coordinate array.
+        """
+        payload = [json.dumps(c) for c in site_atoms]
+        query = "SELECT theozyme_rmsd(%s::ResidueCoord[], %s);"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (payload, motif_name))
+                row = cur.fetchone()
+                return float(row[0]) if row else 999.0
+
+    def calculate_attack_angle(self, atom_a: dict, vertex_b: dict, atom_c: dict) -> float:
+        """
+        Computes the 3-atom bond/nucleophilic attack angle (in degrees) with `vertex_b` as vertex.
+        E.g. Burgi-Dunitz angle between nucleophilic water O, carbonyl C, and carbonyl O.
+        """
+        query = "SELECT bio_angle(%s::ResidueCoord, %s::ResidueCoord, %s::ResidueCoord);"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (json.dumps(atom_a), json.dumps(vertex_b), json.dumps(atom_c)),
+                )
+                row = cur.fetchone()
+                return float(row[0]) if row else 0.0
+
+    def score_interface_complementarity(
+        self, pocket_embedding: List[float], peptide_embedding: List[float]
+    ) -> float:
+        """
+        Scores two-sided enzyme-substrate interface complementarity in [0.0, 1.0].
+        """
+        query = "SELECT interface_complementarity(%s::real[], %s::real[]);"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (pocket_embedding, peptide_embedding))
+                row = cur.fetchone()
+                return float(row[0]) if row else 0.0
+
+    def check_strand_pairing(
+        self, guide_strand_coords: List[dict], backbone_coords: List[dict]
+    ) -> bool:
+        """
+        Checks antiparallel/parallel beta-strand pairing register between protease
+        guide-strand coordinates and peptide substrate backbone coordinates.
+        """
+        guide_payload = [json.dumps(c) for c in guide_strand_coords]
+        sub_payload = [json.dumps(c) for c in backbone_coords]
+        query = "SELECT strand_pairing_check(%s::ResidueCoord[], %s::ResidueCoord[]);"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (guide_payload, sub_payload))
+                row = cur.fetchone()
+                return bool(row[0]) if row else False
+
+    def screen_metalloprotease_designs(
+        self,
+        motif_name: str = "4qhp_zn_pentad",
+        max_rmsd: float = 0.95,
+        min_preorg_fraction: float = 0.80,
+    ) -> List[dict]:
+        """
+        Screens candidate metalloprotease designs in-database using explicit cofactor/water
+        coordination, Kabsch theozyme RMSD, Burgi-Dunitz attack angles, and MD ensemble preorganization.
+        """
+        query = """
+            SELECT design_id, series, scaffold_family,
+                   theozyme_rmsd(active_site_coords, %s) AS rmsd,
+                   bio_angle(water_o, substrate_c, substrate_o) AS attack_angle,
+                   bio_distance(glu_oe, water_h) AS proton_transfer_dist,
+                   ensemble_fraction_below(proton_transfer_dist_hist, 3.0) AS preorg_frac,
+                   digested_fraction_12h
+            FROM metalloprotease_designs
+            WHERE has_coordinated_water_shell(active_site_coords, 'ZN', 2.4) = TRUE
+              AND theozyme_rmsd(active_site_coords, %s) <= %s
+              AND bio_angle(water_o, substrate_c, substrate_o) BETWEEN 100.0 AND 115.0
+              AND bio_distance(glu_oe, water_h) < 3.0
+              AND ensemble_fraction_below(proton_transfer_dist_hist, 3.0) >= %s
+            ORDER BY rmsd ASC;
+        """
+        results = []
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (motif_name, motif_name, max_rmsd, min_preorg_fraction))
+                for row in cur.fetchall():
+                    results.append({
+                        "design_id": row[0],
+                        "series": row[1],
+                        "scaffold_family": row[2],
+                        "rmsd": float(row[3]),
+                        "attack_angle": float(row[4]),
+                        "proton_transfer_dist": float(row[5]),
+                        "preorg_frac": float(row[6]),
+                        "digested_fraction_12h": float(row[7]),
+                    })
+        return results
+
+    def audit_mmpbsa_decomposition(
+        self,
+        model: str,
+        internal: List[float],
+        vdw: List[float],
+        electrostatic: List[float],
+        polar_solv: List[float],
+        nonpolar_solv: List[float],
+        reported_mm_plus_polar: List[float],
+        global_ggas: float,
+        global_polar: float,
+        global_nonpolar_net: float,
+        tolerance: float = 0.005,
+    ) -> EnergyDecompositionAudit:
+        """
+        Runs a native O(N) Rust thermodynamic double-entry audit comparing per-residue
+        MM/GBSA or MM/PBSA decomposition arrays against global endpoint energy terms.
+        """
+        query = """
+            SELECT audit_mmpbsa_decomposition(
+                %s, %s::float8[], %s::float8[], %s::float8[],
+                %s::float8[], %s::float8[], %s::float8[],
+                %s, %s, %s, %s
+            )::text;
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (
+                        model,
+                        internal,
+                        vdw,
+                        electrostatic,
+                        polar_solv,
+                        nonpolar_solv,
+                        reported_mm_plus_polar,
+                        global_ggas,
+                        global_polar,
+                        global_nonpolar_net,
+                        tolerance,
+                    ),
+                )
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return EnergyDecompositionAudit(**data)
+
+    def discover_cryptic_hotspots(
+        self,
+        sequence_length: int,
+        residue_ids: List[int],
+        mm_plus_polar: List[float],
+        known_pocket_residues: List[int],
+        ligand_node_id: int = 999,
+        energy_cutoff: float = -0.05,
+        min_stabilization: float = 0.50,
+        limit: int = 5,
+    ) -> List[int]:
+        """
+        Builds a CSR SparseAttentionMap from per-residue MM+Polar energies and traverses
+        it to return stabilizing peripheral/cryptic hotspots outside `known_pocket_residues`.
+        """
+        query = """
+            SELECT discover_cryptic_hotspots(
+                build_energy_hotspot_map(%s, %s::int4[], %s::float8[], %s, %s),
+                %s, %s::int4[], %s, %s
+            );
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (
+                        sequence_length,
+                        residue_ids,
+                        mm_plus_polar,
+                        ligand_node_id,
+                        energy_cutoff,
+                        ligand_node_id,
+                        known_pocket_residues,
+                        min_stabilization,
+                        limit,
+                    ),
+                )
+                row = cur.fetchone()
+                return list(row[0]) if row and row[0] else []
+
+    def calculate_allosteric_mechanism_index(
+        self,
+        sequence_length: int,
+        residue_ids: List[int],
+        mm_plus_polar: List[float],
+        hydrophobic_residues: List[int],
+        polar_ionic_residues: List[int],
+        ligand_node_id: int = 999,
+        energy_cutoff: float = -0.05,
+    ) -> float:
+        """
+        Computes the normalized Polar/Ionic-to-Hydrophobic Allosteric Mechanism Index in [-1.0, +1.0].
+        """
+        query = """
+            SELECT allosteric_mechanism_index(
+                build_energy_hotspot_map(%s, %s::int4[], %s::float8[], %s, %s),
+                %s, %s::int4[], %s::int4[]
+            );
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (
+                        sequence_length,
+                        residue_ids,
+                        mm_plus_polar,
+                        ligand_node_id,
+                        energy_cutoff,
+                        ligand_node_id,
+                        hydrophobic_residues,
+                        polar_ionic_residues,
+                    ),
+                )
+                row = cur.fetchone()
+                return float(row[0]) if row else 0.0
+
+

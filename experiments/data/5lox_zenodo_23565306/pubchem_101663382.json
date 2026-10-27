@@ -1,0 +1,17 @@
+{
+  "PropertyTable": {
+    "Properties": [
+      {
+        "CID": 101663382,
+        "MolecularFormula": "C30H46O",
+        "MolecularWeight": "422.7",
+        "XLogP": 8.3,
+        "ExactMass": "422.354866087",
+        "TPSA": 17.1,
+        "HBondDonorCount": 0,
+        "HBondAcceptorCount": 1,
+        "RotatableBondCount": 0
+      }
+    ]
+  }
+}

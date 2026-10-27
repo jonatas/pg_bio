@@ -1,0 +1,2845 @@
+{
+  "page_meta": {
+    "limit": 5,
+    "next": "/chembl/api/data/target/search.json?limit=5&offset=5&q=ALOX5",
+    "offset": 0,
+    "previous": null,
+    "total_count": 6
+  },
+  "targets": [
+    {
+      "cross_references": [],
+      "organism": "Homo sapiens",
+      "pref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+      "score": 14.0,
+      "species_group_flag": false,
+      "target_chembl_id": "CHEMBL215",
+      "target_components": [
+        {
+          "accession": "P09917",
+          "component_description": "Polyunsaturated fatty acid 5-lipoxygenase",
+          "component_id": 168,
+          "component_type": "PROTEIN",
+          "relationship": "SINGLE PROTEIN",
+          "target_component_synonyms": [
+            {
+              "component_synonym": "1.13.11.-",
+              "syn_type": "EC_NUMBER"
+            },
+            {
+              "component_synonym": "1.13.11.34",
+              "syn_type": "EC_NUMBER"
+            },
+            {
+              "component_synonym": "5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "5-LO",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "ALOX5",
+              "syn_type": "GENE_SYMBOL"
+            },
+            {
+              "component_synonym": "Arachidonate 5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "LOG5",
+              "syn_type": "GENE_SYMBOL_OTHER"
+            },
+            {
+              "component_synonym": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            }
+          ],
+          "target_component_xrefs": [
+            {
+              "xref_id": "6NCF",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "3V92",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "6N2W",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "3O8Y",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "7TTJ",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "3V98",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "3V99",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "7TTK",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "7TTL",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "GO:0005641",
+              "xref_name": "nuclear envelope lumen",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0004051",
+              "xref_name": "arachidonate 5-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0004052",
+              "xref_name": "arachidonate 12(S)-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0005506",
+              "xref_name": "iron ion binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0005515",
+              "xref_name": "protein binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0016702",
+              "xref_name": "oxidoreductase activity, acting on single donors with incorporation of molecular oxygen, incorporation of two atoms of oxygen",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0016787",
+              "xref_name": "hydrolase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0036403",
+              "xref_name": "arachidonate 8(S)-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0046872",
+              "xref_name": "metal ion binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0051213",
+              "xref_name": "dioxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0001676",
+              "xref_name": "long-chain fatty acid metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0001937",
+              "xref_name": "negative regulation of endothelial cell proliferation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002232",
+              "xref_name": "leukocyte chemotaxis involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002523",
+              "xref_name": "leukocyte migration involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002540",
+              "xref_name": "leukotriene production involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006629",
+              "xref_name": "lipid metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006690",
+              "xref_name": "icosanoid metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006691",
+              "xref_name": "leukotriene metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006959",
+              "xref_name": "humoral immune response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0016525",
+              "xref_name": "negative regulation of angiogenesis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019369",
+              "xref_name": "arachidonate metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019370",
+              "xref_name": "leukotriene biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019372",
+              "xref_name": "lipoxygenase pathway",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0030501",
+              "xref_name": "positive regulation of bone mineralization",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0034440",
+              "xref_name": "lipid oxidation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0036336",
+              "xref_name": "dendritic cell migration",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0042593",
+              "xref_name": "glucose homeostasis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0042759",
+              "xref_name": "long-chain fatty acid biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0045598",
+              "xref_name": "regulation of fat cell differentiation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050727",
+              "xref_name": "regulation of inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050728",
+              "xref_name": "negative regulation of inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050796",
+              "xref_name": "regulation of insulin secretion",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0061044",
+              "xref_name": "negative regulation of vascular wound healing",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0061045",
+              "xref_name": "negative regulation of wound healing",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0106014",
+              "xref_name": "regulation of inflammatory response to wounding",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1900015",
+              "xref_name": "regulation of cytokine production involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1900407",
+              "xref_name": "regulation of cellular response to oxidative stress",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1901753",
+              "xref_name": "leukotriene A4 biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1903573",
+              "xref_name": "negative regulation of response to endoplasmic reticulum stress",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1903671",
+              "xref_name": "negative regulation of sprouting angiogenesis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1904999",
+              "xref_name": "positive regulation of leukocyte adhesion to arterial endothelial cell",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:2001301",
+              "xref_name": "lipoxin biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0005635",
+              "xref_name": "nuclear envelope",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005576",
+              "xref_name": "extracellular region",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005615",
+              "xref_name": "extracellular space",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005634",
+              "xref_name": "nucleus",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005654",
+              "xref_name": "nucleoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005737",
+              "xref_name": "cytoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005829",
+              "xref_name": "cytosol",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0016020",
+              "xref_name": "membrane",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0016363",
+              "xref_name": "nuclear matrix",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0031965",
+              "xref_name": "nuclear membrane",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0034774",
+              "xref_name": "secretory granule lumen",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0048471",
+              "xref_name": "perinuclear region of cytoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:1904813",
+              "xref_name": "ficolin-1-rich granule lumen",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "PA46",
+              "xref_name": "arachidonate 5-lipoxygenase",
+              "xref_src_db": "PharmGKB"
+            },
+            {
+              "xref_id": "B7ZLS0",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "E5FPY5",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "E5FPY7",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "E5FPY8",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "Q5JQ14",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "P09917",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "3O8Y",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "3V92",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "3V98",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "3V99",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "6N2W",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "6NCF",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "7TTJ",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "7TTK",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "7TTL",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "P09917",
+              "xref_name": null,
+              "xref_src_db": "AlphaFoldDB"
+            },
+            {
+              "xref_id": "P09917",
+              "xref_name": null,
+              "xref_src_db": "IntAct"
+            },
+            {
+              "xref_id": "HGNC:435",
+              "xref_name": "ALOX5",
+              "xref_src_db": "HGNC"
+            },
+            {
+              "xref_id": "R-HSA-2142688",
+              "xref_name": "Synthesis of 5-eicosatetraenoic acids",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-2142691",
+              "xref_name": "Synthesis of Leukotrienes (LT) and Eoxins (EX)",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-2142700",
+              "xref_name": "Biosynthesis of Lipoxins (LX)",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-6785807",
+              "xref_name": "Interleukin-4 and Interleukin-13 signaling",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-6798695",
+              "xref_name": "Neutrophil degranulation",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9012546",
+              "xref_name": "Interleukin-18 signaling",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9018676",
+              "xref_name": "Biosynthesis of D-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9018682",
+              "xref_name": "Biosynthesis of maresins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9018896",
+              "xref_name": "Biosynthesis of E-series 18(S)-resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9020265",
+              "xref_name": "Biosynthesis of aspirin-triggered D-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9023661",
+              "xref_name": "Biosynthesis of E-series 18(R)-resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9026286",
+              "xref_name": "Biosynthesis of DPAn-3-derived protectins and resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9026290",
+              "xref_name": "Biosynthesis of DPAn-3-derived maresins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9026403",
+              "xref_name": "Biosynthesis of DPAn-3-derived 13-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9027604",
+              "xref_name": "Biosynthesis of electrophilic Omega-3 PUFA oxo-derivatives",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "P09917",
+              "xref_name": null,
+              "xref_src_db": "Pharos"
+            },
+            {
+              "xref_id": "P09917",
+              "xref_name": null,
+              "xref_src_db": "ExpressionAtlas"
+            },
+            {
+              "xref_id": "IPR000907",
+              "xref_name": "LipOase",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR013819",
+              "xref_name": "LipOase_C",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR036226",
+              "xref_name": "LipOase_C_sf",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR020834",
+              "xref_name": "LipOase_CS",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR020833",
+              "xref_name": "LipOase_Fe_BS",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR001885",
+              "xref_name": "LipOase_mml",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR001024",
+              "xref_name": "PLAT/LH2_dom",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR036392",
+              "xref_name": "PLAT/LH2_dom_sf",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR042062",
+              "xref_name": "PLAT_LOX_verte",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "PTHR11771",
+              "xref_name": "LIPOXYGENASE",
+              "xref_src_db": "PANTHER"
+            },
+            {
+              "xref_id": "PF00305",
+              "xref_name": "Lipoxygenase",
+              "xref_src_db": "Pfam"
+            },
+            {
+              "xref_id": "PF01477",
+              "xref_name": "PLAT",
+              "xref_src_db": "Pfam"
+            }
+          ]
+        }
+      ],
+      "target_type": "SINGLE PROTEIN",
+      "tax_id": 9606
+    },
+    {
+      "cross_references": [],
+      "organism": "Rattus norvegicus",
+      "pref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+      "score": 14.0,
+      "species_group_flag": false,
+      "target_chembl_id": "CHEMBL312",
+      "target_components": [
+        {
+          "accession": "P12527",
+          "component_description": "Polyunsaturated fatty acid 5-lipoxygenase",
+          "component_id": 1332,
+          "component_type": "PROTEIN",
+          "relationship": "SINGLE PROTEIN",
+          "target_component_synonyms": [
+            {
+              "component_synonym": "1.13.11.-",
+              "syn_type": "EC_NUMBER"
+            },
+            {
+              "component_synonym": "1.13.11.34",
+              "syn_type": "EC_NUMBER"
+            },
+            {
+              "component_synonym": "5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "5-LO",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "Alox5",
+              "syn_type": "GENE_SYMBOL"
+            },
+            {
+              "component_synonym": "Arachidonate 5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            }
+          ],
+          "target_component_xrefs": [
+            {
+              "xref_id": "GO:0002540",
+              "xref_name": "leukotriene production involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006691",
+              "xref_name": "leukotriene metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019370",
+              "xref_name": "leukotriene biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0004051",
+              "xref_name": "arachidonate 5-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0004052",
+              "xref_name": "arachidonate 12(S)-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0005506",
+              "xref_name": "iron ion binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0005515",
+              "xref_name": "protein binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0016702",
+              "xref_name": "oxidoreductase activity, acting on single donors with incorporation of molecular oxygen, incorporation of two atoms of oxygen",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0016787",
+              "xref_name": "hydrolase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0036403",
+              "xref_name": "arachidonate 8(S)-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0046872",
+              "xref_name": "metal ion binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0051213",
+              "xref_name": "dioxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0001937",
+              "xref_name": "negative regulation of endothelial cell proliferation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002232",
+              "xref_name": "leukocyte chemotaxis involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002523",
+              "xref_name": "leukocyte migration involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006629",
+              "xref_name": "lipid metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006959",
+              "xref_name": "humoral immune response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0016525",
+              "xref_name": "negative regulation of angiogenesis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019369",
+              "xref_name": "arachidonate metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019372",
+              "xref_name": "lipoxygenase pathway",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0030501",
+              "xref_name": "positive regulation of bone mineralization",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0034440",
+              "xref_name": "lipid oxidation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0036336",
+              "xref_name": "dendritic cell migration",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0042593",
+              "xref_name": "glucose homeostasis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0045598",
+              "xref_name": "regulation of fat cell differentiation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0045907",
+              "xref_name": "positive regulation of vasoconstriction",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050727",
+              "xref_name": "regulation of inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050728",
+              "xref_name": "negative regulation of inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050796",
+              "xref_name": "regulation of insulin secretion",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0055093",
+              "xref_name": "response to hyperoxia",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0061044",
+              "xref_name": "negative regulation of vascular wound healing",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0061045",
+              "xref_name": "negative regulation of wound healing",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0106014",
+              "xref_name": "regulation of inflammatory response to wounding",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1900015",
+              "xref_name": "regulation of cytokine production involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1900407",
+              "xref_name": "regulation of cellular response to oxidative stress",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1901753",
+              "xref_name": "leukotriene A4 biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1903573",
+              "xref_name": "negative regulation of response to endoplasmic reticulum stress",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1903671",
+              "xref_name": "negative regulation of sprouting angiogenesis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1904999",
+              "xref_name": "positive regulation of leukocyte adhesion to arterial endothelial cell",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:2001301",
+              "xref_name": "lipoxin biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0005635",
+              "xref_name": "nuclear envelope",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005634",
+              "xref_name": "nucleus",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005641",
+              "xref_name": "nuclear envelope lumen",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005737",
+              "xref_name": "cytoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005829",
+              "xref_name": "cytosol",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0016020",
+              "xref_name": "membrane",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0016363",
+              "xref_name": "nuclear matrix",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0030425",
+              "xref_name": "dendrite",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0031965",
+              "xref_name": "nuclear membrane",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0042383",
+              "xref_name": "sarcolemma",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0048471",
+              "xref_name": "perinuclear region of cytoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "P12527",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "P12527",
+              "xref_name": null,
+              "xref_src_db": "AlphaFoldDB"
+            },
+            {
+              "xref_id": "P12527",
+              "xref_name": null,
+              "xref_src_db": "IntAct"
+            },
+            {
+              "xref_id": "R-RNO-2142688",
+              "xref_name": "Synthesis of 5-eicosatetraenoic acids",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-RNO-2142691",
+              "xref_name": "Synthesis of Leukotrienes (LT) and Eoxins (EX)",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-RNO-2142700",
+              "xref_name": "Biosynthesis of Lipoxins (LX)",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-RNO-6798695",
+              "xref_name": "Neutrophil degranulation",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-RNO-9018676",
+              "xref_name": "Biosynthesis of D-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-RNO-9018682",
+              "xref_name": "Biosynthesis of maresins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-RNO-9018896",
+              "xref_name": "Biosynthesis of E-series 18(S)-resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-RNO-9020265",
+              "xref_name": "Biosynthesis of aspirin-triggered D-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-RNO-9023661",
+              "xref_name": "Biosynthesis of E-series 18(R)-resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-RNO-9026286",
+              "xref_name": "Biosynthesis of DPAn-3-derived protectins and resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-RNO-9026290",
+              "xref_name": "Biosynthesis of DPAn-3-derived maresins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-RNO-9026403",
+              "xref_name": "Biosynthesis of DPAn-3-derived 13-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-RNO-9027604",
+              "xref_name": "Biosynthesis of electrophilic Omega-3 PUFA oxo-derivatives",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "IPR000907",
+              "xref_name": "LipOase",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR013819",
+              "xref_name": "LipOase_C",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR036226",
+              "xref_name": "LipOase_C_sf",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR020834",
+              "xref_name": "LipOase_CS",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR020833",
+              "xref_name": "LipOase_Fe_BS",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR001885",
+              "xref_name": "LipOase_mml",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR001024",
+              "xref_name": "PLAT/LH2_dom",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR036392",
+              "xref_name": "PLAT/LH2_dom_sf",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR042062",
+              "xref_name": "PLAT_LOX_verte",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "PTHR11771",
+              "xref_name": "LIPOXYGENASE",
+              "xref_src_db": "PANTHER"
+            },
+            {
+              "xref_id": "PF00305",
+              "xref_name": "Lipoxygenase",
+              "xref_src_db": "Pfam"
+            },
+            {
+              "xref_id": "PF01477",
+              "xref_name": "PLAT",
+              "xref_src_db": "Pfam"
+            }
+          ]
+        }
+      ],
+      "target_type": "SINGLE PROTEIN",
+      "tax_id": 10116
+    },
+    {
+      "cross_references": [],
+      "organism": "Mus musculus",
+      "pref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+      "score": 14.0,
+      "species_group_flag": false,
+      "target_chembl_id": "CHEMBL5211",
+      "target_components": [
+        {
+          "accession": "P48999",
+          "component_description": "Polyunsaturated fatty acid 5-lipoxygenase",
+          "component_id": 4793,
+          "component_type": "PROTEIN",
+          "relationship": "SINGLE PROTEIN",
+          "target_component_synonyms": [
+            {
+              "component_synonym": "1.13.11.-",
+              "syn_type": "EC_NUMBER"
+            },
+            {
+              "component_synonym": "1.13.11.34",
+              "syn_type": "EC_NUMBER"
+            },
+            {
+              "component_synonym": "5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "5-LO",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "Alox5",
+              "syn_type": "GENE_SYMBOL"
+            },
+            {
+              "component_synonym": "Arachidonate 5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            }
+          ],
+          "target_component_xrefs": [
+            {
+              "xref_id": "GO:0002540",
+              "xref_name": "leukotriene production involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006691",
+              "xref_name": "leukotriene metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019370",
+              "xref_name": "leukotriene biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0004051",
+              "xref_name": "arachidonate 5-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0004052",
+              "xref_name": "arachidonate 12(S)-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0005506",
+              "xref_name": "iron ion binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0005515",
+              "xref_name": "protein binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0016702",
+              "xref_name": "oxidoreductase activity, acting on single donors with incorporation of molecular oxygen, incorporation of two atoms of oxygen",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0016787",
+              "xref_name": "hydrolase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0036403",
+              "xref_name": "arachidonate 8(S)-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0046872",
+              "xref_name": "metal ion binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0051213",
+              "xref_name": "dioxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0001676",
+              "xref_name": "long-chain fatty acid metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0001937",
+              "xref_name": "negative regulation of endothelial cell proliferation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002232",
+              "xref_name": "leukocyte chemotaxis involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002523",
+              "xref_name": "leukocyte migration involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006629",
+              "xref_name": "lipid metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006690",
+              "xref_name": "icosanoid metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006959",
+              "xref_name": "humoral immune response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0016525",
+              "xref_name": "negative regulation of angiogenesis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0030501",
+              "xref_name": "positive regulation of bone mineralization",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0034440",
+              "xref_name": "lipid oxidation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0036336",
+              "xref_name": "dendritic cell migration",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0042593",
+              "xref_name": "glucose homeostasis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0045598",
+              "xref_name": "regulation of fat cell differentiation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050727",
+              "xref_name": "regulation of inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050728",
+              "xref_name": "negative regulation of inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050796",
+              "xref_name": "regulation of insulin secretion",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0061044",
+              "xref_name": "negative regulation of vascular wound healing",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0061045",
+              "xref_name": "negative regulation of wound healing",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0106014",
+              "xref_name": "regulation of inflammatory response to wounding",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1900015",
+              "xref_name": "regulation of cytokine production involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1900407",
+              "xref_name": "regulation of cellular response to oxidative stress",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1901753",
+              "xref_name": "leukotriene A4 biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1903573",
+              "xref_name": "negative regulation of response to endoplasmic reticulum stress",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1903671",
+              "xref_name": "negative regulation of sprouting angiogenesis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1904999",
+              "xref_name": "positive regulation of leukocyte adhesion to arterial endothelial cell",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:2001301",
+              "xref_name": "lipoxin biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0005634",
+              "xref_name": "nucleus",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005635",
+              "xref_name": "nuclear envelope",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005641",
+              "xref_name": "nuclear envelope lumen",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005654",
+              "xref_name": "nucleoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005737",
+              "xref_name": "cytoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005829",
+              "xref_name": "cytosol",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0016020",
+              "xref_name": "membrane",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0016363",
+              "xref_name": "nuclear matrix",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0031965",
+              "xref_name": "nuclear membrane",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0048471",
+              "xref_name": "perinuclear region of cytoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "Q3TB75",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "P48999",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "P48999",
+              "xref_name": null,
+              "xref_src_db": "AlphaFoldDB"
+            },
+            {
+              "xref_id": "P48999",
+              "xref_name": null,
+              "xref_src_db": "IntAct"
+            },
+            {
+              "xref_id": "R-MMU-2142688",
+              "xref_name": "Synthesis of 5-eicosatetraenoic acids",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-MMU-2142691",
+              "xref_name": "Synthesis of Leukotrienes (LT) and Eoxins (EX)",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-MMU-2142700",
+              "xref_name": "Biosynthesis of Lipoxins (LX)",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-MMU-6798695",
+              "xref_name": "Neutrophil degranulation",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-MMU-9018676",
+              "xref_name": "Biosynthesis of D-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-MMU-9018682",
+              "xref_name": "Biosynthesis of maresins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-MMU-9018896",
+              "xref_name": "Biosynthesis of E-series 18(S)-resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-MMU-9020265",
+              "xref_name": "Biosynthesis of aspirin-triggered D-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-MMU-9023661",
+              "xref_name": "Biosynthesis of E-series 18(R)-resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-MMU-9026286",
+              "xref_name": "Biosynthesis of DPAn-3-derived protectins and resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-MMU-9026290",
+              "xref_name": "Biosynthesis of DPAn-3-derived maresins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-MMU-9026403",
+              "xref_name": "Biosynthesis of DPAn-3-derived 13-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-MMU-9027604",
+              "xref_name": "Biosynthesis of electrophilic Omega-3 PUFA oxo-derivatives",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "P48999",
+              "xref_name": null,
+              "xref_src_db": "ExpressionAtlas"
+            },
+            {
+              "xref_id": "IPR000907",
+              "xref_name": "LipOase",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR013819",
+              "xref_name": "LipOase_C",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR036226",
+              "xref_name": "LipOase_C_sf",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR020834",
+              "xref_name": "LipOase_CS",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR020833",
+              "xref_name": "LipOase_Fe_BS",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR001885",
+              "xref_name": "LipOase_mml",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR001024",
+              "xref_name": "PLAT/LH2_dom",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR036392",
+              "xref_name": "PLAT/LH2_dom_sf",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR042062",
+              "xref_name": "PLAT_LOX_verte",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "PTHR11771",
+              "xref_name": "LIPOXYGENASE",
+              "xref_src_db": "PANTHER"
+            },
+            {
+              "xref_id": "PF00305",
+              "xref_name": "Lipoxygenase",
+              "xref_src_db": "Pfam"
+            },
+            {
+              "xref_id": "PF01477",
+              "xref_name": "PLAT",
+              "xref_src_db": "Pfam"
+            }
+          ]
+        }
+      ],
+      "target_type": "SINGLE PROTEIN",
+      "tax_id": 10090
+    },
+    {
+      "cross_references": [],
+      "organism": "Homo sapiens",
+      "pref_name": "5-lipoxygenase/FLAP",
+      "score": 12.0,
+      "species_group_flag": false,
+      "target_chembl_id": "CHEMBL2111402",
+      "target_components": [
+        {
+          "accession": "P09917",
+          "component_description": "Polyunsaturated fatty acid 5-lipoxygenase",
+          "component_id": 168,
+          "component_type": "PROTEIN",
+          "relationship": "PROTEIN SUBUNIT",
+          "target_component_synonyms": [
+            {
+              "component_synonym": "1.13.11.-",
+              "syn_type": "EC_NUMBER"
+            },
+            {
+              "component_synonym": "1.13.11.34",
+              "syn_type": "EC_NUMBER"
+            },
+            {
+              "component_synonym": "5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "5-LO",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "ALOX5",
+              "syn_type": "GENE_SYMBOL"
+            },
+            {
+              "component_synonym": "Arachidonate 5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "LOG5",
+              "syn_type": "GENE_SYMBOL_OTHER"
+            },
+            {
+              "component_synonym": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            }
+          ],
+          "target_component_xrefs": [
+            {
+              "xref_id": "6NCF",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "3V92",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "6N2W",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "3O8Y",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "7TTJ",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "3V98",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "3V99",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "7TTK",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "7TTL",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "GO:0005641",
+              "xref_name": "nuclear envelope lumen",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0004051",
+              "xref_name": "arachidonate 5-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0004052",
+              "xref_name": "arachidonate 12(S)-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0005506",
+              "xref_name": "iron ion binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0005515",
+              "xref_name": "protein binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0016702",
+              "xref_name": "oxidoreductase activity, acting on single donors with incorporation of molecular oxygen, incorporation of two atoms of oxygen",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0016787",
+              "xref_name": "hydrolase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0036403",
+              "xref_name": "arachidonate 8(S)-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0046872",
+              "xref_name": "metal ion binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0051213",
+              "xref_name": "dioxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0001676",
+              "xref_name": "long-chain fatty acid metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0001937",
+              "xref_name": "negative regulation of endothelial cell proliferation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002232",
+              "xref_name": "leukocyte chemotaxis involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002523",
+              "xref_name": "leukocyte migration involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002540",
+              "xref_name": "leukotriene production involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006629",
+              "xref_name": "lipid metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006690",
+              "xref_name": "icosanoid metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006691",
+              "xref_name": "leukotriene metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006959",
+              "xref_name": "humoral immune response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0016525",
+              "xref_name": "negative regulation of angiogenesis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019369",
+              "xref_name": "arachidonate metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019370",
+              "xref_name": "leukotriene biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019372",
+              "xref_name": "lipoxygenase pathway",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0030501",
+              "xref_name": "positive regulation of bone mineralization",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0034440",
+              "xref_name": "lipid oxidation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0036336",
+              "xref_name": "dendritic cell migration",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0042593",
+              "xref_name": "glucose homeostasis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0042759",
+              "xref_name": "long-chain fatty acid biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0045598",
+              "xref_name": "regulation of fat cell differentiation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050727",
+              "xref_name": "regulation of inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050728",
+              "xref_name": "negative regulation of inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050796",
+              "xref_name": "regulation of insulin secretion",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0061044",
+              "xref_name": "negative regulation of vascular wound healing",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0061045",
+              "xref_name": "negative regulation of wound healing",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0106014",
+              "xref_name": "regulation of inflammatory response to wounding",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1900015",
+              "xref_name": "regulation of cytokine production involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1900407",
+              "xref_name": "regulation of cellular response to oxidative stress",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1901753",
+              "xref_name": "leukotriene A4 biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1903573",
+              "xref_name": "negative regulation of response to endoplasmic reticulum stress",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1903671",
+              "xref_name": "negative regulation of sprouting angiogenesis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1904999",
+              "xref_name": "positive regulation of leukocyte adhesion to arterial endothelial cell",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:2001301",
+              "xref_name": "lipoxin biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0005635",
+              "xref_name": "nuclear envelope",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005576",
+              "xref_name": "extracellular region",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005615",
+              "xref_name": "extracellular space",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005634",
+              "xref_name": "nucleus",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005654",
+              "xref_name": "nucleoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005737",
+              "xref_name": "cytoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005829",
+              "xref_name": "cytosol",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0016020",
+              "xref_name": "membrane",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0016363",
+              "xref_name": "nuclear matrix",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0031965",
+              "xref_name": "nuclear membrane",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0034774",
+              "xref_name": "secretory granule lumen",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0048471",
+              "xref_name": "perinuclear region of cytoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:1904813",
+              "xref_name": "ficolin-1-rich granule lumen",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "PA46",
+              "xref_name": "arachidonate 5-lipoxygenase",
+              "xref_src_db": "PharmGKB"
+            },
+            {
+              "xref_id": "B7ZLS0",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "E5FPY5",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "E5FPY7",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "E5FPY8",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "Q5JQ14",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "P09917",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "3O8Y",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "3V92",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "3V98",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "3V99",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "6N2W",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "6NCF",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "7TTJ",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "7TTK",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "7TTL",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "P09917",
+              "xref_name": null,
+              "xref_src_db": "AlphaFoldDB"
+            },
+            {
+              "xref_id": "P09917",
+              "xref_name": null,
+              "xref_src_db": "IntAct"
+            },
+            {
+              "xref_id": "HGNC:435",
+              "xref_name": "ALOX5",
+              "xref_src_db": "HGNC"
+            },
+            {
+              "xref_id": "R-HSA-2142688",
+              "xref_name": "Synthesis of 5-eicosatetraenoic acids",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-2142691",
+              "xref_name": "Synthesis of Leukotrienes (LT) and Eoxins (EX)",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-2142700",
+              "xref_name": "Biosynthesis of Lipoxins (LX)",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-6785807",
+              "xref_name": "Interleukin-4 and Interleukin-13 signaling",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-6798695",
+              "xref_name": "Neutrophil degranulation",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9012546",
+              "xref_name": "Interleukin-18 signaling",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9018676",
+              "xref_name": "Biosynthesis of D-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9018682",
+              "xref_name": "Biosynthesis of maresins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9018896",
+              "xref_name": "Biosynthesis of E-series 18(S)-resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9020265",
+              "xref_name": "Biosynthesis of aspirin-triggered D-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9023661",
+              "xref_name": "Biosynthesis of E-series 18(R)-resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9026286",
+              "xref_name": "Biosynthesis of DPAn-3-derived protectins and resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9026290",
+              "xref_name": "Biosynthesis of DPAn-3-derived maresins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9026403",
+              "xref_name": "Biosynthesis of DPAn-3-derived 13-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-9027604",
+              "xref_name": "Biosynthesis of electrophilic Omega-3 PUFA oxo-derivatives",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "P09917",
+              "xref_name": null,
+              "xref_src_db": "Pharos"
+            },
+            {
+              "xref_id": "P09917",
+              "xref_name": null,
+              "xref_src_db": "ExpressionAtlas"
+            },
+            {
+              "xref_id": "IPR000907",
+              "xref_name": "LipOase",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR013819",
+              "xref_name": "LipOase_C",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR036226",
+              "xref_name": "LipOase_C_sf",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR020834",
+              "xref_name": "LipOase_CS",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR020833",
+              "xref_name": "LipOase_Fe_BS",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR001885",
+              "xref_name": "LipOase_mml",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR001024",
+              "xref_name": "PLAT/LH2_dom",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR036392",
+              "xref_name": "PLAT/LH2_dom_sf",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR042062",
+              "xref_name": "PLAT_LOX_verte",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "PTHR11771",
+              "xref_name": "LIPOXYGENASE",
+              "xref_src_db": "PANTHER"
+            },
+            {
+              "xref_id": "PF00305",
+              "xref_name": "Lipoxygenase",
+              "xref_src_db": "Pfam"
+            },
+            {
+              "xref_id": "PF01477",
+              "xref_name": "PLAT",
+              "xref_src_db": "Pfam"
+            }
+          ]
+        },
+        {
+          "accession": "P20292",
+          "component_description": "Arachidonate 5-lipoxygenase-activating protein",
+          "component_id": 2867,
+          "component_type": "PROTEIN",
+          "relationship": "PROTEIN SUBUNIT",
+          "target_component_synonyms": [
+            {
+              "component_synonym": "ALOX5AP",
+              "syn_type": "GENE_SYMBOL"
+            },
+            {
+              "component_synonym": "Arachidonate 5-lipoxygenase-activating protein",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "FLAP",
+              "syn_type": "GENE_SYMBOL_OTHER"
+            },
+            {
+              "component_synonym": "FLAP",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "MK-886-binding protein",
+              "syn_type": "UNIPROT"
+            }
+          ],
+          "target_component_xrefs": [
+            {
+              "xref_id": "2Q7M",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "6VGC",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "6VGI",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "2Q7R",
+              "xref_name": "A",
+              "xref_src_db": "PDBe"
+            },
+            {
+              "xref_id": "GO:0004051",
+              "xref_name": "arachidonate 5-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0004364",
+              "xref_name": "glutathione transferase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0004464",
+              "xref_name": "leukotriene-C4 synthase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0004602",
+              "xref_name": "glutathione peroxidase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0005515",
+              "xref_name": "protein binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0008047",
+              "xref_name": "enzyme activator activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0019899",
+              "xref_name": "enzyme binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0042802",
+              "xref_name": "identical protein binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0050544",
+              "xref_name": "arachidonate binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0002540",
+              "xref_name": "leukotriene production involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002675",
+              "xref_name": "positive regulation of acute inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006691",
+              "xref_name": "leukotriene metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019370",
+              "xref_name": "leukotriene biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019372",
+              "xref_name": "lipoxygenase pathway",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0070207",
+              "xref_name": "protein homotrimerization",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0071277",
+              "xref_name": "cellular response to calcium ion",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0098869",
+              "xref_name": "cellular oxidant detoxification",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0005635",
+              "xref_name": "nuclear envelope",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005783",
+              "xref_name": "endoplasmic reticulum",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005634",
+              "xref_name": "nucleus",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005789",
+              "xref_name": "endoplasmic reticulum membrane",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0016020",
+              "xref_name": "membrane",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0031965",
+              "xref_name": "nuclear membrane",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "PA47",
+              "xref_name": "arachidonate 5-lipoxygenase activating protein",
+              "xref_src_db": "PharmGKB"
+            },
+            {
+              "xref_id": "Q5VV04",
+              "xref_name": "Arachidonate 5-lipoxygenase-activating protein",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "P20292",
+              "xref_name": "Arachidonate 5-lipoxygenase-activating protein",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "2Q7M",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "2Q7R",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "6VGC",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "6VGI",
+              "xref_name": null,
+              "xref_src_db": "PDB"
+            },
+            {
+              "xref_id": "P20292",
+              "xref_name": null,
+              "xref_src_db": "AlphaFoldDB"
+            },
+            {
+              "xref_id": "P20292",
+              "xref_name": null,
+              "xref_src_db": "IntAct"
+            },
+            {
+              "xref_id": "HGNC:436",
+              "xref_name": "ALOX5AP",
+              "xref_src_db": "HGNC"
+            },
+            {
+              "xref_id": "R-HSA-2142688",
+              "xref_name": "Synthesis of 5-eicosatetraenoic acids",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-2142691",
+              "xref_name": "Synthesis of Leukotrienes (LT) and Eoxins (EX)",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-HSA-2142700",
+              "xref_name": "Biosynthesis of Lipoxins (LX)",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "P20292",
+              "xref_name": null,
+              "xref_src_db": "Pharos"
+            },
+            {
+              "xref_id": "P20292",
+              "xref_name": null,
+              "xref_src_db": "ExpressionAtlas"
+            },
+            {
+              "xref_id": "IPR001446",
+              "xref_name": "5_LipOase_AP",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR018295",
+              "xref_name": "FLAP/GST2/LTC4S_CS",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR050997",
+              "xref_name": "MAPEG",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR023352",
+              "xref_name": "MAPEG-like_dom_sf",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR001129",
+              "xref_name": "Membr-assoc_MAPEG",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "PTHR10250:SF2",
+              "xref_name": "ARACHIDONATE 5-LIPOXYGENASE-ACTIVATING PROTEIN",
+              "xref_src_db": "PANTHER"
+            },
+            {
+              "xref_id": "PTHR10250",
+              "xref_name": "MICROSOMAL GLUTATHIONE S-TRANSFERASE",
+              "xref_src_db": "PANTHER"
+            },
+            {
+              "xref_id": "PF01124",
+              "xref_name": "MAPEG",
+              "xref_src_db": "Pfam"
+            }
+          ]
+        }
+      ],
+      "target_type": "PROTEIN COMPLEX",
+      "tax_id": 9606
+    },
+    {
+      "cross_references": [],
+      "organism": "Sus scrofa",
+      "pref_name": "Arachidonate 5-lipoxygenase",
+      "score": 10.0,
+      "species_group_flag": false,
+      "target_chembl_id": "CHEMBL3879862",
+      "target_components": [
+        {
+          "accession": "K7GQZ4",
+          "component_description": "Polyunsaturated fatty acid 5-lipoxygenase",
+          "component_id": 17170,
+          "component_type": "PROTEIN",
+          "relationship": "SINGLE PROTEIN",
+          "target_component_synonyms": [
+            {
+              "component_synonym": "1.13.11.12",
+              "syn_type": "EC_NUMBER"
+            },
+            {
+              "component_synonym": "1.13.11.34",
+              "syn_type": "EC_NUMBER"
+            },
+            {
+              "component_synonym": "12/15-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "ALOX5",
+              "syn_type": "GENE_SYMBOL"
+            },
+            {
+              "component_synonym": "Arachidonate 12-lipoxygenase, leukocyte-type",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "Arachidonate 15-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "Arachidonate 5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "Arachidonate omega-6 lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "Erythroid cell-specific 15-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "Hepoxilin A3 synthase Alox15",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "Linoleate 13S-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "syn_type": "UNIPROT"
+            },
+            {
+              "component_synonym": "Polyunsaturated fatty acid lipoxygenase ALOX15",
+              "syn_type": "UNIPROT"
+            }
+          ],
+          "target_component_xrefs": [
+            {
+              "xref_id": "GO:0004051",
+              "xref_name": "arachidonate 5-lipoxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0005506",
+              "xref_name": "iron ion binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0016702",
+              "xref_name": "oxidoreductase activity, acting on single donors with incorporation of molecular oxygen, incorporation of two atoms of oxygen",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0046872",
+              "xref_name": "metal ion binding",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0051213",
+              "xref_name": "dioxygenase activity",
+              "xref_src_db": "GoFunction"
+            },
+            {
+              "xref_id": "GO:0001937",
+              "xref_name": "negative regulation of endothelial cell proliferation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002232",
+              "xref_name": "leukocyte chemotaxis involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002523",
+              "xref_name": "leukocyte migration involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0002540",
+              "xref_name": "leukotriene production involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006629",
+              "xref_name": "lipid metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006691",
+              "xref_name": "leukotriene metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0006959",
+              "xref_name": "humoral immune response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0016525",
+              "xref_name": "negative regulation of angiogenesis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019369",
+              "xref_name": "arachidonate metabolic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019370",
+              "xref_name": "leukotriene biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0019372",
+              "xref_name": "lipoxygenase pathway",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0030501",
+              "xref_name": "positive regulation of bone mineralization",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0034440",
+              "xref_name": "lipid oxidation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0036336",
+              "xref_name": "dendritic cell migration",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0042593",
+              "xref_name": "glucose homeostasis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0045598",
+              "xref_name": "regulation of fat cell differentiation",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050727",
+              "xref_name": "regulation of inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050728",
+              "xref_name": "negative regulation of inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0050796",
+              "xref_name": "regulation of insulin secretion",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0061044",
+              "xref_name": "negative regulation of vascular wound healing",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0061045",
+              "xref_name": "negative regulation of wound healing",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0106014",
+              "xref_name": "regulation of inflammatory response to wounding",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1900015",
+              "xref_name": "regulation of cytokine production involved in inflammatory response",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1900407",
+              "xref_name": "regulation of cellular response to oxidative stress",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1901753",
+              "xref_name": "leukotriene A4 biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1903573",
+              "xref_name": "negative regulation of response to endoplasmic reticulum stress",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1903671",
+              "xref_name": "negative regulation of sprouting angiogenesis",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:1904999",
+              "xref_name": "positive regulation of leukocyte adhesion to arterial endothelial cell",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:2001301",
+              "xref_name": "lipoxin biosynthetic process",
+              "xref_src_db": "GoProcess"
+            },
+            {
+              "xref_id": "GO:0005635",
+              "xref_name": "nuclear envelope",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005634",
+              "xref_name": "nucleus",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005641",
+              "xref_name": "nuclear envelope lumen",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005654",
+              "xref_name": "nucleoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005737",
+              "xref_name": "cytoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0005829",
+              "xref_name": "cytosol",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0016363",
+              "xref_name": "nuclear matrix",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0031965",
+              "xref_name": "nuclear membrane",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "GO:0048471",
+              "xref_name": "perinuclear region of cytoplasm",
+              "xref_src_db": "GoComponent"
+            },
+            {
+              "xref_id": "PA46",
+              "xref_name": "arachidonate 5-lipoxygenase",
+              "xref_src_db": "PharmGKB"
+            },
+            {
+              "xref_id": "K7GQZ4",
+              "xref_name": "Polyunsaturated fatty acid 5-lipoxygenase",
+              "xref_src_db": "UniProt"
+            },
+            {
+              "xref_id": "K7GQZ4",
+              "xref_name": null,
+              "xref_src_db": "AlphaFoldDB"
+            },
+            {
+              "xref_id": "R-SSC-2142688",
+              "xref_name": "Synthesis of 5-eicosatetraenoic acids",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-SSC-2142691",
+              "xref_name": "Synthesis of Leukotrienes (LT) and Eoxins (EX)",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-SSC-2142700",
+              "xref_name": "Biosynthesis of Lipoxins (LX)",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-SSC-6798695",
+              "xref_name": "Neutrophil degranulation",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-SSC-9018676",
+              "xref_name": "Biosynthesis of D-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-SSC-9018682",
+              "xref_name": "Biosynthesis of maresins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-SSC-9018896",
+              "xref_name": "Biosynthesis of E-series 18(S)-resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-SSC-9020265",
+              "xref_name": "Biosynthesis of aspirin-triggered D-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-SSC-9023661",
+              "xref_name": "Biosynthesis of E-series 18(R)-resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-SSC-9026286",
+              "xref_name": "Biosynthesis of DPAn-3-derived protectins and resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-SSC-9026290",
+              "xref_name": "Biosynthesis of DPAn-3-derived maresins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-SSC-9026403",
+              "xref_name": "Biosynthesis of DPAn-3-derived 13-series resolvins",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "R-SSC-9027604",
+              "xref_name": "Biosynthesis of electrophilic Omega-3 PUFA oxo-derivatives",
+              "xref_src_db": "Reactome"
+            },
+            {
+              "xref_id": "K7GQZ4",
+              "xref_name": null,
+              "xref_src_db": "ExpressionAtlas"
+            },
+            {
+              "xref_id": "IPR000907",
+              "xref_name": "LipOase",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR013819",
+              "xref_name": "LipOase_C",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR036226",
+              "xref_name": "LipOase_C_sf",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR020834",
+              "xref_name": "LipOase_CS",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR020833",
+              "xref_name": "LipOase_Fe_BS",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR001885",
+              "xref_name": "LipOase_mml",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR001024",
+              "xref_name": "PLAT/LH2_dom",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR036392",
+              "xref_name": "PLAT/LH2_dom_sf",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "IPR042062",
+              "xref_name": "PLAT_LOX_verte",
+              "xref_src_db": "InterPro"
+            },
+            {
+              "xref_id": "PTHR11771",
+              "xref_name": "LIPOXYGENASE",
+              "xref_src_db": "PANTHER"
+            },
+            {
+              "xref_id": "PF00305",
+              "xref_name": "Lipoxygenase",
+              "xref_src_db": "Pfam"
+            },
+            {
+              "xref_id": "PF01477",
+              "xref_name": "PLAT",
+              "xref_src_db": "Pfam"
+            }
+          ]
+        }
+      ],
+      "target_type": "SINGLE PROTEIN",
+      "tax_id": 9823
+    }
+  ],
+  "_license_notice": "Data from the ChEMBL Database. Please review the licensing terms at https://www.ebi.ac.uk/chembl/"
+}
