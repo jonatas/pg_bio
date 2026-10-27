@@ -1,7 +1,15 @@
 import psycopg
 import json
 from typing import List, Optional
-from .models import Protein, Atom, SpatialBounds, PreorganizationProfile, EnergyDecompositionAudit
+from .models import (
+    Protein,
+    Atom,
+    SpatialBounds,
+    PreorganizationProfile,
+    EnergyDecompositionAudit,
+    ExpressionCassette,
+    GlobularFoldingProfile,
+)
 
 class PgBioClient:
     def __init__(self, connection_string: str):
@@ -12,25 +20,26 @@ class PgBioClient:
 
     def find_homologues(self, query_sequence: str, limit: int = 5) -> List[Protein]:
         """
-        Find proteins with similar ESM embeddings natively in the database.
+        Find proteins with similar ESM embeddings natively in the database using the HNSW `<=>` operator.
         """
         query = """
             SELECT uniprot_id, name, sequence, 
-                   embedding_cosine_distance(embedding, get_esm_embedding(%s)::halfvec) as distance
+                   (embedding <=> get_esm_embedding(%s)::halfvec) as distance
             FROM proteins
-            ORDER BY distance ASC
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> get_esm_embedding(%s)::halfvec ASC
             LIMIT %s;
         """
         results = []
         with self._get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute(query, (query_sequence, limit))
+                cur.execute(query, (query_sequence, query_sequence, limit))
                 for row in cur.fetchall():
                     results.append(Protein(
                         uniprot_id=row[0], 
                         name=row[1], 
                         sequence=row[2], 
-                        embedding_distance=row[3]
+                        embedding_distance=float(row[3]) if row[3] is not None else None
                     ))
         return results
 
@@ -448,5 +457,96 @@ class PgBioClient:
                 )
                 row = cur.fetchone()
                 return float(row[0]) if row else 0.0
+
+    def reverse_translate(self, protein_seq: str, host_organism: str = "e_coli") -> str:
+        """
+        Reverse-translates an amino acid sequence into a host-optimized DNA coding sequence (CDS) natively in SQL.
+        """
+        query = "SELECT bio_reverse_translate(%s, %s);"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (protein_seq, host_organism))
+                row = cur.fetchone()
+                return str(row[0]) if row else ""
+
+    def calculate_codon_adaptation_index(self, dna_seq: str, host_organism: str = "e_coli") -> float:
+        """
+        Computes the Codon Adaptation Index (CAI in [0.0, 1.0]) of a DNA sequence for a target expression host.
+        """
+        query = "SELECT bio_codon_adaptation_index(%s, %s);"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (dna_seq, host_organism))
+                row = cur.fetchone()
+                return float(row[0]) if row else 0.0
+
+    def design_expression_cassette(
+        self, protein_seq: str, host_organism: str = "e_coli", promoter_type: str = "T7"
+    ) -> ExpressionCassette:
+        """
+        Designs a complete wet-lab expression cassette (Promoter + RBS/Kozak + Host-Optimized CDS + Stop + Terminator)
+        and audits GC content, CAI score, and BsaI Golden Gate restriction site safety natively in PostgreSQL.
+        """
+        query = "SELECT bio_design_expression_cassette(%s, %s, %s)::text;"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (protein_seq, host_organism, promoter_type))
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return ExpressionCassette(**data)
+
+    def evaluate_globular_compactness(self, pdb_text: str) -> GlobularFoldingProfile:
+        """
+        Evaluates the 3D Globular Compactness Gate (mean pLDDT, Radius of Gyration Rg, Flory compactness ratio,
+        and gyration tensor principal-axis elongation) directly from PDB text inside PostgreSQL.
+        """
+        query = "SELECT evaluate_globular_compactness(%s)::text;"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (pdb_text,))
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return GlobularFoldingProfile(**data)
+
+    def simulate_defluorination_kinetics(
+        self,
+        kcat_per_hr: float,
+        km_u_m: float,
+        substrate_u_m: float,
+        hydrophobin_anchor_boost: float,
+        calcium_m_m: float,
+        time_hours: float,
+    ) -> dict:
+        """
+        Runs the in-database Michaelis-Menten + Hydrophobin surface adsorption + Fluorapatite Ca5(PO4)3F
+        biomineralization Digital Twin for a given time point.
+        """
+        query = """
+            SELECT time_hr, fluoride_ppm, fluorapatite_mg_per_l, fractional_conversion
+            FROM simulate_defluorination_kinetics(%s, %s, %s, %s, %s, %s);
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (
+                        kcat_per_hr,
+                        km_u_m,
+                        substrate_u_m,
+                        hydrophobin_anchor_boost,
+                        calcium_m_m,
+                        time_hours,
+                    ),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return {}
+                return {
+                    "time_hr": float(row[0]),
+                    "fluoride_ppm": float(row[1]),
+                    "fluorapatite_mg_per_l": float(row[2]),
+                    "fractional_conversion": float(row[3]),
+                }
+
 
 

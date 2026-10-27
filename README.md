@@ -210,6 +210,22 @@ When analyzing explicit-solvent Molecular Dynamics (MD) trajectories and per-res
   FROM lox5_mmpbsa_decompositions;
   ```
 
+### Layer 12: Wet-Lab Synthetic Biology, Multi-Host Codon Cassettes, 3D Globular Gate & Defluorination Digital Twin
+Transitioning an *in silico* multiomics design (such as the **TeaFlon** PTFE-degrading & fluorapatite-mineralizing TriFusion enzyme across **7,338 proteins and 930 organisms**) into physical wet-lab validation requires host-specific codon optimization, plasmid cassette assembly, 3D globular folding quality control, and enzymatic assay digital twins.
+
+* **The Engine:** `pg_bio` provides native Rust wet-lab compilers (`bio_reverse_translate`, `bio_codon_adaptation_index`, `bio_design_expression_cassette`), 3D gyration tensor globular gates (`evaluate_globular_compactness`), built-in Fluoroacetate Dehalogenase theozyme templates (`'q1ju72_dehalogenase_hexad'`), and Michaelis-Menten + Fluorapatite $\text{Ca}_5(\text{PO}_4)_3\text{F}$ kinetic simulators (`simulate_defluorination_kinetics`).
+* **Reference Documentation & Python Friction Roadmap:** [`docs/13_wetlab_synbio_and_teaflon_validation.md`](docs/13_wetlab_synbio_and_teaflon_validation.md)
+* **SQL Example:**
+  ```sql
+  -- Design wet-lab expression cassettes across 9 bacterial, fungal, archaeal & mammalian hosts,
+  -- audit 3D globular compactness, and simulate 48h Fluoride ISE + Fluorapatite yield:
+  SELECT host,
+         (bio_design_expression_cassette('MFEGFERRLVDWPSTDKTKREEVD', host, 'T7')).gc_content AS gc,
+         (bio_design_expression_cassette('MFEGFERRLVDWPSTDKTKREEVD', host, 'T7')).cai_score AS cai,
+         (bio_design_expression_cassette('MFEGFERRLVDWPSTDKTKREEVD', host, 'T7')).restriction_sites_free AS bsa1_free
+  FROM unnest(ARRAY['e_coli', 'b_subtilis', 'p_putida', 's_cerevisiae', 'h_salinarum', 'h_sapiens']) AS host;
+  ```
+
 ---
 ## 🛠️ Scale & Optimization Infrastructure
 
