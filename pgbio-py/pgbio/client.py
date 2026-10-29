@@ -184,8 +184,9 @@ class PgBioClient:
     def calculate_tanimoto_similarity(self, smiles_a: str, smiles_b: str) -> float:
         """
         Uses pg_bio's native Tanimoto similarity operator `%` to compare two SMILES strings.
+        Automatically applies Hückel 4n+2 aromaticity perception, salt stripping, and tautomer normalization.
         """
-        query = "SELECT smiles_to_fingerprint(%s) %% smiles_to_fingerprint(%s);"
+        query = "SELECT parse_smiles(%s) %% parse_smiles(%s);"
         with self._get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, (smiles_a, smiles_b))
@@ -193,6 +194,42 @@ class PgBioClient:
                 if row:
                     return float(row[0])
         return 0.0
+
+    def get_molecule_wl_hash(self, smiles: str) -> int:
+        """
+        Computes the canonical 64-bit Weisfeiler-Lehman (WL) graph hash after Hückel 4n+2
+        aromaticity perception, salt stripping, and prototropic tautomer normalization.
+        """
+        query = "SELECT molecule_wl_hash(%s);"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (smiles,))
+                row = cur.fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+
+    def molecules_are_identical(self, smiles_a: str, smiles_b: str) -> bool:
+        """
+        Checks whether two SMILES strings (e.g. Kekulé vs. aromatic `C1=CC=CC=C1` vs `c1ccccc1`,
+        or salted `CC(=O)[O-].[Na+]` vs `CC(=O)O`) compile to the exact same normalized molecular graph.
+        """
+        query = "SELECT molecules_are_identical(%s, %s);"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (smiles_a, smiles_b))
+                row = cur.fetchone()
+                return bool(row[0]) if row else False
+
+    def contains_substructure(self, target_smiles: str, query_smiles: str) -> bool:
+        """
+        Uses pg_bio's `@>` operator (1024-bit ECFP4 screening + exact VF2 subgraph isomorphism recheck)
+        with Hückel 4n+2 aromaticity normalization to test if `target_smiles` contains `query_smiles`.
+        """
+        query = "SELECT parse_smiles(%s) @> parse_smiles(%s);"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (target_smiles, query_smiles))
+                row = cur.fetchone()
+                return bool(row[0]) if row else False
 
     def find_similar_compounds(self, target_smiles: str, threshold: float = 0.85, limit: int = 10) -> List[dict]:
         """

@@ -23,32 +23,22 @@ Rings are built by breaking one bond in the ring and labeling the two adjacent a
 - Example: **Benzene** `c1ccccc1` (or `C1=CC=CC=C1`)
   - A 6-member aromatic ring.
 
-## 2. Structural Matching (`smiles_contains`)
+## 2. Aromaticity Perception (Hückel's $4n+2$ Rule) & VF2 Subgraph Matching (`@>` / `smiles_contains`)
 
-The `smiles_contains` function allows you to query if a molecular graph contains a specific substructure.
+A classic trap in cheminformatics is inserting a molecule in **Kekulé form** (`C1=CC=CC=C1`) and querying it in **aromatic form** (`c1ccccc1`), or storing a molecule as a **salt** (`[Na+].O=C([O-])C1=CC=CC=C1`).
 
-### How it Works
-`pg_bio` parses both the target compound and the query substructure into Native Rust graphs (via `purr`). It performs a subgraph isomorphism check. This means it doesn't just look for substring matches in text; it mathematically ensures the exact atoms and bonds exist in the same topological arrangement.
-
-```sql
--- Query: Does Aspirin contain a Benzene ring?
-SELECT smiles_contains(
-    parse_smiles('CC(=O)OC1=CC=CC=C1C(=O)O'), -- Target
-    'C1=CC=CC=C1'                            -- Substructure
-) AS has_benzene;
--- Result: true
-```
-
-### Advanced Matching Example
-If you look for a phenol group (`OC1=CC=CC=C1`), it will correctly identify whether the `O` is directly attached to the aromatic ring.
+### How `pg_bio` Normalizes Molecular Graphs
+Immediately after lexing a SMILES string, `pg_bio` runs:
+1. **Salt Stripping & Counter-Ion Neutralization:** Splits on `.` connected components, keeps the largest heavy-atom component, and neutralizes counter-ion salt charges (`[O-].[Na+]` $\rightarrow$ `OH`, `[NH3+].[Cl-]` $\rightarrow$ `NH2`).
+2. **1,3-Prototropic Tautomer Canonicalization:** Normalizes aliphatic keto-enol (`C=CO` $\rightarrow$ `CC=O`) and imidic-amide (`CC(=N)O` $\rightarrow$ `CC(=O)N`) tautomers.
+3. **Hückel’s $4n+2$ Cycle Perception:** Evaluates $\pi$-electrons around every candidate cycle (`1` for `=C-`/`=N-`, `2` for lone-pair heteroatoms `[nH]`/`O`/`S` and `[C-]`, `0` for exocyclic `C(=O)` in Pyridone/Caffeine, `-1` abort for saturated $sp^3$ atoms) and promotes cycles with $4n+2$ ($6, 10, 14, \dots$) $\pi$-electrons to `BOND_AROMATIC`.
+4. **VF2 Subgraph Isomorphism (`@>` and `smiles_contains`):** Matches query vertices `Q[i]` to target vertices `T[j]` by `(atomic_num, is_aromatic, degree)` and verifies bond-type consistency across all incident edges.
 
 ```sql
--- Query: Does Aspirin contain a Phenol group?
-SELECT smiles_contains(
-    parse_smiles('CC(=O)OC1=CC=CC=C1C(=O)O'), 
-    'OC1=CC=CC=C1'
-) AS has_phenol;
--- Result: true (Aspirin is technically an ester of phenol!)
+-- Query Kekulé Aspirin with aromatic Benzene (`c1ccccc1`) using the `@>` operator:
+SELECT parse_smiles('CC(=O)OC1=CC=CC=C1C(=O)O') @> parse_smiles('c1ccccc1') AS has_benzene,
+       smiles_contains(parse_smiles('CC(=O)OC1=CC=CC=C1C(=O)O'), 'c1ccccc1C(=O)O') AS has_salicylate;
+-- Result: true, true
 ```
 
 ## 3. Morgan Fingerprints & Topological Matching
