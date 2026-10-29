@@ -317,93 +317,1405 @@ pub fn prosite_match(sequence: &str, pattern: &str) -> bool {
 }
 
 // =====================================================================
-// 5. SMALL MOLECULE CHEMISTRY (Cheminformatics)
+// 5. SMALL MOLECULE CHEMISTRY (Cheminformatics: Hückel 4n+2, WL/ECFP4, VF2, Salt/Tautomer Normalization)
 // =====================================================================
 
-/// Represents a small molecule parsed from a SMILES string.
-#[derive(PostgresType, Serialize, Deserialize, Debug, Clone)]
+pub const BOND_SINGLE: u8 = 1;
+pub const BOND_DOUBLE: u8 = 2;
+pub const BOND_TRIPLE: u8 = 3;
+pub const BOND_AROMATIC: u8 = 4;
+
+/// Compact atom node inside a normalized `Molecule` graph.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PgBioAtom {
+    pub atomic_num: u8,
+    pub formal_charge: i8,
+    pub h_count: u8,
+    pub is_aromatic: bool,
+    pub in_ring: bool,
+}
+
+/// Compact undirected bond edge inside a normalized `Molecule` graph.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PgBioBond {
+    pub src_idx: u16,
+    pub dst_idx: u16,
+    pub bond_type: u8,
+    pub in_ring: bool,
+}
+
+/// Represents a small molecule parsed from a SMILES string and normalized via:
+/// 1. Connected-component salt stripping & prototropic tautomer normalization
+/// 2. Hückel 4n+2 cycle aromaticity perception
+/// 3. Weisfeiler-Lehman (WL) / Morgan ECFP4 64-bit canonical hashing & 1024-bit bitset indexing
+#[derive(PostgresType, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Molecule {
     pub smiles: String,
     pub is_valid: bool,
+    #[serde(default)]
+    pub wl_hash: i64,
+    #[serde(default)]
+    pub ecfp_bits: Vec<u64>,
+    #[serde(default)]
+    pub atoms: Vec<PgBioAtom>,
+    #[serde(default)]
+    pub bonds: Vec<PgBioBond>,
 }
 
-/// Parses and validates a SMILES chemical string.
-#[pg_extern(immutable, parallel_safe)]
-pub fn parse_smiles(smiles_str: &str) -> Molecule {
-    let mut builder = purr::graph::Builder::new();
-    let is_valid = purr::read::read(smiles_str, &mut builder, None).is_ok();
-    Molecule {
-        smiles: smiles_str.to_string(),
-        is_valid,
+#[inline]
+fn fmix64(mut k: u64) -> u64 {
+    k ^= k >> 33;
+    k = k.wrapping_mul(0xff51afd7ed558ccd);
+    k ^= k >> 33;
+    k = k.wrapping_mul(0xc4ceb9fe1a85ec53);
+    k ^= k >> 33;
+    k
+}
+
+fn symbol_to_atomic_num(sym: &str) -> Option<(u8, bool)> {
+    match sym {
+        "*" => Some((0, false)),
+        "H" => Some((1, false)),
+        "He" => Some((2, false)),
+        "Li" => Some((3, false)),
+        "Be" => Some((4, false)),
+        "B" => Some((5, false)),
+        "b" => Some((5, true)),
+        "C" => Some((6, false)),
+        "c" => Some((6, true)),
+        "N" => Some((7, false)),
+        "n" => Some((7, true)),
+        "O" => Some((8, false)),
+        "o" => Some((8, true)),
+        "F" => Some((9, false)),
+        "Na" => Some((11, false)),
+        "Mg" => Some((12, false)),
+        "Al" => Some((13, false)),
+        "Si" => Some((14, false)),
+        "P" => Some((15, false)),
+        "p" => Some((15, true)),
+        "S" => Some((16, false)),
+        "s" => Some((16, true)),
+        "Cl" => Some((17, false)),
+        "K" => Some((19, false)),
+        "Ca" => Some((20, false)),
+        "Ti" => Some((22, false)),
+        "V" => Some((23, false)),
+        "Cr" => Some((24, false)),
+        "Mn" => Some((25, false)),
+        "Fe" => Some((26, false)),
+        "Co" => Some((27, false)),
+        "Ni" => Some((28, false)),
+        "Cu" => Some((29, false)),
+        "Zn" => Some((30, false)),
+        "Ga" => Some((31, false)),
+        "Ge" => Some((32, false)),
+        "As" => Some((33, false)),
+        "as" => Some((33, true)),
+        "Se" => Some((34, false)),
+        "se" => Some((34, true)),
+        "Br" => Some((35, false)),
+        "Ag" => Some((47, false)),
+        "Cd" => Some((48, false)),
+        "Sn" => Some((50, false)),
+        "Sb" => Some((51, false)),
+        "Te" => Some((52, false)),
+        "te" => Some((52, true)),
+        "I" => Some((53, false)),
+        "Ba" => Some((56, false)),
+        "Pt" => Some((78, false)),
+        "Au" => Some((79, false)),
+        "Hg" => Some((80, false)),
+        "Pb" => Some((82, false)),
+        "Bi" => Some((83, false)),
+        _ => None,
     }
 }
 
-/// Computes a very basic boolean "substructure match".
-/// Note: In a production extension, this would do a full molecular graph isomorphism check.
+/// Parses a bracketed SMILES atom specification `[...]` (excluding `[` and `]`).
+fn parse_bracket_atom(inner: &[u8]) -> Option<(u8, i8, u8, bool)> {
+    let n = inner.len();
+    if n == 0 {
+        return None;
+    }
+    let mut i = 0;
+
+    // 1. Optional isotope digits
+    while i < n && inner[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i >= n {
+        return None;
+    }
+
+    // 2. Element symbol (try 2-letter first, then 1-letter)
+    let (atomic_num, is_aromatic) = if i + 1 < n && inner[i + 1].is_ascii_lowercase() {
+        let two = std::str::from_utf8(&inner[i..i + 2]).ok()?;
+        if let Some(res) = symbol_to_atomic_num(two) {
+            i += 2;
+            res
+        } else {
+            let one = std::str::from_utf8(&inner[i..i + 1]).ok()?;
+            let res = symbol_to_atomic_num(one)?;
+            i += 1;
+            res
+        }
+    } else {
+        let one = std::str::from_utf8(&inner[i..i + 1]).ok()?;
+        let res = symbol_to_atomic_num(one)?;
+        i += 1;
+        res
+    };
+
+    // 3. Optional chirality (@, @@, @TH1, etc.)
+    if i < n && inner[i] == b'@' {
+        i += 1;
+        if i < n && inner[i] == b'@' {
+            i += 1;
+        } else {
+            while i < n && (inner[i].is_ascii_uppercase() || inner[i].is_ascii_digit()) && inner[i] != b'H' {
+                i += 1;
+            }
+        }
+    }
+
+    // 4. Optional explicit hydrogen count (H, H1, H2, ...)
+    let mut h_count: u8 = 0;
+    if i < n && inner[i] == b'H' {
+        i += 1;
+        if i < n && inner[i].is_ascii_digit() {
+            let mut hc: u8 = 0;
+            while i < n && inner[i].is_ascii_digit() {
+                hc = hc.saturating_mul(10).saturating_add(inner[i] - b'0');
+                i += 1;
+            }
+            h_count = hc;
+        } else {
+            h_count = 1;
+        }
+    }
+
+    // 5. Optional formal charge (+, ++, +2, -, --, -2)
+    let mut formal_charge: i8 = 0;
+    if i < n && (inner[i] == b'+' || inner[i] == b'-') {
+        let sign: i8 = if inner[i] == b'+' { 1 } else { -1 };
+        let ch = inner[i];
+        i += 1;
+        if i < n && inner[i].is_ascii_digit() {
+            let mut mag: i8 = 0;
+            while i < n && inner[i].is_ascii_digit() {
+                mag = mag.saturating_mul(10).saturating_add((inner[i] - b'0') as i8);
+                i += 1;
+            }
+            formal_charge = sign * mag;
+        } else {
+            let mut count: i8 = 1;
+            while i < n && inner[i] == ch {
+                count += 1;
+                i += 1;
+            }
+            formal_charge = sign * count;
+        }
+    }
+
+    // 6. Optional atom class (:1, :2, ...)
+    if i < n && inner[i] == b':' {
+        i += 1;
+        while i < n && inner[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+
+    if i != n {
+        return None;
+    }
+
+    Some((atomic_num, formal_charge, h_count, is_aromatic))
+}
+
+/// Lexes and parses a raw SMILES string into `(atoms, bonds)` before salt/tautomer/aromaticity normalization.
+fn pgbio_lex_smiles(smiles: &str) -> Option<(Vec<PgBioAtom>, Vec<PgBioBond>)> {
+    let s = smiles.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let n = bytes.len();
+
+    let mut atoms: Vec<PgBioAtom> = Vec::new();
+    let mut is_bracket_atom: Vec<bool> = Vec::new();
+    let mut bonds: Vec<PgBioBond> = Vec::new();
+
+    let mut stack: Vec<usize> = Vec::new();
+    let mut current_atom: Option<usize> = None;
+    let mut pending_bond: Option<u8> = None;
+    let mut just_saw_dot = false;
+    // Ring closures 0..100: stores (opening_atom_idx, optional_explicit_bond_type)
+    let mut rings: [Option<(usize, Option<u8>)>; 100] = [None; 100];
+
+    let mut i = 0;
+    while i < n {
+        let c = bytes[i];
+        match c {
+            b'(' => {
+                if pending_bond.is_some() || just_saw_dot {
+                    return None;
+                }
+                let curr = current_atom?;
+                stack.push(curr);
+                i += 1;
+            }
+            b')' => {
+                if pending_bond.is_some() || just_saw_dot {
+                    return None;
+                }
+                current_atom = Some(stack.pop()?);
+                i += 1;
+            }
+            b'.' => {
+                if pending_bond.is_some() || current_atom.is_none() || just_saw_dot {
+                    return None;
+                }
+                current_atom = None;
+                just_saw_dot = true;
+                i += 1;
+            }
+            b'-' | b'=' | b'#' | b':' | b'/' | b'\\' => {
+                if pending_bond.is_some() || current_atom.is_none() {
+                    return None;
+                }
+                pending_bond = Some(match c {
+                    b'-' | b'/' | b'\\' => BOND_SINGLE,
+                    b'=' => BOND_DOUBLE,
+                    b'#' => BOND_TRIPLE,
+                    b':' => BOND_AROMATIC,
+                    _ => BOND_SINGLE,
+                });
+                i += 1;
+            }
+            b'0'..=b'9' | b'%' => {
+                let curr = current_atom?;
+                let ring_num: usize = if c == b'%' {
+                    if i + 2 >= n || !bytes[i + 1].is_ascii_digit() || !bytes[i + 2].is_ascii_digit() {
+                        return None;
+                    }
+                    let num = ((bytes[i + 1] - b'0') as usize) * 10 + ((bytes[i + 2] - b'0') as usize);
+                    i += 3;
+                    num
+                } else {
+                    i += 1;
+                    (c - b'0') as usize
+                };
+
+                let explicit_b = pending_bond.take();
+                if let Some((open_atom, open_bond)) = rings[ring_num].take() {
+                    if open_atom == curr {
+                        return None; // Self-loop invalid
+                    }
+                    // Determine ring closure bond type
+                    let btype = match (open_bond, explicit_b) {
+                        (Some(b1), Some(b2)) => {
+                            if b1 != b2 {
+                                return None;
+                            }
+                            b1
+                        }
+                        (Some(b1), None) => b1,
+                        (None, Some(b2)) => b2,
+                        (None, None) => {
+                            if atoms[open_atom].is_aromatic && atoms[curr].is_aromatic {
+                                BOND_AROMATIC
+                            } else {
+                                BOND_SINGLE
+                            }
+                        }
+                    };
+                    // Avoid duplicate edge
+                    if bonds.iter().any(|b| {
+                        (b.src_idx == open_atom as u16 && b.dst_idx == curr as u16)
+                            || (b.src_idx == curr as u16 && b.dst_idx == open_atom as u16)
+                    }) {
+                        return None;
+                    }
+                    bonds.push(PgBioBond {
+                        src_idx: open_atom as u16,
+                        dst_idx: curr as u16,
+                        bond_type: btype,
+                        in_ring: true,
+                    });
+                } else {
+                    rings[ring_num] = Some((curr, explicit_b));
+                }
+            }
+            b'[' => {
+                let start = i + 1;
+                let mut end = start;
+                while end < n && bytes[end] != b']' {
+                    end += 1;
+                }
+                if end >= n {
+                    return None;
+                }
+                let (atomic_num, formal_charge, h_count, is_aromatic) =
+                    parse_bracket_atom(&bytes[start..end])?;
+                let new_idx = atoms.len();
+                atoms.push(PgBioAtom {
+                    atomic_num,
+                    formal_charge,
+                    h_count,
+                    is_aromatic,
+                    in_ring: false,
+                });
+                is_bracket_atom.push(true);
+
+                if let Some(prev) = current_atom {
+                    let btype = pending_bond.take().unwrap_or_else(|| {
+                        if atoms[prev].is_aromatic && is_aromatic {
+                            BOND_AROMATIC
+                        } else {
+                            BOND_SINGLE
+                        }
+                    });
+                    bonds.push(PgBioBond {
+                        src_idx: prev as u16,
+                        dst_idx: new_idx as u16,
+                        bond_type: btype,
+                        in_ring: false,
+                    });
+                } else if pending_bond.is_some() {
+                    return None;
+                }
+                current_atom = Some(new_idx);
+                just_saw_dot = false;
+                i = end + 1;
+            }
+            _ => {
+                // Unbracketed organic subset atom: Cl, Br, B, C, N, O, P, S, F, I, *, b, c, n, o, p, s
+                let (atomic_num, is_aromatic, step) = if i + 1 < n
+                    && ((c == b'C' && bytes[i + 1] == b'l') || (c == b'B' && bytes[i + 1] == b'r'))
+                {
+                    if c == b'C' {
+                        (17u8, false, 2usize)
+                    } else {
+                        (35u8, false, 2usize)
+                    }
+                } else {
+                    match c {
+                        b'*' => (0u8, false, 1usize),
+                        b'B' => (5u8, false, 1usize),
+                        b'b' => (5u8, true, 1usize),
+                        b'C' => (6u8, false, 1usize),
+                        b'c' => (6u8, true, 1usize),
+                        b'N' => (7u8, false, 1usize),
+                        b'n' => (7u8, true, 1usize),
+                        b'O' => (8u8, false, 1usize),
+                        b'o' => (8u8, true, 1usize),
+                        b'F' => (9u8, false, 1usize),
+                        b'P' => (15u8, false, 1usize),
+                        b'p' => (15u8, true, 1usize),
+                        b'S' => (16u8, false, 1usize),
+                        b's' => (16u8, true, 1usize),
+                        b'I' => (53u8, false, 1usize),
+                        _ => return None,
+                    }
+                };
+
+                let new_idx = atoms.len();
+                atoms.push(PgBioAtom {
+                    atomic_num,
+                    formal_charge: 0,
+                    h_count: 0,
+                    is_aromatic,
+                    in_ring: false,
+                });
+                is_bracket_atom.push(false);
+
+                if let Some(prev) = current_atom {
+                    let btype = pending_bond.take().unwrap_or_else(|| {
+                        if atoms[prev].is_aromatic && is_aromatic {
+                            BOND_AROMATIC
+                        } else {
+                            BOND_SINGLE
+                        }
+                    });
+                    bonds.push(PgBioBond {
+                        src_idx: prev as u16,
+                        dst_idx: new_idx as u16,
+                        bond_type: btype,
+                        in_ring: false,
+                    });
+                } else if pending_bond.is_some() {
+                    return None;
+                }
+                current_atom = Some(new_idx);
+                just_saw_dot = false;
+                i += step;
+            }
+        }
+    }
+
+    if !stack.is_empty() || pending_bond.is_some() || just_saw_dot || atoms.is_empty() {
+        return None;
+    }
+    if rings.iter().any(|r| r.is_some()) {
+        return None;
+    }
+
+    // Fold explicit [H] atoms connected to heavy atoms into their neighbor's h_count
+    let mut remove_atom = vec![false; atoms.len()];
+    for b in &bonds {
+        let u = b.src_idx as usize;
+        let v = b.dst_idx as usize;
+        if atoms[u].atomic_num == 1 && atoms[u].formal_charge == 0 && atoms[v].atomic_num > 1 {
+            atoms[v].h_count = atoms[v].h_count.saturating_add(1);
+            remove_atom[u] = true;
+        } else if atoms[v].atomic_num == 1 && atoms[v].formal_charge == 0 && atoms[u].atomic_num > 1 {
+            atoms[u].h_count = atoms[u].h_count.saturating_add(1);
+            remove_atom[v] = true;
+        }
+    }
+    if remove_atom.iter().any(|&r| r) && remove_atom.iter().any(|&r| !r) {
+        let mut remap = vec![0u16; atoms.len()];
+        let mut new_atoms = Vec::new();
+        let mut new_bracket = Vec::new();
+        for (idx, a) in atoms.into_iter().enumerate() {
+            if !remove_atom[idx] {
+                remap[idx] = new_atoms.len() as u16;
+                new_atoms.push(a);
+                new_bracket.push(is_bracket_atom[idx]);
+            }
+        }
+        let mut new_bonds = Vec::new();
+        for b in bonds {
+            if !remove_atom[b.src_idx as usize] && !remove_atom[b.dst_idx as usize] {
+                new_bonds.push(PgBioBond {
+                    src_idx: remap[b.src_idx as usize],
+                    dst_idx: remap[b.dst_idx as usize],
+                    bond_type: b.bond_type,
+                    in_ring: b.in_ring,
+                });
+            }
+        }
+        atoms = new_atoms;
+        is_bracket_atom = new_bracket;
+        bonds = new_bonds;
+    }
+
+    // Compute implicit hydrogens for all unbracketed organic atoms
+    for idx in 0..atoms.len() {
+        if is_bracket_atom[idx] {
+            continue;
+        }
+        let mut degree: u8 = 0;
+        let mut explicit_mult: u8 = 0;
+        for b in &bonds {
+            if b.src_idx as usize == idx || b.dst_idx as usize == idx {
+                degree = degree.saturating_add(1);
+                if b.bond_type == BOND_DOUBLE {
+                    explicit_mult = explicit_mult.saturating_add(1);
+                } else if b.bond_type == BOND_TRIPLE {
+                    explicit_mult = explicit_mult.saturating_add(2);
+                }
+            }
+        }
+        let a = &mut atoms[idx];
+        if a.is_aromatic {
+            // OpenSMILES aromatic implicit valence rule
+            a.h_count = match a.atomic_num {
+                6 => {
+                    if explicit_mult > 0 {
+                        4u8.saturating_sub(degree.saturating_add(explicit_mult))
+                    } else {
+                        3u8.saturating_sub(degree)
+                    }
+                }
+                5 => 2u8.saturating_sub(degree),
+                // Unbracketed aromatic n, o, s, p in SMILES have 0 implicit hydrogens (pyrrole NH is [nH])
+                _ => 0,
+            };
+        } else {
+            let bo_sum = degree.saturating_add(explicit_mult);
+            let target_val = match a.atomic_num {
+                5 => 3,
+                6 => 4,
+                7 | 15 => {
+                    if bo_sum <= 3 {
+                        3
+                    } else if bo_sum <= 5 {
+                        5
+                    } else {
+                        bo_sum
+                    }
+                }
+                8 => 2,
+                16 => {
+                    if bo_sum <= 2 {
+                        2
+                    } else if bo_sum <= 4 {
+                        4
+                    } else if bo_sum <= 6 {
+                        6
+                    } else {
+                        bo_sum
+                    }
+                }
+                9 | 17 | 35 | 53 => 1,
+                _ => bo_sum,
+            };
+            a.h_count = target_val.saturating_sub(bo_sum);
+        }
+    }
+
+    Some((atoms, bonds))
+}
+
+/// Feature #3: Salt Stripping & Prototropic Tautomer Normalization.
+/// Splits disconnected `.` components, keeps the largest heavy-atom parent component,
+/// neutralizes counter-ion salt charges (e.g. `CC(=O)[O-].[Na+]` -> `CC(=O)O`),
+/// and normalizes aliphatic 1,3-prototropic tautomers (`C=C-OH` -> `CH-C=O`, `N=C-OH` -> `NH-C=O`).
+fn pgbio_strip_salts_and_normalize_tautomers(
+    atoms: &mut Vec<PgBioAtom>,
+    bonds: &mut Vec<PgBioBond>,
+) {
+    let n = atoms.len();
+    if n > 1 {
+        let mut comp_id = vec![usize::MAX; n];
+        let mut components: Vec<Vec<usize>> = Vec::new();
+
+        for start in 0..n {
+            if comp_id[start] != usize::MAX {
+                continue;
+            }
+            let cid = components.len();
+            let mut comp_nodes = Vec::new();
+            let mut queue = std::collections::VecDeque::new();
+            comp_id[start] = cid;
+            queue.push_back(start);
+
+            while let Some(u) = queue.pop_front() {
+                comp_nodes.push(u);
+                for b in bonds.iter() {
+                    let v = if b.src_idx as usize == u {
+                        b.dst_idx as usize
+                    } else if b.dst_idx as usize == u {
+                        b.src_idx as usize
+                    } else {
+                        continue;
+                    };
+                    if comp_id[v] == usize::MAX {
+                        comp_id[v] = cid;
+                        queue.push_back(v);
+                    }
+                }
+            }
+            components.push(comp_nodes);
+        }
+
+        if components.len() > 1 {
+            // Score each component by (heavy_atom_count, sum_of_atomic_numbers)
+            let mut best_cid = 0;
+            let mut best_score = (0usize, 0usize);
+            for (cid, nodes) in components.iter().enumerate() {
+                let heavy = nodes.iter().filter(|&&u| atoms[u].atomic_num > 1).count();
+                let z_sum: usize = nodes.iter().map(|&u| atoms[u].atomic_num as usize).sum();
+                let score = (heavy, z_sum);
+                if score > best_score {
+                    best_score = score;
+                    best_cid = cid;
+                }
+            }
+
+            // Sum net charge of stripped counter-ions
+            let mut stripped_charge: i32 = 0;
+            for (cid, nodes) in components.iter().enumerate() {
+                if cid != best_cid {
+                    for &u in nodes {
+                        stripped_charge += atoms[u].formal_charge as i32;
+                    }
+                }
+            }
+
+            let keep_nodes = &components[best_cid];
+            let mut remap = vec![u16::MAX; n];
+            let mut new_atoms = Vec::with_capacity(keep_nodes.len());
+            for &old_u in keep_nodes {
+                remap[old_u] = new_atoms.len() as u16;
+                new_atoms.push(atoms[old_u].clone());
+            }
+            let mut new_bonds = Vec::new();
+            for b in bonds.iter() {
+                let ru = remap[b.src_idx as usize];
+                let rv = remap[b.dst_idx as usize];
+                if ru != u16::MAX && rv != u16::MAX {
+                    new_bonds.push(PgBioBond {
+                        src_idx: ru,
+                        dst_idx: rv,
+                        bond_type: b.bond_type,
+                        in_ring: b.in_ring,
+                    });
+                }
+            }
+            *atoms = new_atoms;
+            *bonds = new_bonds;
+
+            // If positively charged counter-ion(s) were stripped (e.g. [Na+], [K+], [Ca+2]),
+            // protonate matching deprotonated oxygens/sulfurs ([O-] -> OH) in the parent molecule.
+            if stripped_charge > 0 {
+                let mut pos_rem = stripped_charge;
+                for a in atoms.iter_mut() {
+                    if pos_rem > 0 && (a.atomic_num == 8 || a.atomic_num == 16) && a.formal_charge == -1 {
+                        a.formal_charge = 0;
+                        a.h_count = a.h_count.saturating_add(1);
+                        pos_rem -= 1;
+                    }
+                }
+            } else if stripped_charge < 0 {
+                // If halide/anion counter-ion was stripped (e.g. .[Cl-]), neutralize protonated amine [NH3+] -> NH2
+                let mut neg_rem = -stripped_charge;
+                for a in atoms.iter_mut() {
+                    if neg_rem > 0 && a.atomic_num == 7 && a.formal_charge == 1 && a.h_count > 0 {
+                        a.formal_charge = 0;
+                        a.h_count -= 1;
+                        neg_rem -= 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Enumerate simple cycles first so we know which bonds are in rings before tautomer shifts
+    let cycles = pgbio_find_cycles(atoms.len(), bonds);
+    for (_, cyc_bonds) in &cycles {
+        for &b_idx in cyc_bonds {
+            bonds[b_idx as usize].in_ring = true;
+        }
+    }
+
+    // 1,3-Prototropic Tautomer Normalization:
+    // Normalize aliphatic/non-ring enols and imidic acids: X=C-OH -> XH-C=O (where X is C or N and X=C is not in a cycle)
+    for b_oh_idx in 0..bonds.len() {
+        if bonds[b_oh_idx].bond_type != BOND_SINGLE || bonds[b_oh_idx].in_ring {
+            continue;
+        }
+        let u = bonds[b_oh_idx].src_idx as usize;
+        let v = bonds[b_oh_idx].dst_idx as usize;
+        let (c_idx, o_idx) = if atoms[u].atomic_num == 6 && atoms[v].atomic_num == 8 {
+            (u, v)
+        } else if atoms[v].atomic_num == 6 && atoms[u].atomic_num == 8 {
+            (v, u)
+        } else {
+            continue;
+        };
+
+        // O must be neutral -OH with degree 1
+        if atoms[o_idx].formal_charge != 0 || atoms[o_idx].h_count != 1 {
+            continue;
+        }
+        let o_deg = bonds
+            .iter()
+            .filter(|b| b.src_idx as usize == o_idx || b.dst_idx as usize == o_idx)
+            .count();
+        if o_deg != 1 {
+            continue;
+        }
+
+        // Look for an non-ring double bond C=X (where X is neutral C or N) incident to c_idx
+        let mut double_bond_idx: Option<(usize, usize)> = None;
+        for (b_idx, b) in bonds.iter().enumerate() {
+            if b.bond_type == BOND_DOUBLE && !b.in_ring {
+                let x_idx = if b.src_idx as usize == c_idx {
+                    b.dst_idx as usize
+                } else if b.dst_idx as usize == c_idx {
+                    b.src_idx as usize
+                } else {
+                    continue;
+                };
+                if (atoms[x_idx].atomic_num == 6 || atoms[x_idx].atomic_num == 7)
+                    && atoms[x_idx].formal_charge == 0
+                    && !atoms[x_idx].is_aromatic
+                {
+                    double_bond_idx = Some((b_idx, x_idx));
+                    break;
+                }
+            }
+        }
+
+        if let Some((b_cx_idx, x_idx)) = double_bond_idx {
+            atoms[o_idx].h_count = 0;
+            atoms[x_idx].h_count = atoms[x_idx].h_count.saturating_add(1);
+            bonds[b_oh_idx].bond_type = BOND_DOUBLE;
+            bonds[b_cx_idx].bond_type = BOND_SINGLE;
+        }
+    }
+}
+
+/// Finds all simple cycles of length 3..=10 in the molecular graph.
+/// Returns pairs of `(cycle_atom_indices, cycle_bond_indices)`.
+fn pgbio_find_cycles(num_atoms: usize, bonds: &[PgBioBond]) -> Vec<(Vec<u16>, Vec<u16>)> {
+    let mut adj: Vec<Vec<(usize, usize)>> = vec![Vec::new(); num_atoms];
+    for (b_idx, b) in bonds.iter().enumerate() {
+        let u = b.src_idx as usize;
+        let v = b.dst_idx as usize;
+        if u < num_atoms && v < num_atoms {
+            adj[u].push((v, b_idx));
+            adj[v].push((u, b_idx));
+        }
+    }
+
+    let mut cycles: Vec<(Vec<u16>, Vec<u16>)> = Vec::new();
+    let mut seen_edge_masks: Vec<u128> = Vec::new();
+
+    // DFS from each start vertex `s` restricted to vertices >= `s` to find all simple cycles up to length 10
+    for s in 0..num_atoms {
+        let mut path_atoms: Vec<u16> = vec![s as u16];
+        let mut path_bonds: Vec<u16> = Vec::new();
+        let mut visited = vec![false; num_atoms];
+        visited[s] = true;
+
+        fn dfs_cycle(
+            s: usize,
+            u: usize,
+            adj: &[Vec<(usize, usize)>],
+            visited: &mut [bool],
+            path_atoms: &mut Vec<u16>,
+            path_bonds: &mut Vec<u16>,
+            cycles: &mut Vec<(Vec<u16>, Vec<u16>)>,
+            seen_edge_masks: &mut Vec<u128>,
+        ) {
+            for &(v, b_idx) in &adj[u] {
+                if !path_bonds.is_empty() && path_bonds[path_bonds.len() - 1] == b_idx as u16 {
+                    continue; // Do not immediately traverse back along the same edge
+                }
+                if v == s && path_atoms.len() >= 3 {
+                    let mut cyc_bonds = path_bonds.clone();
+                    cyc_bonds.push(b_idx as u16);
+                    let mut mask: u128 = 0;
+                    for &eb in &cyc_bonds {
+                        if (eb as usize) < 128 {
+                            mask |= 1u128 << (eb as usize);
+                        }
+                    }
+                    if !seen_edge_masks.contains(&mask) {
+                        seen_edge_masks.push(mask);
+                        cycles.push((path_atoms.clone(), cyc_bonds));
+                    }
+                } else if v > s && !visited[v] && path_atoms.len() < 10 {
+                    visited[v] = true;
+                    path_atoms.push(v as u16);
+                    path_bonds.push(b_idx as u16);
+                    dfs_cycle(s, v, adj, visited, path_atoms, path_bonds, cycles, seen_edge_masks);
+                    path_bonds.pop();
+                    path_atoms.pop();
+                    visited[v] = false;
+                }
+            }
+        }
+
+        dfs_cycle(
+            s,
+            s,
+            &adj,
+            &mut visited,
+            &mut path_atoms,
+            &mut path_bonds,
+            &mut cycles,
+            &mut seen_edge_masks,
+        );
+    }
+
+    // Sort cycles by length ascending so smaller fundamental rings (5..7) are normalized first
+    cycles.sort_by_key(|(ca, _)| ca.len());
+    cycles
+}
+
+/// Return pi-electron contribution for atom `atom_idx` inside a candidate ring,
+/// or -1 if the atom breaks sp2 conjugation (cannot be aromatic).
+#[inline]
+pub fn pgbio_atom_pi_electrons(
+    atoms: &[PgBioAtom],
+    bonds: &[PgBioBond],
+    atom_idx: usize,
+) -> i32 {
+    let a = &atoms[atom_idx];
+    let mut has_ring_double_or_arom = false;
+    let mut has_exocyclic_electroneg_double = false;
+    let mut has_any_double = false;
+    let mut explicit_bonds: i32 = 0;
+
+    for b in bonds {
+        if b.src_idx as usize != atom_idx && b.dst_idx as usize != atom_idx {
+            continue;
+        }
+        let other = if b.src_idx as usize == atom_idx {
+            b.dst_idx as usize
+        } else {
+            b.src_idx as usize
+        };
+
+        if b.bond_type == BOND_TRIPLE {
+            return -1; // sp-hybridized triple bonds break standard planar aromaticity
+        }
+
+        if b.bond_type == BOND_DOUBLE || b.bond_type == BOND_AROMATIC {
+            if b.in_ring {
+                has_ring_double_or_arom = true;
+            } else if b.bond_type == BOND_DOUBLE
+                && (atoms[other].atomic_num == 7
+                    || atoms[other].atomic_num == 8
+                    || atoms[other].atomic_num == 16)
+            {
+                has_exocyclic_electroneg_double = true; // e.g., C(=O) inside Caffeine/Uracil/Pyridone
+            }
+        }
+        if b.bond_type == BOND_DOUBLE {
+            has_any_double = true;
+        }
+        explicit_bonds += 1;
+    }
+
+    let sigma_degree = explicit_bonds + (a.h_count as i32);
+    if sigma_degree >= 4 {
+        return -1; // Saturated sp3 atom (like -CH2- in Cyclohexane/Cyclopentadiene) -> breaks conjugation!
+    }
+
+    match a.atomic_num {
+        6 => {
+            // Carbon with exocyclic =O / =N / =S or carbocation [C+] contributes 0 pi electrons but preserves cycle
+            if (has_exocyclic_electroneg_double && a.formal_charge == 0)
+                || (a.formal_charge == 1 && sigma_degree == 3 && !has_any_double)
+            {
+                return 0;
+            }
+            // Carbanion [C-] (e.g., cyclopentadienyl anion [cH-]1cccc1 / [CH-]1C=CC=C1) -> donates 2 pi electrons
+            if a.formal_charge == -1 && sigma_degree == 3 && !has_any_double {
+                return 2;
+            }
+            // Standard sp2 ring carbon with in-ring = or : bond
+            if (a.is_aromatic || has_ring_double_or_arom) && sigma_degree == 3 && a.formal_charge == 0 {
+                return 1;
+            }
+            -1
+        }
+        7 | 15 => {
+            if a.formal_charge == 0 {
+                // Pyrrole-like N (with 1 H or exocyclic substituent, 3 single/aromatic sigma bonds, no explicit = bond) -> donates lone pair (2 e-)
+                if !has_any_double && sigma_degree == 3 {
+                    return 2;
+                }
+                // Pyridine-like N (=N- in Kekule or lowercase n with 2 sigma bonds and 0 H) -> contributes 1 pi electron
+                if (a.is_aromatic || has_ring_double_or_arom) && sigma_degree == 2 {
+                    return 1;
+                }
+            } else if a.formal_charge == 1 && sigma_degree == 3 && (a.is_aromatic || has_ring_double_or_arom) {
+                // Pyridinium [nH+] -> contributes 1 pi electron
+                return 1;
+            } else if a.formal_charge == -1 && sigma_degree == 2 && !has_any_double {
+                // Pyrrolide anion [n-] -> donates 2 pi electrons
+                return 2;
+            }
+            -1
+        }
+        8 | 16 | 34 => {
+            // Neutral O, S, Se with 2 single/aromatic ring bonds -> donates lone pair (2 e-)
+            if a.formal_charge == 0 && sigma_degree == 2 && !has_any_double {
+                return 2;
+            }
+            // Pyrylium / thiopyrylium [o+] / [s+] -> contributes 1 pi electron
+            if a.formal_charge == 1 && sigma_degree == 3 && (a.is_aromatic || has_ring_double_or_arom) {
+                return 1;
+            }
+            -1
+        }
+        5 => {
+            // Trigonal planar Boron with empty p-orbital -> 0 pi electrons
+            if a.formal_charge == 0 && sigma_degree == 3 && !has_any_double {
+                return 0;
+            }
+            -1
+        }
+        _ => -1,
+    }
+}
+
+/// Normalize a detected cycle (array of vertex indices and edge indices) using Hückel's 4n+2 rule:
+/// `(pi_sum >= 6) && ((pi_sum - 2) & 3) == 0`.
+pub fn pgbio_normalize_cycle(
+    atoms: &mut [PgBioAtom],
+    bonds: &mut [PgBioBond],
+    cycle_atoms: &[u16],
+    cycle_bonds: &[u16],
+) -> bool {
+    let mut pi_sum: i32 = 0;
+
+    for &atom_idx in cycle_atoms {
+        let pi = pgbio_atom_pi_electrons(atoms, bonds, atom_idx as usize);
+        if pi < 0 {
+            return false; // Not conjugated -> leave bonds as explicit single/double
+        }
+        pi_sum += pi;
+    }
+
+    // Hückel 4n + 2 check: 6, 10, 14, 18...
+    if pi_sum >= 6 && ((pi_sum - 2) & 3) == 0 {
+        for &atom_idx in cycle_atoms {
+            atoms[atom_idx as usize].is_aromatic = true;
+        }
+        for &bond_idx in cycle_bonds {
+            bonds[bond_idx as usize].bond_type = BOND_AROMATIC;
+        }
+        return true;
+    }
+    false
+}
+
+/// Runs Hückel 4n+2 aromaticity perception across all cycles in the molecular graph.
+fn pgbio_perceive_aromaticity(atoms: &mut [PgBioAtom], bonds: &mut [PgBioBond]) {
+    let cycles = pgbio_find_cycles(atoms.len(), bonds);
+
+    // Mark in_ring flags on all atoms and bonds belonging to any cycle
+    for b in bonds.iter_mut() {
+        b.in_ring = false;
+    }
+    for a in atoms.iter_mut() {
+        a.in_ring = false;
+    }
+    for (cyc_atoms, cyc_bonds) in &cycles {
+        for &u in cyc_atoms {
+            atoms[u as usize].in_ring = true;
+        }
+        for &b_idx in cyc_bonds {
+            bonds[b_idx as usize].in_ring = true;
+        }
+    }
+
+    // Non-ring bonds between two aromatic atoms (e.g. biphenyl `c1ccccc1c2ccccc2`) are single bonds in SMILES,
+    // whereas acyclic query fragments (where neither atom is in a ring, e.g. `cc`) retain BOND_AROMATIC.
+    for b in bonds.iter_mut() {
+        if !b.in_ring
+            && b.bond_type == BOND_AROMATIC
+            && (atoms[b.src_idx as usize].in_ring || atoms[b.dst_idx as usize].in_ring)
+        {
+            b.bond_type = BOND_SINGLE;
+        }
+    }
+
+    if cycles.is_empty() {
+        return;
+    }
+
+    let mut aromatic_atom_mask = vec![false; atoms.len()];
+    let mut aromatic_bond_mask = vec![false; bonds.len()];
+
+    // Pass 1 & 2: Normalize fundamental rings (e.g. 5..7) and fused perimeters (up to 10)
+    for _pass in 0..2 {
+        for (cyc_atoms, cyc_bonds) in &cycles {
+            if pgbio_normalize_cycle(atoms, bonds, cyc_atoms, cyc_bonds) {
+                for &u in cyc_atoms {
+                    aromatic_atom_mask[u as usize] = true;
+                }
+                for &b_idx in cyc_bonds {
+                    aromatic_bond_mask[b_idx as usize] = true;
+                }
+            }
+        }
+    }
+
+    // Demote any ring atoms/bonds that did not belong to any valid 4n+2 Hückel cycle
+    // (e.g. anti-aromatic cyclobutadiene `c1ccc1` or cyclooctatetraene `c1ccccccc1`)
+    for (idx, a) in atoms.iter_mut().enumerate() {
+        if a.in_ring && !aromatic_atom_mask[idx] {
+            a.is_aromatic = false;
+        }
+    }
+    for (idx, b) in bonds.iter_mut().enumerate() {
+        if b.in_ring && !aromatic_bond_mask[idx] && b.bond_type == BOND_AROMATIC {
+            b.bond_type = BOND_SINGLE;
+        }
+    }
+}
+
+/// Computes the canonical 64-bit Weisfeiler-Lehman (WL) graph hash and 1024-bit ECFP4 fingerprint
+/// (`16 x u64` bitset) for a normalized molecular graph.
+pub fn pgbio_compute_wl_ecfp(atoms: &[PgBioAtom], bonds: &[PgBioBond]) -> (i64, Vec<u64>) {
+    let mut ecfp_bits = vec![0u64; 16];
+    let n = atoms.len();
+    if n == 0 {
+        return (0, ecfp_bits);
+    }
+
+    // Precompute adjacency list: (neighbor_idx, bond_type)
+    let mut adj: Vec<Vec<(usize, u8)>> = vec![Vec::new(); n];
+    for b in bonds {
+        let u = b.src_idx as usize;
+        let v = b.dst_idx as usize;
+        if u < n && v < n {
+            adj[u].push((v, b.bond_type));
+            adj[v].push((u, b.bond_type));
+        }
+    }
+
+    // For ring-automorphism invariance on heterocycles (e.g., Imidazole tautomer `C1=CN=CN1` vs `c1c[nH]cn1`),
+    // aromatic ring nitrogens sharing an aromatic ring with both =N- and -NH- normalize tautomer-mobile H in the atom invariant.
+    let aromatic_n_count = atoms
+        .iter()
+        .filter(|a| a.is_aromatic && a.in_ring && a.atomic_num == 7 && a.formal_charge == 0)
+        .count();
+    let aromatic_nh_count = atoms
+        .iter()
+        .filter(|a| {
+            a.is_aromatic && a.in_ring && a.atomic_num == 7 && a.formal_charge == 0 && a.h_count == 1
+        })
+        .count();
+    let has_tautomeric_arom_n = aromatic_n_count >= 2 && aromatic_nh_count >= 1 && aromatic_nh_count < aromatic_n_count;
+
+    // Radius 0: Vertex-permutation-invariant initial atom invariants
+    let mut hashes: Vec<u64> = (0..n)
+        .map(|i| {
+            let a = &atoms[i];
+            let deg = adj[i].len() as u64;
+            let effective_h = if has_tautomeric_arom_n
+                && a.is_aromatic
+                && a.in_ring
+                && a.atomic_num == 7
+                && a.formal_charge == 0
+                && deg == 2
+            {
+                1u64
+            } else {
+                a.h_count as u64
+            };
+            let packed: u64 = ((a.atomic_num as u64) & 0xFF)
+                | (((a.is_aromatic as u64) & 1) << 8)
+                | ((effective_h & 0xF) << 9)
+                | ((((a.formal_charge as i16 + 8) as u64) & 0xF) << 13)
+                | ((deg & 0xF) << 17)
+                | (((a.in_ring as u64) & 1) << 21);
+            let h0 = fmix64(packed ^ 0x9e3779b97f4a7c15);
+            let bit = (h0 as usize) & 1023;
+            ecfp_bits[bit >> 6] |= 1u64 << (bit & 63);
+            h0
+        })
+        .collect();
+
+    let mut all_wl_features: Vec<u64> = hashes.iter().map(|&h| fmix64(h ^ 0x100)).collect();
+
+    // Weisfeiler-Lehman / Morgan ECFP4 message passing (Radius 1..=2)
+    for radius in 1u64..=2u64 {
+        let mut next_hashes = vec![0u64; n];
+        for i in 0..n {
+            let mut nbr_pairs: Vec<(u8, u64)> = adj[i]
+                .iter()
+                .map(|&(nbr, btype)| (btype, hashes[nbr]))
+                .collect();
+            nbr_pairs.sort_unstable();
+
+            let mut acc = fmix64(hashes[i] ^ (radius.wrapping_mul(0x517cc1b727220a95)));
+            for (btype, nh) in nbr_pairs {
+                let edge_token = fmix64(nh.wrapping_add((btype as u64).wrapping_mul(0x9e3779b97f4a7c15)));
+                acc = fmix64(acc.wrapping_mul(1099511628211).wrapping_add(edge_token));
+            }
+            next_hashes[i] = acc;
+            let bit = (acc as usize) & 1023;
+            ecfp_bits[bit >> 6] |= 1u64 << (bit & 63);
+            all_wl_features.push(fmix64(acc ^ (radius << 32)));
+        }
+        hashes = next_hashes;
+    }
+
+    // Sort all multi-radius WL features to produce a canonical, permutation-invariant 64-bit graph hash
+    all_wl_features.sort_unstable();
+    let mut graph_hash: u64 = fmix64((n as u64) ^ ((bonds.len() as u64) << 16));
+    for feat in all_wl_features {
+        graph_hash = fmix64(graph_hash.wrapping_mul(0x100000001b3).wrapping_add(feat));
+    }
+
+    (graph_hash as i64, ecfp_bits)
+}
+
+/// Feature #2: VF2 Subgraph Isomorphism state machine.
+/// Determines whether `query` is isomorphic to a subgraph of `target`.
+pub fn pgbio_vf2_is_subgraph(target: &Molecule, query: &Molecule) -> bool {
+    if !target.is_valid || !query.is_valid {
+        return false;
+    }
+    let n_q = query.atoms.len();
+    let n_t = target.atoms.len();
+    if n_q == 0 || n_q > n_t || query.bonds.len() > target.bonds.len() {
+        return false;
+    }
+
+    // Fast O(1) exact match shortcut if atom & bond counts match and canonical WL hashes match
+    if n_q == n_t && query.bonds.len() == target.bonds.len() && query.wl_hash == target.wl_hash {
+        return true;
+    }
+
+    // Build adjacency tables of bond types (0 = no bond)
+    let mut q_deg = vec![0usize; n_q];
+    let mut q_adj: Vec<Vec<(usize, u8)>> = vec![Vec::new(); n_q];
+    for b in &query.bonds {
+        let u = b.src_idx as usize;
+        let v = b.dst_idx as usize;
+        q_deg[u] += 1;
+        q_deg[v] += 1;
+        q_adj[u].push((v, b.bond_type));
+        q_adj[v].push((u, b.bond_type));
+    }
+
+    let mut t_deg = vec![0usize; n_t];
+    let mut t_adj: Vec<Vec<(usize, u8)>> = vec![Vec::new(); n_t];
+    for b in &target.bonds {
+        let u = b.src_idx as usize;
+        let v = b.dst_idx as usize;
+        t_deg[u] += 1;
+        t_deg[v] += 1;
+        t_adj[u].push((v, b.bond_type));
+        t_adj[v].push((u, b.bond_type));
+    }
+
+    // Order query vertices to maximize pruning: connected DFS order starting from highest-degree/rarest atom
+    let mut q_order: Vec<usize> = Vec::with_capacity(n_q);
+    let mut in_order = vec![false; n_q];
+    while q_order.len() < n_q {
+        // Pick next vertex connected to already-ordered set (or highest degree if starting a component)
+        let mut best_u: Option<usize> = None;
+        let mut best_priority = (0usize, 0usize, 0usize);
+        for u in 0..n_q {
+            if in_order[u] {
+                continue;
+            }
+            let conn_to_mapped = q_adj[u].iter().filter(|&&(nbr, _)| in_order[nbr]).count();
+            let priority = (conn_to_mapped, q_deg[u], query.atoms[u].atomic_num as usize);
+            if best_u.is_none() || priority > best_priority {
+                best_u = Some(u);
+                best_priority = priority;
+            }
+        }
+        let u = best_u.unwrap();
+        in_order[u] = true;
+        q_order.push(u);
+    }
+
+    let mut q_to_t: Vec<Option<usize>> = vec![None; n_q];
+    let mut t_used: Vec<bool> = vec![false; n_t];
+
+    fn vf2_backtrack(
+        step: usize,
+        q_order: &[usize],
+        query: &Molecule,
+        target: &Molecule,
+        q_deg: &[usize],
+        t_deg: &[usize],
+        q_adj: &[Vec<(usize, u8)>],
+        t_adj: &[Vec<(usize, u8)>],
+        q_to_t: &mut [Option<usize>],
+        t_used: &mut [bool],
+    ) -> bool {
+        if step == q_order.len() {
+            return true;
+        }
+        let q_u = q_order[step];
+        let qa = &query.atoms[q_u];
+
+        for t_v in 0..target.atoms.len() {
+            if t_used[t_v] {
+                continue;
+            }
+            let ta = &target.atoms[t_v];
+
+            // Node compatibility check: atomic number (0 = wildcard `*`), aromaticity, and degree bound
+            if qa.atomic_num != 0 && qa.atomic_num != ta.atomic_num {
+                continue;
+            }
+            if qa.is_aromatic != ta.is_aromatic {
+                continue;
+            }
+            if t_deg[t_v] < q_deg[q_u] {
+                continue;
+            }
+            if qa.in_ring && !ta.in_ring {
+                continue;
+            }
+
+            // Edge consistency check against all already-mapped neighbors of q_u
+            let mut edges_ok = true;
+            for &(q_nbr, q_btype) in &q_adj[q_u] {
+                if let Some(t_nbr) = q_to_t[q_nbr] {
+                    let found_bond = t_adj[t_v]
+                        .iter()
+                        .any(|&(cand_nbr, t_btype)| cand_nbr == t_nbr && t_btype == q_btype);
+                    if !found_bond {
+                        edges_ok = false;
+                        break;
+                    }
+                }
+            }
+            if !edges_ok {
+                continue;
+            }
+
+            q_to_t[q_u] = Some(t_v);
+            t_used[t_v] = true;
+            if vf2_backtrack(
+                step + 1,
+                q_order,
+                query,
+                target,
+                q_deg,
+                t_deg,
+                q_adj,
+                t_adj,
+                q_to_t,
+                t_used,
+            ) {
+                return true;
+            }
+            q_to_t[q_u] = None;
+            t_used[t_v] = false;
+        }
+
+        false
+    }
+
+    vf2_backtrack(
+        0,
+        &q_order,
+        query,
+        target,
+        &q_deg,
+        &t_deg,
+        &q_adj,
+        &t_adj,
+        &mut q_to_t,
+        &mut t_used,
+    )
+}
+
+/// Parses, validates, strips salts, normalizes tautomers, perceives Hückel 4n+2 aromaticity,
+/// and computes the Weisfeiler-Lehman hash & 1024-bit ECFP4 fingerprint for a SMILES string.
+#[pg_extern(immutable, parallel_safe)]
+pub fn parse_smiles(smiles_str: &str) -> Molecule {
+    if let Some((mut atoms, mut bonds)) = pgbio_lex_smiles(smiles_str) {
+        pgbio_strip_salts_and_normalize_tautomers(&mut atoms, &mut bonds);
+        pgbio_perceive_aromaticity(&mut atoms, &mut bonds);
+        let (wl_hash, ecfp_bits) = pgbio_compute_wl_ecfp(&atoms, &bonds);
+        Molecule {
+            smiles: smiles_str.to_string(),
+            is_valid: true,
+            wl_hash,
+            ecfp_bits,
+            atoms,
+            bonds,
+        }
+    } else {
+        Molecule {
+            smiles: smiles_str.to_string(),
+            is_valid: false,
+            wl_hash: 0,
+            ecfp_bits: Vec::new(),
+            atoms: Vec::new(),
+            bonds: Vec::new(),
+        }
+    }
+}
+
+/// Returns the canonical 64-bit Weisfeiler-Lehman graph hash after Hückel 4n+2 aromaticity perception
+/// and salt/tautomer normalization (e.g., `molecule_wl_hash('C1=CC=CC=C1') == molecule_wl_hash('c1ccccc1')`).
+#[pg_extern(immutable, parallel_safe)]
+pub fn molecule_wl_hash(smiles: &str) -> i64 {
+    parse_smiles(smiles).wl_hash
+}
+
+/// Checks whether two SMILES strings represent the exact same normalized molecular graph
+/// (e.g. Kekulé vs. aromatic `C1=CC=CC=C1` vs. `c1ccccc1`, or salted `CC(=O)O.[Na+]` vs. `CC(=O)O`).
+#[pg_extern(immutable, parallel_safe)]
+pub fn molecules_are_identical(smiles_a: &str, smiles_b: &str) -> bool {
+    let mol_a = parse_smiles(smiles_a);
+    let mol_b = parse_smiles(smiles_b);
+    if !mol_a.is_valid || !mol_b.is_valid {
+        return false;
+    }
+    mol_a.wl_hash == mol_b.wl_hash
+        && mol_a.atoms.len() == mol_b.atoms.len()
+        && mol_a.bonds.len() == mol_b.bonds.len()
+        && pgbio_vf2_is_subgraph(&mol_a, &mol_b)
+}
+
+/// Performs an exact VF2 Subgraph Isomorphism check (with Hückel 4n+2 aromaticity normalization)
+/// to test whether `target` contains `substructure` as a molecular subgraph.
 #[pg_extern(immutable, parallel_safe)]
 pub fn smiles_contains(target: Molecule, substructure: &str) -> bool {
     if !target.is_valid {
         return false;
     }
-    target.smiles.contains(substructure)
+    let target_norm = if target.atoms.is_empty() && !target.smiles.is_empty() {
+        parse_smiles(&target.smiles)
+    } else {
+        target
+    };
+    let query_mol = parse_smiles(substructure);
+    if !query_mol.is_valid {
+        return false;
+    }
+    pgbio_vf2_is_subgraph(&target_norm, &query_mol)
 }
 
-/// Native Morgan (ECFP) Fingerprint generation in Rust
+/// Subgraph containment operator procedure (`target @> query`) combining bitset screening with VF2 subgraph isomorphism recheck.
+#[pg_extern(immutable, parallel_safe)]
+pub fn molecule_contains_molecule(target: Molecule, query: Molecule) -> bool {
+    if !target.is_valid || !query.is_valid {
+        return false;
+    }
+    let target_norm = if target.atoms.is_empty() && !target.smiles.is_empty() {
+        parse_smiles(&target.smiles)
+    } else {
+        target
+    };
+    let query_norm = if query.atoms.is_empty() && !query.smiles.is_empty() {
+        parse_smiles(&query.smiles)
+    } else {
+        query
+    };
+    pgbio_vf2_is_subgraph(&target_norm, &query_norm)
+}
+
+/// Hardware popcount (`count_ones`) Tanimoto similarity directly on two `Molecule` 1024-bit ECFP4 bitsets.
+#[pg_extern(immutable, parallel_safe)]
+pub fn molecule_tanimoto(a: Molecule, b: Molecule) -> f64 {
+    if !a.is_valid || !b.is_valid || a.ecfp_bits.len() != 16 || b.ecfp_bits.len() != 16 {
+        return 0.0;
+    }
+    let mut inter: u32 = 0;
+    let mut union: u32 = 0;
+    for i in 0..16 {
+        inter += (a.ecfp_bits[i] & b.ecfp_bits[i]).count_ones();
+        union += (a.ecfp_bits[i] | b.ecfp_bits[i]).count_ones();
+    }
+    if union == 0 {
+        1.0
+    } else {
+        (inter as f64) / (union as f64)
+    }
+}
+
+/// Native Morgan (ECFP4) 1024-bit Fingerprint generation in Rust with Hückel 4n+2 aromaticity normalization.
 #[pg_extern(immutable, parallel_safe)]
 pub fn smiles_to_fingerprint(smiles: &str) -> Vec<f32> {
-    let mut builder = purr::graph::Builder::new();
-    if purr::read::read(smiles, &mut builder, None).is_err() {
-        return vec![0.0; 1024]; // Return empty on parse fail
+    let mol = parse_smiles(smiles);
+    let mut fp = vec![0.0f32; 1024];
+    if !mol.is_valid || mol.ecfp_bits.len() != 16 {
+        return fp;
     }
-    let atoms = match builder.build() {
-        Ok(a) => a,
-        Err(_) => return vec![0.0; 1024]
-    };
-    let mut fp = vec![0.0; 1024];
-
-    let mut hashes: Vec<u64> = atoms.iter().enumerate().map(|(i, a)| {
-        let mut h = (i as u64).wrapping_add(1) * 13;
-        let kind_str = format!("{:?}", a.kind);
-        for byte in kind_str.bytes() {
-            h = h.wrapping_mul(31).wrapping_add(byte as u64);
+    for word_idx in 0..16 {
+        let word = mol.ecfp_bits[word_idx];
+        if word == 0 {
+            continue;
         }
-        h = h.wrapping_mul(31).wrapping_add(a.bonds.len() as u64);
-        // Set bit for radius 0
-        fp[(h as usize) % 1024] = 1.0;
-        h
-    }).collect();
-
-    for _radius in 1..=2 {
-        let mut new_hashes = hashes.clone();
-        for (i, a) in atoms.iter().enumerate() {
-            let mut neighbor_hashes: Vec<u64> = a.bonds.iter().map(|b| {
-                let neighbor_id = b.tid;
-                let bond_hash = match b.kind {
-                    purr::feature::BondKind::Single => 1,
-                    purr::feature::BondKind::Double => 2,
-                    purr::feature::BondKind::Triple => 3,
-                    purr::feature::BondKind::Quadruple => 4,
-                    purr::feature::BondKind::Aromatic => 5,
-                    purr::feature::BondKind::Up => 6,
-                    purr::feature::BondKind::Down => 7,
-                    purr::feature::BondKind::Elided => 8,
-                };
-                hashes[neighbor_id].wrapping_mul(17).wrapping_add(bond_hash)
-            }).collect();
-            
-            neighbor_hashes.sort_unstable();
-            
-            let mut h = hashes[i];
-            for nh in neighbor_hashes {
-                h = h.wrapping_mul(31).wrapping_add(nh);
+        for bit in 0..64 {
+            if (word & (1u64 << bit)) != 0 {
+                fp[(word_idx << 6) | bit] = 1.0;
             }
-            new_hashes[i] = h;
-            // Set bit
-            fp[(h as usize) % 1024] = 1.0;
         }
-        hashes = new_hashes;
     }
-    
     fp
 }
 
@@ -433,16 +1745,29 @@ pub fn tanimoto_similarity(a: Vec<f32>, b: Vec<f32>) -> f64 {
 
 pgrx::extension_sql!(
     r#"
--- 5. Create Tanimoto similarity operator for float arrays
+-- 5. Create Tanimoto similarity and VF2 substructure operators
 CREATE OPERATOR % (
     LEFTARG = real[],
     RIGHTARG = real[],
     PROCEDURE = tanimoto_similarity,
     COMMUTATOR = %
 );
+
+CREATE OPERATOR % (
+    LEFTARG = Molecule,
+    RIGHTARG = Molecule,
+    PROCEDURE = molecule_tanimoto,
+    COMMUTATOR = %
+);
+
+CREATE OPERATOR @> (
+    LEFTARG = Molecule,
+    RIGHTARG = Molecule,
+    PROCEDURE = molecule_contains_molecule
+);
 "#,
     name = "pg_bio_tanimoto_operator",
-    requires = [tanimoto_similarity]
+    requires = [tanimoto_similarity, molecule_tanimoto, molecule_contains_molecule]
 );
 
 // =====================================================================
@@ -1150,7 +2475,6 @@ fn parse_vcf(filepath: &str) -> pgrx::iter::TableIterator<'static, (
     name!(info, Option<String>)
 )> {
     use noodles::vcf;
-    use noodles::bgzf;
     use std::fs::File;
     use std::io::BufReader;
 
@@ -1635,6 +2959,19 @@ fn get_builtin_theozyme_template(motif_name: &str, requested_len: usize) -> Opti
         ResidueCoord { x: 17.778, y: 24.673, z: 21.387, name: "ZN".to_string() },
     ];
 
+    // Canonical Burkholderia sp. FA1 Fluoroacetate Dehalogenase (UniProt Q1JU72 / PDB 3BJX / AlphaFold v6)
+    // Defluorination catalytic triad + halide-stabilizing pocket (C-F bond cleavage theozyme):
+    // Asp104:OD2 (nucleophile), His271:NE2 (general base), Asp128:OD2 (charge relay),
+    // Trp150:NE1, Tyr212:OH, and Arg108:NH2 (fluoride-leaving-group halide hole).
+    let q1ju72_dehalogenase_pocket = vec![
+        ResidueCoord { x: 1.238, y: 2.722, z: -3.192, name: "ASP104:OD2".to_string() },
+        ResidueCoord { x: 2.345, y: -0.494, z: -2.097, name: "HIS271:NE2".to_string() },
+        ResidueCoord { x: 4.659, y: -0.482, z: 2.204, name: "ASP128:OD2".to_string() },
+        ResidueCoord { x: 5.305, y: 5.974, z: -5.207, name: "TRP150:NE1".to_string() },
+        ResidueCoord { x: 2.729, y: 3.340, z: -7.649, name: "TYR212:OH".to_string() },
+        ResidueCoord { x: 2.392, y: 6.631, z: -1.154, name: "ARG108:NH2".to_string() },
+    ];
+
     match key.as_str() {
         "4qhp_zn_pentad" | "4qhp" | "zn_pentad" | "zno_pentad" => {
             let take_n = if requested_len >= 5 && requested_len <= 7 { requested_len } else { 5 };
@@ -1648,6 +2985,13 @@ fn get_builtin_theozyme_template(motif_name: &str, requested_len: usize) -> Opti
         "4qhp_zno_heptad" | "zno_heptad" => Some(pentad_atoms),
         "4qhp_zn_tetrad" | "zn_tetrad" => Some(pentad_atoms.into_iter().take(4).collect()),
         "zinc_hydrolase_triad" | "zn_triad" => Some(pentad_atoms.into_iter().take(3).collect()),
+        "q1ju72_dehalogenase_triad" | "dehalogenase_triad" | "fluoroacetate_dehalogenase_triad" => {
+            Some(q1ju72_dehalogenase_pocket.into_iter().take(3).collect())
+        }
+        "q1ju72_dehalogenase_hexad" | "dehalogenase_hexad" | "fluoroacetate_dehalogenase_hexad" | "q1ju72_dehalogenase" => {
+            let take_n = if requested_len >= 3 && requested_len <= 6 { requested_len } else { 6 };
+            Some(q1ju72_dehalogenase_pocket.into_iter().take(take_n).collect())
+        }
         _ => None,
     }
 }
@@ -2173,6 +3517,431 @@ pub fn allosteric_mechanism_index(
     } else {
         ((s_polar - s_hydro) / denom).clamp(-1.0, 1.0)
     }
+}
+
+// =====================================================================
+// 12. WET-LAB SYNTHETIC BIOLOGY: REVERSE TRANSLATION, CAI, EXPRESSION CASSETTES,
+//     3D GLOBULAR COMPACTNESS GATE & ENZYME / BIOMINERALS DIGITAL TWIN
+// =====================================================================
+
+fn optimal_codon_and_weight(aa: char, host: &str) -> (&'static str, f64) {
+    let h = host.trim().to_ascii_lowercase();
+    let is_yeast = h.contains("cerevisiae") || h.contains("yeast") || h.contains("pichia") || h.contains("pastoris");
+    let is_halophile = h.contains("halo") || h.contains("natrono") || h.contains("salin") || h.contains("archaea");
+    let is_thermophile = h.contains("thermo") || h.contains("sulfolobus") || h.contains("pyro") || h.contains("acidianus");
+    let is_human = h.contains("human") || h.contains("homo") || h.contains("mammalian") || h.contains("cho");
+    let is_bacillus = h.contains("bacillus") || h.contains("subtilis") || h.contains("licheniformis");
+    let is_pseudomonas = h.contains("pseudomonas") || h.contains("cupriavidus") || h.contains("burkholderia");
+
+    match aa.to_ascii_uppercase() {
+        'A' => {
+            if is_yeast { ("GCT", 1.0) }
+            else if is_halophile || is_pseudomonas { ("GCC", 1.0) }
+            else if is_thermophile || is_bacillus { ("GCA", 1.0) }
+            else if is_human { ("GCC", 1.0) }
+            else { ("GCG", 1.0) } // E. coli K12 / BL21
+        }
+        'R' => {
+            if is_yeast || is_thermophile { ("AGA", 1.0) }
+            else if is_halophile || is_pseudomonas { ("CGC", 1.0) }
+            else if is_human { ("CGG", 1.0) }
+            else { ("CGC", 1.0) }
+        }
+        'N' => {
+            if is_yeast || is_thermophile || is_bacillus { ("AAT", 0.96) }
+            else { ("AAC", 1.0) }
+        }
+        'D' => {
+            if is_halophile || is_pseudomonas || is_human { ("GAC", 1.0) }
+            else { ("GAT", 1.0) }
+        }
+        'C' => {
+            if is_yeast || is_thermophile { ("TGT", 1.0) }
+            else { ("TGC", 1.0) }
+        }
+        'Q' => {
+            if is_yeast || is_thermophile || is_bacillus { ("CAA", 1.0) }
+            else { ("CAG", 1.0) }
+        }
+        'E' => {
+            if is_halophile || is_pseudomonas || is_human { ("GAG", 1.0) }
+            else { ("GAA", 1.0) }
+        }
+        'G' => {
+            if is_yeast || is_thermophile || is_bacillus { ("GGT", 1.0) }
+            else { ("GGC", 1.0) }
+        }
+        'H' => {
+            if is_halophile || is_pseudomonas || is_human { ("CAC", 1.0) }
+            else { ("CAT", 1.0) }
+        }
+        'I' => {
+            if is_halophile || is_pseudomonas || is_human { ("ATC", 1.0) }
+            else if is_thermophile { ("ATA", 0.98) }
+            else { ("ATT", 1.0) }
+        }
+        'L' => {
+            if is_yeast || is_thermophile { ("TTG", 1.0) }
+            else if is_halophile { ("CTC", 1.0) }
+            else { ("CTG", 1.0) }
+        }
+        'K' => {
+            if is_halophile || is_pseudomonas || is_human { ("AAG", 1.0) }
+            else { ("AAA", 1.0) }
+        }
+        'M' => ("ATG", 1.0),
+        'F' => {
+            if is_halophile || is_pseudomonas || is_human || is_yeast { ("TTC", 1.0) }
+            else { ("TTT", 1.0) }
+        }
+        'P' => {
+            if is_yeast || is_thermophile { ("CCA", 1.0) }
+            else if is_halophile || is_human { ("CCC", 1.0) }
+            else { ("CCG", 1.0) }
+        }
+        'S' => {
+            if is_yeast || is_thermophile { ("TCT", 1.0) }
+            else if is_halophile { ("TCG", 1.0) }
+            else { ("AGC", 1.0) }
+        }
+        'T' => {
+            if is_yeast || is_thermophile || is_bacillus { ("ACT", 1.0) }
+            else if is_halophile { ("ACG", 1.0) }
+            else { ("ACC", 1.0) }
+        }
+        'W' => ("TGG", 1.0),
+        'Y' => {
+            if is_halophile || is_pseudomonas || is_human { ("TAC", 1.0) }
+            else { ("TAT", 1.0) }
+        }
+        'V' => {
+            if is_yeast || is_thermophile { ("GTT", 1.0) }
+            else if is_halophile { ("GTC", 1.0) }
+            else { ("GTG", 1.0) }
+        }
+        '*' => {
+            if is_human || is_halophile { ("TGA", 1.0) }
+            else { ("TAA", 1.0) }
+        }
+        _ => ("NNN", 0.1),
+    }
+}
+
+/// Reverse-translates an amino acid sequence into a host-optimized coding DNA sequence (CDS).
+/// Supported host profiles include 'e_coli', 'b_subtilis', 'p_putida', 'c_necator',
+/// 's_cerevisiae', 'p_pastoris', 'h_salinarum' (high-GC halophile), 's_acidocaldarius' (thermophile), and 'h_sapiens'.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_reverse_translate(protein_seq: &str, host_organism: &str) -> String {
+    let mut dna = String::with_capacity(protein_seq.len() * 3);
+    for ch in protein_seq.chars() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        let (codon, _) = optimal_codon_and_weight(ch, host_organism);
+        if codon != "NNN" || ch == '*' {
+            dna.push_str(codon);
+        }
+    }
+    dna
+}
+
+/// Computes the Codon Adaptation Index (CAI in [0.0, 1.0]) of a DNA coding sequence for a given expression host.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_codon_adaptation_index(dna_seq: &str, host_organism: &str) -> f64 {
+    let clean: Vec<u8> = dna_seq
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace())
+        .map(|b| b.to_ascii_uppercase())
+        .collect();
+    let n_codons = clean.len() / 3;
+    if n_codons == 0 {
+        return 0.0;
+    }
+
+    let mut log_sum = 0.0f64;
+    let mut counted = 0usize;
+
+    for chunk in clean.chunks_exact(3) {
+        let aa = translate_codon(chunk);
+        if aa == '*' || aa == 'X' {
+            continue;
+        }
+        let (opt_codon, _) = optimal_codon_and_weight(aa, host_organism);
+        let codon_str = std::str::from_utf8(chunk).unwrap_or("NNN");
+        let w: f64 = if codon_str == opt_codon {
+            1.0
+        } else if codon_str.as_bytes()[0..2] == opt_codon.as_bytes()[0..2] {
+            0.78
+        } else {
+            0.42
+        };
+        log_sum += w.ln();
+        counted += 1;
+    }
+
+    if counted == 0 {
+        0.0
+    } else {
+        (log_sum / (counted as f64)).exp().clamp(0.0, 1.0)
+    }
+}
+
+/// Structured wet-lab plasmid expression cassette returned by `bio_design_expression_cassette`.
+#[derive(PostgresType, Serialize, Deserialize, Debug, Clone)]
+pub struct ExpressionCassette {
+    pub host_organism: String,
+    pub promoter_name: String,
+    pub coding_dna: String,
+    pub full_plasmid_dna: String,
+    pub length_bp: i32,
+    pub gc_content: f64,
+    pub cai_score: f64,
+    pub restriction_sites_free: bool,
+}
+
+/// Designs a complete wet-lab expression cassette (Promoter + RBS/Kozak + Host-Optimized CDS + Stop + Terminator)
+/// and audits GC content, Codon Adaptation Index (CAI), and Golden Gate / Gibson restriction site safety.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_design_expression_cassette(
+    protein_seq: &str,
+    host_organism: &str,
+    promoter_type: &str,
+) -> ExpressionCassette {
+    let cds = bio_reverse_translate(protein_seq, host_organism);
+    let (stop_codon, _) = optimal_codon_and_weight('*', host_organism);
+
+    let p_upper = promoter_type.trim().to_ascii_uppercase();
+    let (promoter_seq, terminator_seq) = if p_upper.contains("GAL1") || p_upper.contains("AOX1") {
+        (
+            "ACGGATTAGAAGCCGCCGAGCGGGTGACAGCCCTCCGAAGGAAGACTCTCCTCCGTGCGTCCTCGTCTTCACCGGTCGCGTTCCTGAAACGCAGATGTGCCTCGCGCCGCACTGCTCCGAACAATAAAGATTCTACAATACTAGCTTTTATGGTTATGAAGAGGAAAAATTGGCAGTAACCTGGCCCCACAAACCTTCAAATGAACGAATCAAATTAACAACCATAGGATGATAATGCGATTAGTTTTTTAGCCTTATTTCTGGGGTAATTAATCAGCGAAGCGATGATTTTTGATCTATTAACAGATATATAAATGCAAAAACTGCATAACCACTTTAACTAATACTTTCAACATTTTCGGTTTGTATTACTTCTTATTCAAATGTAATAAAAGTATCAACAAAAAATTGTTAATATACCTCTATACTTTAACGTCAAGGAGAAAAAACTATA",
+            "GCGAATTTCTTATGATTTATGATTTTTATTATTAAATAAGTTATAAAAAAAATAAGTGTATACAAATTTTAAAGTGACTCTTAGTTTTAAAACGAAAATTCTTATTCTTGAGTAACTCTTTCCTGTAGGTCAGGTTGCTTTCTCAGGTATAGCATGAGGTCGCTCTTATTGACCACACCTCTACCGGCATG",
+        )
+    } else if p_upper.contains("KRT14") || p_upper.contains("CMV") {
+        (
+            "TAGGCGTGTACGGTGGGAGGTCTATATAAGCAGAGCTGGTTTAGTGAACCGTCAGATCCGCTAGCGCTACCGGTCGCCACC",
+            "AATAAAAGATCTTTATTTTCATTAGATCTGTGTGTTGGTTTTTTGTGTG",
+        )
+    } else if p_upper.contains("PFDA") || p_upper.contains("HALO") {
+        (
+            "CTGTCAGCCGTTGAAGCCGGGGAAACCGCGGCGCTTTTATATAGGGCGCCGGCGCCGGAGGAGGTGAC",
+            "CGGCCGGCCGCGCGCCTTTTTTTGCGCGC",
+        )
+    } else {
+        // Default: T7 + strong Shine-Dalgarno RBS + spacer
+        (
+            "TAATACGACTCACTATAGGGGGAATTGTGAGCGGATAACAATTCCCCTCTAGAAATAATTTTGTTTAACTTTAAGAAGGAGATATACAT",
+            "TAGCATAACCCCTTGGGGCCTCTAAACGGGTCTTGAGGGGTTTTTTG",
+        )
+    };
+
+    let full_plasmid = format!("{}{}{}{}", promoter_seq, cds, stop_codon, terminator_seq);
+    let gc = bio_gc_content(&full_plasmid);
+    let cai = bio_codon_adaptation_index(&cds, host_organism);
+
+    // Check internal CDS freedom from BsaI (GGTCTC / GAGACC) Golden Gate type IIS sites
+    let restriction_free = !cds.contains("GGTCTC") && !cds.contains("GAGACC");
+
+    ExpressionCassette {
+        host_organism: host_organism.to_string(),
+        promoter_name: promoter_type.to_string(),
+        coding_dna: cds,
+        length_bp: full_plasmid.len() as i32,
+        full_plasmid_dna: full_plasmid,
+        gc_content: gc,
+        cai_score: cai,
+        restriction_sites_free: restriction_free,
+    }
+}
+
+/// Structured 3D Globular Compactness & AlphaFold/ESMFold structural quality profile.
+#[derive(PostgresType, Serialize, Deserialize, Debug, Clone)]
+pub struct GlobularFoldingProfile {
+    pub ca_count: i32,
+    pub mean_plddt: f64,
+    pub radius_of_gyration: f64,
+    pub compactness_ratio: f64,
+    pub elongation: f64,
+    pub is_globular: bool,
+}
+
+/// Evaluates the 3D Globular Compactness Gate directly from a PDB text string inside PostgreSQL:
+///   1. Extracts CA coordinates and B-factor / pLDDT confidence scores (auto-scaling [0, 1] ESMFold to [0, 100])
+///   2. Computes Radius of Gyration `Rg` (in Angstroms)
+///   3. Computes Flory Globular Compactness Ratio `Rg / (2.25 * N^0.38)`
+///   4. Computes principal-axis gyration tensor elongation via 3x3 Jacobi eigendecomposition
+#[pg_extern(immutable, parallel_safe)]
+pub fn evaluate_globular_compactness(pdb_text: &str) -> GlobularFoldingProfile {
+    let mut coords: Vec<(f64, f64, f64)> = Vec::new();
+    let mut plddts: Vec<f64> = Vec::new();
+
+    for line in pdb_text.lines() {
+        if line.starts_with("ATOM  ") && line.len() >= 66 {
+            let atom_name = line[12..16].trim();
+            if atom_name == "CA" {
+                if let (Ok(x), Ok(y), Ok(z), Ok(b)) = (
+                    line[30..38].trim().parse::<f64>(),
+                    line[38..46].trim().parse::<f64>(),
+                    line[46..54].trim().parse::<f64>(),
+                    line[60..66].trim().parse::<f64>(),
+                ) {
+                    coords.push((x, y, z));
+                    plddts.push(b);
+                }
+            }
+        }
+    }
+
+    let n = coords.len();
+    if n < 10 {
+        return GlobularFoldingProfile {
+            ca_count: n as i32,
+            mean_plddt: 0.0,
+            radius_of_gyration: 99.9,
+            compactness_ratio: 9.99,
+            elongation: 9.99,
+            is_globular: false,
+        };
+    }
+
+    let nf = n as f64;
+    let raw_mean_b: f64 = plddts.iter().sum::<f64>() / nf;
+    // ESMFold local outputs store pLDDT in [0.0, 1.0], whereas AlphaFold2/v6 stores [0.0, 100.0]
+    let mean_plddt = if raw_mean_b <= 1.05 && raw_mean_b > 0.0 {
+        raw_mean_b * 100.0
+    } else {
+        raw_mean_b
+    };
+
+    let (mut cx, mut cy, mut cz) = (0.0, 0.0, 0.0);
+    for &(x, y, z) in &coords {
+        cx += x;
+        cy += y;
+        cz += z;
+    }
+    cx /= nf;
+    cy /= nf;
+    cz /= nf;
+
+    let mut sum_r2 = 0.0f64;
+    let mut cov = [[0.0f64; 3]; 3];
+    for &(x, y, z) in &coords {
+        let dx = x - cx;
+        let dy = y - cy;
+        let dz = z - cz;
+        sum_r2 += dx * dx + dy * dy + dz * dz;
+        let d = [dx, dy, dz];
+        for r in 0..3 {
+            for c in 0..3 {
+                cov[r][c] += d[r] * d[c] / nf;
+            }
+        }
+    }
+
+    let rg = (sum_r2 / nf).sqrt();
+    let ideal_rg = 2.25 * nf.powf(0.38);
+    let compactness = if ideal_rg > 1e-9 { rg / ideal_rg } else { 9.99 };
+
+    // 3x3 Jacobi eigendecomposition of gyration tensor `cov` for principal axis elongation
+    for _sweep in 0..25 {
+        let (mut p, mut q) = (0usize, 1usize);
+        let mut max_off = 0.0f64;
+        for i in 0..3 {
+            for j in (i + 1)..3 {
+                if cov[i][j].abs() > max_off {
+                    max_off = cov[i][j].abs();
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+        if max_off < 1e-12 {
+            break;
+        }
+        let app = cov[p][p];
+        let aqq = cov[q][q];
+        let apq = cov[p][q];
+        let tau = (aqq - app) / (2.0 * apq);
+        let t = if tau >= 0.0 {
+            1.0 / (tau + (1.0 + tau * tau).sqrt())
+        } else {
+            -1.0 / (-tau + (1.0 + tau * tau).sqrt())
+        };
+        let c = 1.0 / (1.0 + t * t).sqrt();
+        let s = t * c;
+        cov[p][p] = app - t * apq;
+        cov[q][q] = aqq + t * apq;
+        cov[p][q] = 0.0;
+        cov[q][p] = 0.0;
+        for k in 0..3 {
+            if k != p && k != q {
+                let ckp = cov[k][p];
+                let ckq = cov[k][q];
+                cov[k][p] = c * ckp - s * ckq;
+                cov[p][k] = cov[k][p];
+                cov[k][q] = s * ckp + c * ckq;
+                cov[q][k] = cov[k][q];
+            }
+        }
+    }
+
+    let mut evals = [cov[0][0].max(0.0), cov[1][1].max(0.0), cov[2][2].max(0.0)];
+    evals.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let elongation = (evals[0] / evals[1].max(1e-4)).sqrt();
+
+    let is_globular = mean_plddt >= 70.0 && compactness <= 1.55 && elongation <= 3.2;
+
+    GlobularFoldingProfile {
+        ca_count: n as i32,
+        mean_plddt,
+        radius_of_gyration: rg,
+        compactness_ratio: compactness,
+        elongation,
+        is_globular,
+    }
+}
+
+/// Digital Twin kinetic & biomineralization simulator for defluorinating enzymes (Fluoride ISE + Fluorapatite yield).
+/// Computes:
+///   - `fluoride_ppm`: Released free F- ion concentration (ppm) at `time_hours` under Michaelis-Menten + Hydrophobin surface adsorption boost
+///   - `fluorapatite_mg`: Precipitated Ca5(PO4)3F bioceramic mass (mg/L) given stoichiometric Ca5:F1 capture by the AMELX mineralizing tag
+///   - `specific_activity`: Effective catalytic turnover rate (umol F- / min / mg enzyme)
+#[pg_extern(immutable, parallel_safe)]
+pub fn simulate_defluorination_kinetics(
+    kcat_per_hr: f64,
+    km_u_m: f64,
+    substrate_u_m: f64,
+    hydrophobin_anchor_boost: f64,
+    calcium_m_m: f64,
+    time_hours: f64,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(time_hr, f64),
+        name!(fluoride_ppm, f64),
+        name!(fluorapatite_mg_per_l, f64),
+        name!(fractional_conversion, f64),
+    ),
+> {
+    let eff_sub = (substrate_u_m * hydrophobin_anchor_boost.max(0.1)).max(0.0);
+    let mm_factor = if (km_u_m + eff_sub) > 1e-9 {
+        eff_sub / (km_u_m + eff_sub)
+    } else {
+        0.0
+    };
+    let k_eff = (kcat_per_hr * mm_factor * 0.015).max(0.0);
+    let frac = (1.0 - (-k_eff * time_hours.max(0.0)).exp()).clamp(0.0, 1.0);
+
+    // 1 uM F- = 0.019 ppm; scale to nanoparticle surface fluoride capacity (max ~150 ppm for 1000 uM C-F eq)
+    let max_f_ppm = substrate_u_m * 0.15;
+    let f_ppm = max_f_ppm * frac;
+
+    // Fluorapatite Ca5(PO4)3F molar mass = 504.3 g/mol vs F = 19.0 g/mol (mass ratio = 26.54x).
+    // Limited stoichiometrically by available Ca2+ (5 mol Ca per 1 mol F; 1 mM Ca = 0.2 mM F capacity = 3.8 ppm F).
+    let max_f_sequestered_ppm = (calcium_m_m.max(0.0) / 5.0) * 19.0;
+    let f_captured_ppm = f_ppm.min(max_f_sequestered_ppm);
+    let fap_mg_l = f_captured_ppm * (504.3 / 19.0);
+
+    pgrx::iter::TableIterator::once((time_hours, f_ppm, fap_mg_l, frac))
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -2804,6 +4573,186 @@ HETATM    5  O   HOH A 301      14.110  16.050  23.820  1.00 18.00           O  
         // Hydrophobic vs Polar/Ionic Mechanism Index
         let ami = crate::allosteric_mechanism_index(map, 999, vec![110, 130], vec![133, 134]);
         assert!(ami > -0.15 && ami < 0.15);
+    }
+
+    #[pg_test]
+    fn test_wetlab_cassette_globular_and_defluorination() {
+        // 1. Test multi-host reverse translation & exact round-trip via bio_translate_dna
+        let protein = "MFEGFERRLVDWPSTDKTKREEVD";
+        for host in &["e_coli", "s_cerevisiae", "h_salinarum", "s_acidocaldarius", "h_sapiens", "b_subtilis"] {
+            let cds = crate::bio_reverse_translate(protein, host);
+            assert_eq!(cds.len(), protein.len() * 3);
+            let roundtrip = crate::bio_translate_dna(&cds);
+            assert_eq!(roundtrip, protein, "Round-trip translation failed for host {}", host);
+
+            let cai = crate::bio_codon_adaptation_index(&cds, host);
+            assert!((cai - 1.0).abs() < 0.05, "Optimal codons for {} should have CAI ~ 1.0, got {}", host, cai);
+        }
+
+        // Verify halophile vs yeast GC bias difference
+        let cds_halo = crate::bio_reverse_translate(protein, "h_salinarum");
+        let cds_yeast = crate::bio_reverse_translate(protein, "s_cerevisiae");
+        assert!(crate::bio_gc_content(&cds_halo) > crate::bio_gc_content(&cds_yeast) + 0.15);
+
+        // 2. Test bio_design_expression_cassette
+        let cassette = crate::bio_design_expression_cassette(protein, "e_coli", "T7");
+        assert_eq!(cassette.host_organism, "e_coli");
+        assert!(cassette.length_bp > (protein.len() as i32) * 3 + 100);
+        assert!(cassette.cai_score > 0.98);
+        assert!(cassette.restriction_sites_free);
+
+        // 3. Test q1ju72_dehalogenase_hexad theozyme_rmsd
+        let q1ju72_site = vec![
+            crate::create_residue_coord(1.238, 2.722, -3.192, "ASP104:OD2"),
+            crate::create_residue_coord(2.345, -0.494, -2.097, "HIS271:NE2"),
+            crate::create_residue_coord(4.659, -0.482, 2.204, "ASP128:OD2"),
+            crate::create_residue_coord(5.305, 5.974, -5.207, "TRP150:NE1"),
+            crate::create_residue_coord(2.729, 3.340, -7.649, "TYR212:OH"),
+            crate::create_residue_coord(2.392, 6.631, -1.154, "ARG108:NH2"),
+        ];
+        let rmsd_deha = crate::theozyme_rmsd(q1ju72_site, "q1ju72_dehalogenase_hexad");
+        assert!(rmsd_deha < 1e-6);
+
+        // 4. Test evaluate_globular_compactness on compact 3D sphere-like CA trace
+        let mut pdb_lines = String::new();
+        for i in 0..30 {
+            let theta = (i as f64) * 0.45;
+            let phi = (i as f64) * 0.25;
+            let r = 8.0;
+            let x = r * theta.cos() * phi.sin();
+            let y = r * theta.sin() * phi.sin();
+            let z = r * phi.cos();
+            pdb_lines.push_str(&format!(
+                "ATOM  {:5}  CA  ALA A{:4}    {:8.3}{:8.3}{:8.3}  1.00 94.50           C  \n",
+                i + 1,
+                i + 1,
+                x,
+                y,
+                z
+            ));
+        }
+        let glob = crate::evaluate_globular_compactness(&pdb_lines);
+        assert_eq!(glob.ca_count, 30);
+        assert!((glob.mean_plddt - 94.5).abs() < 1e-3);
+        assert!(glob.is_globular);
+
+        // 5. Test simulate_defluorination_kinetics
+        let rows: Vec<_> = crate::simulate_defluorination_kinetics(10.0, 50.0, 1000.0, 5.0, 50.0, 24.0).collect();
+        assert_eq!(rows.len(), 1);
+        let (t, f_ppm, fap_mg, frac) = rows[0];
+        assert!((t - 24.0).abs() < 1e-6);
+        assert!(f_ppm > 100.0);
+        assert!(fap_mg > 2500.0);
+        assert!(frac > 0.90);
+    }
+
+    #[pg_test]
+    fn test_huckel_aromaticity_perception_and_wl_hash() {
+        // 1. Benzene: Kekule (C1=CC=CC=C1) vs Aromatic (c1ccccc1)
+        let benz_kek = crate::parse_smiles("C1=CC=CC=C1");
+        let benz_aro = crate::parse_smiles("c1ccccc1");
+        assert!(benz_kek.is_valid && benz_aro.is_valid);
+        assert_eq!(benz_kek.atoms, benz_aro.atoms);
+        assert_eq!(benz_kek.bonds, benz_aro.bonds);
+        assert_eq!(benz_kek.wl_hash, benz_aro.wl_hash);
+        assert_eq!(benz_kek.ecfp_bits, benz_aro.ecfp_bits);
+        assert!(crate::molecules_are_identical("C1=CC=CC=C1", "c1ccccc1"));
+        assert!((crate::molecule_tanimoto(benz_kek.clone(), benz_aro.clone()) - 1.0).abs() < 1e-9);
+
+        // 2. Heterocycles & lone-pair donors (Pyridine, Pyrrole, Furan, Thiophene, Imidazole, 2-Pyridone, Cyclopentadienyl anion)
+        let pairs = [
+            ("C1=CC=NC=C1", "c1ccncc1"),           // Pyridine (6 pi e-)
+            ("C1=CC=CN1", "c1cc[nH]c1"),           // Pyrrole (6 pi e-)
+            ("O1C=CC=C1", "c1ccoc1"),              // Furan (6 pi e-)
+            ("S1C=CC=C1", "c1ccsc1"),              // Thiophene (6 pi e-)
+            ("C1=CN=CN1", "c1c[nH]cn1"),           // Imidazole (6 pi e-)
+            ("O=C1C=CC=CN1", "O=c1cccc[nH]1"),     // 2-Pyridone (exocyclic C=O contributes 0 pi e-, total 6 pi e-)
+            ("[CH-]1C=CC=C1", "[cH-]1cccc1"),      // Cyclopentadienyl anion (carbanion donates 2 pi e-, total 6 pi e-)
+            ("C1=CC2=CC=CC=C2C=C1", "c1ccc2ccccc2c1"), // Naphthalene (10 pi e-)
+            ("C1=CC=C2C=CC=CC2=C1", "c1ccc2ccccc2c1"), // Naphthalene alternative Kekule resonance form
+            ("CN1C=NC2=C1C(=O)N(C(=O)N2C)C", "Cn1cnc2c1c(=O)n(C)c(=O)n2C"), // Caffeine (fused 5+6 ring with two exocyclic =O)
+            ("CC(=O)OC1=CC=CC=C1C(=O)O", "O=C(O)c1ccccc1OC(=O)C"), // Aspirin Kekule vs reversed aromatic
+        ];
+        for (kek, aro) in pairs {
+            assert_eq!(
+                crate::molecule_wl_hash(kek),
+                crate::molecule_wl_hash(aro),
+                "WL hash mismatch between {} and {}",
+                kek,
+                aro
+            );
+            assert!(
+                crate::molecules_are_identical(kek, aro),
+                "Expected molecules_are_identical({}, {}) == true",
+                kek,
+                aro
+            );
+        }
+
+        // 3. Saturated sp3 and anti-aromatic (4n) controls must NOT be normalized to aromatic
+        let cyclohexane = crate::parse_smiles("C1CCCCC1");
+        assert!(cyclohexane.atoms.iter().all(|a| !a.is_aromatic));
+        assert_ne!(cyclohexane.wl_hash, benz_aro.wl_hash);
+
+        let cyclopentadiene = crate::parse_smiles("C1=CC=CC1"); // sp3 -CH2- breaks conjugation
+        assert!(cyclopentadiene.atoms.iter().all(|a| !a.is_aromatic));
+
+        let cyclobutadiene = crate::parse_smiles("C1=CC=C1"); // 4 pi electrons (anti-aromatic 4n)
+        assert!(cyclobutadiene.atoms.iter().all(|a| !a.is_aromatic));
+
+        let cyclooctatetraene = crate::parse_smiles("C1=CC=CC=CC=C1"); // 8 pi electrons (4n, non-planar)
+        assert!(cyclooctatetraene.atoms.iter().all(|a| !a.is_aromatic));
+    }
+
+    #[pg_test]
+    fn test_vf2_subgraph_isomorphism_and_operators() {
+        let aspirin_kek = crate::parse_smiles("CC(=O)OC1=CC=CC=C1C(=O)O");
+        let aspirin_aro = crate::parse_smiles("CC(=O)Oc1ccccc1C(=O)O");
+        let benzene_kek = crate::parse_smiles("C1=CC=CC=C1");
+        let benzene_aro = crate::parse_smiles("c1ccccc1");
+        let pyridine = crate::parse_smiles("c1ccncc1");
+
+        // Kekule Aspirin contains aromatic Benzene AND Kekule Benzene
+        assert!(crate::smiles_contains(aspirin_kek.clone(), "c1ccccc1"));
+        assert!(crate::smiles_contains(aspirin_aro.clone(), "C1=CC=CC=C1"));
+        assert!(crate::smiles_contains(aspirin_aro.clone(), "C(=O)O"));
+        assert!(crate::molecule_contains_molecule(aspirin_kek.clone(), benzene_aro.clone()));
+        assert!(crate::molecule_contains_molecule(benzene_kek, benzene_aro));
+        // Aspirin does NOT contain pyridine
+        assert!(!crate::smiles_contains(aspirin_kek, "c1ccncc1"));
+        assert!(!crate::molecule_contains_molecule(aspirin_aro, pyridine));
+
+        // Verify SQL operators `@>` and `%` on Molecule via SPI
+        let contains_sql = Spi::get_one::<bool>(
+            "SELECT parse_smiles('CC(=O)OC1=CC=CC=C1C(=O)O') @> parse_smiles('c1ccccc1');"
+        ).unwrap().unwrap();
+        assert!(contains_sql);
+
+        let tanimoto_mol_sql = Spi::get_one::<f64>(
+            "SELECT parse_smiles('C1=CC=CC=C1') % parse_smiles('c1ccccc1');"
+        ).unwrap().unwrap();
+        assert!((tanimoto_mol_sql - 1.0).abs() < 1e-9);
+    }
+
+    #[pg_test]
+    fn test_salt_stripping_and_tautomer_normalization() {
+        // 1. Salt stripping + counter-ion charge neutralization
+        // Sodium acetate `CC(=O)O.[Na+]` and `CC(=O)[O-].[Na+]` normalize to Acetic acid `CC(=O)O`
+        assert!(crate::molecules_are_identical("CC(=O)O.[Na+]", "CC(=O)O"));
+        assert!(crate::molecules_are_identical("CC(=O)[O-].[Na+]", "CC(=O)O"));
+        assert!(crate::molecules_are_identical("[Na+].c1ccccc1C(=O)[O-]", "O=C(O)C1=CC=CC=C1"));
+        assert!(crate::molecules_are_identical("[NH3+]CC(=O)O.[Cl-]", "NCC(=O)O"));
+
+        // 2. 1,3-Prototropic tautomer normalization (aliphatic keto-enol & imidic-amide)
+        // Vinyl alcohol `C=CO` normalizes to Acetaldehyde `CC=O`
+        assert!(crate::molecules_are_identical("C=CO", "CC=O"));
+        // Prop-1-en-2-ol `CC(=C)O` normalizes to Acetone `CC(=O)C`
+        assert!(crate::molecules_are_identical("CC(=C)O", "CC(=O)C"));
+        // Acetimidic acid `CC(=N)O` normalizes to Acetamide `CC(=O)N`
+        assert!(crate::molecules_are_identical("CC(=N)O", "CC(=O)N"));
+        // Phenol `Oc1ccccc1` preserves aromatic ring (does NOT tautomerize to cyclohexadienone)
+        let phenol = crate::parse_smiles("Oc1ccccc1");
+        assert_eq!(phenol.atoms.iter().filter(|a| a.is_aromatic).count(), 6);
     }
 }
 

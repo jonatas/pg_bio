@@ -46,4 +46,25 @@ class EnergyDecompositionAudit:
     gas_and_polar_closed: bool
     nonpolar_closed: bool
 
+@dataclass
+class ExpressionCassette:
+    host_organism: str
+    promoter_name: str
+    coding_dna: str
+    full_plasmid_dna: str
+    length_bp: int
+    gc_content: float
+    cai_score: float
+    restriction_sites_free: bool
+
+@dataclass
+class GlobularFoldingProfile:
+    ca_count: int
+    mean_plddt: float
+    radius_of_gyration: float
+    compactness_ratio: float
+    elongation: float
+    is_globular: bool
+
+
 
