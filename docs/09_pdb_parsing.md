@@ -34,3 +34,25 @@ FROM parse_pdb_file('/path/to/protein.pdb');
 ```
 
 This bypasses massive network overhead, letting PostgreSQL act directly as a bioinformatics computing engine!
+
+## 3. Parsing PDB directly from Strings (APIs)
+If you are fetching PDB structures dynamically from an API (like ESMFold) or storing them in a TEXT column, you can use `bio_parse_pdb` to parse them entirely in memory without hitting the disk:
+
+```sql
+SELECT atom_name, res_name, res_id, x, y, z 
+FROM bio_parse_pdb('ATOM      1  N   MET A   1      27.340  24.430   2.614  1.00 49.33           N  ...');
+```
+
+## 4. Structural Alignment & RMSD
+Measuring the structural similarity between two protein folds is fundamental in structural biology. You can compute the Root Mean Square Deviation (RMSD) of two coordinate arrays natively:
+
+```sql
+WITH conf1 AS (
+    SELECT ARRAY[create_residue_coord(27.34, 24.43, 2.61, 'N')] as atoms
+),
+conf2 AS (
+    SELECT ARRAY[create_residue_coord(27.50, 24.40, 2.60, 'N')] as atoms
+)
+SELECT bio_rmsd(conf1.atoms, conf2.atoms) as rmsd_angstroms
+FROM conf1, conf2;
+```

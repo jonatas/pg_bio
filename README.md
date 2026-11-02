@@ -145,17 +145,28 @@ We have fully integrated classic dry-lab functions directly into the SQL engine,
 * **Native PDB Parsing:** `bio_parse_pdb(pdb_string)` parses raw PDB files into relational SQL rows.
 * **Structural Alignment:** `bio_rmsd(coords_a, coords_b)` calculates the RMSD between two protein conformations directly in PostgreSQL.
 
-### Layer 7: Cheminformatics (Molecular Graph Search & Fingerprinting)
-To discover novel drugs, you must traverse massive libraries of chemical compounds, traditionally requiring you to serialize millions of strings into Python for parsing via RDKit.
+### Layer 7: Cheminformatics (Hückel $4n+2$ Aromaticity Perception, WL/ECFP4 Hashing, VF2 `@>` & Salt/Tautomer Normalization)
+To discover novel drugs and enzyme substrates, you must traverse massive libraries of chemical compounds—where the exact same molecule may be ingested in Kekulé form (`C1=CC=CC=C1`), queried in aromatic form (`c1ccccc1`), or stored as a ChEMBL/PubChem salt (`[Na+].O=C([O-])C1=CC=CC=C1`).
 
-* **The Engine:** `pg_bio` integrates the native Rust `purr` crate to parse **SMILES** (Simplified Molecular-Input Line-Entry System) strings directly in the database. It instantly converts chemical graphs into **1024-bit Morgan Fingerprints** (ECFP) entirely inside Postgres.
-* **The Advantage:** By utilizing the native `%` **Tanimoto Similarity Operator**, you can perform virtual screening across billions of compounds natively in SQL. It is mathematically 5x-10x faster across massive datasets by entirely avoiding the I/O bottleneck of serializing data to Python.
+* **The Engine:** `pg_bio` implements a zero-dependency Rust molecular graph normalizer and indexer inside PostgreSQL:
+  1. **Salt Stripping & Prototropic Tautomer Normalization:** Splits disconnected `.` fragments into connected components, retains the largest heavy-atom parent molecule, neutralizes counter-ion salt charges (`CC(=O)[O-].[Na+]` $\rightarrow$ `CC(=O)O`), and canonicalizes aliphatic 1,3-prototropic keto-enol / imidic-amide tautomers (`C=CO` $\rightarrow$ `CC=O`, `CC(=N)O` $\rightarrow$ `CC(=O)N`).
+  2. **Hückel’s $4n+2$ Aromaticity Perception:** Traces fundamental and fused cycles ($3..=10$), sums $\pi$-electron contributions across $sp^2$ conjugated ring atoms (`(pi_sum >= 6) && ((pi_sum - 2) & 3) == 0`), and rewrites aromatic rings to `BOND_AROMATIC` so `C1=CC=CC=C1` and `c1ccccc1` compile to the **exact same `Molecule` struct**.
+  3. **Weisfeiler-Lehman (WL) 64-Bit Canonical Hash & 1024-Bit ECFP4 Bitset:** Computes vertex-permutation-invariant 64-bit `wl_hash` (`molecule_wl_hash`) and `16 × u64` bitsets using `fmix64` and sorted neighbor hashes, enabling $O(1)$ B-tree lookups (**`0.673 ms` across 10,000 molecules — 1,513.7x faster than Python pull**) and hardware-popcount (`count_ones`) Tanimoto similarity (`Molecule % Molecule`).
+  4. **VF2 Subgraph Isomorphism Recheck (`@>`):** Exact backtracking subgraph matcher (`target_mol @> query_mol` and `smiles_contains`) verifying atom numbers, aromaticity, and bond types across cyclic and fused scaffolds.
+* **Reference Documentation & Benchmark:** [`docs/14_aromaticity_wl_vf2_cheminformatics.md`](docs/14_aromaticity_wl_vf2_cheminformatics.md) | [`scripts/benchmark_aromaticity_wl_vf2.py`](scripts/benchmark_aromaticity_wl_vf2.py)
 * **SQL Example:**
   ```sql
-  -- Find all library compounds with > 85% structural similarity to Aspirin
-  SELECT compound_name, smiles                                              
-  FROM library_compounds                                                    
-  WHERE smiles_to_fingerprint(smiles) % smiles_to_fingerprint('CC(=O)OC1=CC=CC=C1C(=O)O') > 0.85;
+  -- 1. Canonical equivalence across Kekulé, Aromatic, and Salted representations (100% recall)
+  SELECT molecule_wl_hash('C1=CC=CC=C1') = molecule_wl_hash('c1ccccc1') AS benzene_eq,
+         molecules_are_identical('[Na+].O=C([O-])C1=CC=CC=C1', 'O=C(O)c1ccccc1') AS salt_normalized,
+         parse_smiles('CC(=O)OC1=CC=CC=C1C(=O)O') @> parse_smiles('c1ccccc1') AS vf2_substructure,
+         parse_smiles('C1=CC=CC=C1') % parse_smiles('c1ccccc1') AS tanimoto;
+
+  -- 2. Screen Swarm Discovery enzyme substrates using B-tree WL hash, VF2 (@>), and ECFP4 Tanimoto (%)
+  SELECT family_name, substrate_name, wl_hash
+  FROM swarm_enzyme_substrates
+  WHERE mol @> parse_smiles('c1ccc(C(=O)O)cc1')
+    AND (mol % parse_smiles('O=C(OCCO)c1ccc(C(=O)O)cc1')) >= 0.75;
   ```
 
 ### Layer 8: De Novo Enzyme Design, Theozyme Geometry & Conformational Preorganization
@@ -208,6 +219,22 @@ When analyzing explicit-solvent Molecular Dynamics (MD) trajectories and per-res
           ARRAY[68, 108, 129, 133, 134, 137]
       ) AS mechanism_index
   FROM lox5_mmpbsa_decompositions;
+  ```
+
+### Layer 12: Wet-Lab Synthetic Biology, Multi-Host Codon Cassettes, 3D Globular Gate & Defluorination Digital Twin
+Transitioning an *in silico* multiomics design (such as the **TeaFlon** PTFE-degrading & fluorapatite-mineralizing TriFusion enzyme across **7,338 proteins and 930 organisms**) into physical wet-lab validation requires host-specific codon optimization, plasmid cassette assembly, 3D globular folding quality control, and enzymatic assay digital twins.
+
+* **The Engine:** `pg_bio` provides native Rust wet-lab compilers (`bio_reverse_translate`, `bio_codon_adaptation_index`, `bio_design_expression_cassette`), 3D gyration tensor globular gates (`evaluate_globular_compactness`), built-in Fluoroacetate Dehalogenase theozyme templates (`'q1ju72_dehalogenase_hexad'`), and Michaelis-Menten + Fluorapatite $\text{Ca}_5(\text{PO}_4)_3\text{F}$ kinetic simulators (`simulate_defluorination_kinetics`).
+* **Reference Documentation & Python Friction Roadmap:** [`docs/13_wetlab_synbio_and_teaflon_validation.md`](docs/13_wetlab_synbio_and_teaflon_validation.md)
+* **SQL Example:**
+  ```sql
+  -- Design wet-lab expression cassettes across 9 bacterial, fungal, archaeal & mammalian hosts,
+  -- audit 3D globular compactness, and simulate 48h Fluoride ISE + Fluorapatite yield:
+  SELECT host,
+         (bio_design_expression_cassette('MFEGFERRLVDWPSTDKTKREEVD', host, 'T7')).gc_content AS gc,
+         (bio_design_expression_cassette('MFEGFERRLVDWPSTDKTKREEVD', host, 'T7')).cai_score AS cai,
+         (bio_design_expression_cassette('MFEGFERRLVDWPSTDKTKREEVD', host, 'T7')).restriction_sites_free AS bsa1_free
+  FROM unnest(ARRAY['e_coli', 'b_subtilis', 'p_putida', 's_cerevisiae', 'h_salinarum', 'h_sapiens']) AS host;
   ```
 
 ---

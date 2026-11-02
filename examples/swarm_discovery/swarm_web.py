@@ -248,6 +248,11 @@ HTML_TEMPLATE = """
             // Track the active node from mouseover to be used by mousemove
             var hoveredNode = null;
 
+            // Clear any previous listeners from earlier loadData() calls
+            chart.off('mouseover');
+            chart.off('mouseout');
+            chart.off('click');
+
             chart.on('mouseover', function(params) {
                 if (params.componentType === 'xAxis' || params.componentType === 'yAxis') {
                     hoveredNode = data.nodes.find(n => n.id === params.value);
@@ -262,26 +267,26 @@ HTML_TEMPLATE = """
                 }
             });
 
-            // Make tooltip follow the mouse and stay within bounds
-            document.addEventListener('mousemove', function(e) {
-                if (hoveredNode && axisTooltip.style.display === 'block') {
-                    let tooltipRect = axisTooltip.getBoundingClientRect();
-                    let x = e.clientX + 15;
-                    let y = e.clientY + 15;
+            if (!window._axisMouseMoveBound) {
+                window._axisMouseMoveBound = true;
+                document.addEventListener('mousemove', function(e) {
+                    if (hoveredNode && axisTooltip.style.display === 'block') {
+                        let tooltipRect = axisTooltip.getBoundingClientRect();
+                        let x = e.clientX + 15;
+                        let y = e.clientY + 15;
 
-                    // Prevent clipping on the right edge
-                    if (x + tooltipRect.width > window.innerWidth) {
-                        x = e.clientX - tooltipRect.width - 10;
-                    }
-                    // Prevent clipping on the bottom edge
-                    if (y + tooltipRect.height > window.innerHeight) {
-                        y = e.clientY - tooltipRect.height - 10;
-                    }
+                        if (x + tooltipRect.width > window.innerWidth) {
+                            x = e.clientX - tooltipRect.width - 10;
+                        }
+                        if (y + tooltipRect.height > window.innerHeight) {
+                            y = e.clientY - tooltipRect.height - 10;
+                        }
 
-                    axisTooltip.style.left = x + 'px';
-                    axisTooltip.style.top = y + 'px';
-                }
-            });
+                        axisTooltip.style.left = x + 'px';
+                        axisTooltip.style.top = y + 'px';
+                    }
+                });
+            }
 
             chart.on('mouseout', function(params) {
                 if (params.componentType === 'xAxis' || params.componentType === 'yAxis') {
@@ -291,6 +296,10 @@ HTML_TEMPLATE = """
             });
             
             chart.on('click', function(params) {
+                if (params.componentType === 'xAxis' || params.componentType === 'yAxis') {
+                    window.open('https://www.uniprot.org/uniprotkb/' + params.value + '/entry', '_blank');
+                    return;
+                }
                 if (params.componentType !== 'series' || !params.value) return;
                 
                 let id1 = labels[params.value[0]];
@@ -357,6 +366,21 @@ HTML_TEMPLATE = """
             }
 
             function openModal(id1, id2, distance, node1, node2) {
+                let reqId = (window.currentCompareReqId || 0) + 1;
+                window.currentCompareReqId = reqId;
+
+                // Reset split view if previous modal was in merged mode
+                isMerged = false;
+                let v2Box = document.querySelector('#viewer2').parentNode;
+                let v2Title = document.getElementById('v2-title');
+                v2Box.style.display = 'block';
+                document.querySelector('#viewer1').parentNode.style.width = '50%';
+                document.getElementById('v1-title').style.maxWidth = '85%';
+                v2Title.style.right = 'auto';
+                v2Title.style.left = '10px';
+                v2Title.style.maxWidth = '85%';
+                v2Box.insertBefore(v2Title, document.getElementById('viewer2'));
+
                 // Update URL
                 let newUrl = new URL(window.location);
                 newUrl.searchParams.set('node1', id1);
@@ -383,17 +407,31 @@ HTML_TEMPLATE = """
                 globalV2 = v2;
 
                 fetch(`/api/compare/${id1}/${id2}`).then(r => r.json()).then(comp => {
+                    if (reqId !== window.currentCompareReqId) return;
                     if (comp.error) {
                         document.getElementById('alignment-metrics-bar').innerHTML = `<span style="color:#ff5555">Error: ${comp.error}</span>`;
                         return;
                     }
                     let al = comp.alignment;
+                    window.currentAlignment = al;
+                    let tmVal = parseFloat(al.tm_score);
+                    let foldBadge = tmVal >= 0.50
+                        ? `<b style="color:#4ade80">✔ Same Global 3D Fold (Sequential Kabsch)</b>`
+                        : (tmVal >= 0.25
+                            ? `<b style="color:#facc15">⚠ Partial Motif / Domain Match (TM=${al.tm_score})</b>`
+                            : `<b style="color:#f87171">✖ Different 3D Fold Topology (Only ${al.aligned_residues} CA local motif)</b>`);
+                    let chemPill = '';
+                    if (comp.substrate_cheminfo && comp.substrate_cheminfo.substrate_name) {
+                        let sc = comp.substrate_cheminfo;
+                        chemPill = `<span class="metric-pill" title="Ingested: ${sc.ingested_smiles} | Canonical: ${sc.canonical_smiles} | Warhead: ${sc.warhead_smiles}">⚗️ Substrate (<code>${sc.family_name}</code>): <b>${sc.substrate_name}</b> | WL64: <code>${sc.wl_hash}</code> | Hückel 4n+2 Kekulé==Arom: <b style="color:#4ade80">✔</b> | VF2 Warhead (<code>@> ${sc.warhead_smiles}</code>): <b style="color:#4ade80">✔</b></span>`;
+                    }
                     document.getElementById('alignment-metrics-bar').innerHTML = `
                         <span class="metric-pill">3D Core RMSD: <b>${al.core_rmsd} Å</b> (${al.aligned_residues} CA atoms)</span>
-                        <span class="metric-pill">TM-Score: <b>${al.tm_score}</b></span>
+                        <span class="metric-pill">Sequential TM-Score: <b>${al.tm_score}</b></span>
                         <span class="metric-pill">Smith-Waterman (<code>pg_bio</code>): <b>${al.sw_score}</b></span>
                         <span class="metric-pill">Tri-peptide Cosine Dist: <b>${al.esm_kmer_dist}</b></span>
-                        <span class="metric-pill">3D Orientation: <b style="color:#4ade80">✔ Kabsch Superimposed</b></span>
+                        <span class="metric-pill">3D Assessment: ${foldBadge}</span>
+                        ${chemPill}
                     `;
                     document.getElementById('v1-title').innerHTML = formatMetadataCard(node1, comp.meta1, 'cyan');
                     document.getElementById('v2-title').innerHTML = formatMetadataCard(node2, comp.meta2, 'magenta');
@@ -427,12 +465,6 @@ HTML_TEMPLATE = """
                     sync();
                 });
             }
-            // Cross-link over the Heatmap Axis Labels!
-            chart.on('click', function(params) {
-                if (params.componentType === 'xAxis' || params.componentType === 'yAxis') {
-                    window.open('https://www.uniprot.org/uniprotkb/' + params.value + '/entry', '_blank');
-                }
-            });
         }); // End of fetch
 
         } // End of loadData
@@ -444,32 +476,57 @@ HTML_TEMPLATE = """
         function toggleMergeView() {
             if(!globalV1 || !globalV2 || !window.currentPdb1 || !window.currentPdb2) return;
             isMerged = !isMerged;
+            let v1Box = document.querySelector('#viewer1').parentNode;
+            let v2Box = document.querySelector('#viewer2').parentNode;
+            let v2Title = document.getElementById('v2-title');
             
             if (isMerged) {
-                // Hide viewer 2, expand viewer 1
-                document.querySelector('#viewer2').parentNode.style.display = 'none';
-                document.querySelector('#viewer1').parentNode.style.width = '100%';
+                // Hide viewer 2 box, expand viewer 1 box to 100%, and dock v2-title on top-right of viewer 1
+                v2Box.style.display = 'none';
+                v1Box.style.width = '100%';
+                document.getElementById('v1-title').style.maxWidth = '46%';
+                v2Title.style.left = 'auto';
+                v2Title.style.right = '10px';
+                v2Title.style.maxWidth = '46%';
+                v1Box.appendChild(v2Title);
                 
                 globalV1.clear();
-                // Load both into viewer 1 for Superposition
                 globalV1.addModel(window.currentPdb1, "pdb");
                 globalV1.addModel(window.currentPdb2, "pdb");
                 
-                globalV1.setStyle({model: 0}, {cartoon: {color: "cyan"}});
-                globalV1.setStyle({model: 1}, {cartoon: {color: "magenta"}});
-                globalV1.zoomTo();
+                let al = window.currentAlignment || {};
+                if (al.res1_core && al.res1_core.length >= 8 && parseFloat(al.tm_score) < 0.75) {
+                    globalV1.setStyle({model: 0}, {cartoon: {color: "cyan", opacity: 0.22}});
+                    globalV1.setStyle({model: 1}, {cartoon: {color: "magenta", opacity: 0.22}});
+                    globalV1.setStyle({model: 0, resi: al.res1_core}, {cartoon: {color: "cyan", opacity: 1.0}});
+                    globalV1.setStyle({model: 1, resi: al.res2_core}, {cartoon: {color: "magenta", opacity: 1.0}});
+                    globalV1.zoomTo({model: 0, resi: al.res1_core});
+                    globalV1.zoom(0.75);
+                } else {
+                    globalV1.setStyle({model: 0}, {cartoon: {color: "cyan", opacity: 0.9}});
+                    globalV1.setStyle({model: 1}, {cartoon: {color: "magenta", opacity: 0.9}});
+                    globalV1.zoomTo();
+                }
+                globalV1.resize();
                 globalV1.render();
             } else {
-                // Restore split view
-                document.querySelector('#viewer2').parentNode.style.display = 'block';
-                document.querySelector('#viewer1').parentNode.style.width = '50%';
+                // Restore split view and return v2-title to viewer 2 box
+                v2Box.style.display = 'block';
+                v1Box.style.width = '50%';
+                document.getElementById('v1-title').style.maxWidth = '85%';
+                v2Title.style.right = 'auto';
+                v2Title.style.left = '10px';
+                v2Title.style.maxWidth = '85%';
+                v2Box.insertBefore(v2Title, document.getElementById('viewer2'));
                 
                 globalV1.clear();
                 globalV1.addModel(window.currentPdb1, "pdb");
                 globalV1.setStyle({}, {cartoon: {color: "cyan"}});
+                globalV1.resize();
                 globalV1.zoomTo();
                 globalV1.render();
                 
+                globalV2.resize();
                 globalV2.zoomTo();
                 globalV2.render();
             }
@@ -599,18 +656,19 @@ def get_pdb(uniprot_id):
 
 def kabsch_superpose_pdb(pdb_ref, pdb_mov):
     def get_ca(pdb_str):
-        coords, bfacs = [], []
+        coords, resi, bfacs = [], [], []
         for l in pdb_str.splitlines():
             if l.startswith("ATOM") and l[12:16].strip() == "CA":
                 coords.append([float(l[30:38]), float(l[38:46]), float(l[46:54])])
+                resi.append(int(l[22:26]))
                 b = float(l[60:66])
                 bfacs.append(b * 100.0 if b <= 1.0 else b)
-        return np.array(coords), (np.mean(bfacs) if bfacs else 0.0)
+        return np.array(coords), np.array(resi), (np.mean(bfacs) if bfacs else 0.0)
 
-    c1, plddt1 = get_ca(pdb_ref)
-    c2, plddt2 = get_ca(pdb_mov)
+    c1, r1, plddt1 = get_ca(pdb_ref)
+    c2, r2, plddt2 = get_ca(pdb_mov)
     if len(c1) < 5 or len(c2) < 5:
-        return pdb_mov, 0.0, 0.0, 0, plddt1, plddt2
+        return pdb_mov, 0.0, 0.0, 0, plddt1, plddt2, [], []
 
     def fit_kabsch(P, Q):
         cP, cQ = P.mean(axis=0), Q.mean(axis=0)
@@ -621,46 +679,140 @@ def kabsch_superpose_pdb(pdb_ref, pdb_mov):
         R = U @ np.diag([1.0, 1.0, d]) @ Vt
         return R, cP, cQ
 
+    def tangents(c):
+        t = np.zeros_like(c)
+        if len(c) > 2:
+            t[1:-1] = c[2:] - c[:-2]
+            t[0] = c[1] - c[0]
+            t[-1] = c[-1] - c[-2]
+        norms = np.linalg.norm(t, axis=1, keepdims=True) + 1e-8
+        return t / norms
+
+    def internal_fp(c):
+        idx = np.arange(len(c))
+        fps = []
+        for d in (-4, -3, -2, -1, 1, 2, 3, 4):
+            j = np.clip(idx + d, 0, len(c) - 1)
+            fps.append(np.linalg.norm(c[idx] - c[j], axis=1))
+        return np.stack(fps, axis=1)
+
     n1, n2 = len(c1), len(c2)
     L = min(n1, n2)
     d0 = max(1.24 * ((L - 15) ** (1.0 / 3.0)) - 1.8, 0.5) if L > 15 else 0.5
-    best_tm = -1.0
-    best_transform = (np.eye(3), np.zeros(3), np.zeros(3))
-    best_stats = (9.99, 0.0, L)
+    t1 = tangents(c1)
+    t2 = tangents(c2)
 
     import scipy.spatial.distance
-    w = min(60, L)
+    fp_dist = scipy.spatial.distance.cdist(internal_fp(c1), internal_fp(c2), metric='cityblock')
+
     seeds = [(0, 0, L)]
-    for i in range(0, n1 - w + 1, max(15, w // 3)):
-        for j in range(max(0, i - 30), min(n2 - w + 1, i + 31), 5):
-            seeds.append((i, j, w))
+    for w in (min(24, L), min(48, L), min(80, L)):
+        if w < 8:
+            continue
+        best_diags = []
+        for diag in range(-n1 + w, n2 - w + 1, 2):
+            d_vals = np.diagonal(fp_dist, offset=diag)
+            if len(d_vals) >= w:
+                cs = np.concatenate([[0.0], np.cumsum(d_vals)])
+                w_sums = cs[w:] - cs[:-w]
+                s_idx = int(np.argmin(w_sums))
+                i1 = s_idx if diag >= 0 else s_idx - diag
+                i2 = s_idx + diag if diag >= 0 else s_idx
+                best_diags.append((w_sums[s_idx] / w, i1, i2, w))
+        best_diags.sort(key=lambda x: x[0])
+        for _, i1, i2, win in best_diags[:10]:
+            seeds.append((i1, i2, win))
+
+    best_score = -1.0
+    best_transform = (np.eye(3), np.zeros(3), np.zeros(3))
+    best_stats = (9.99, 0.0, 0, [], [])
 
     for i1, i2, win in seeds:
         R, cP, cQ = fit_kabsch(c1[i1:i1+win], c2[i2:i2+win])
-        for cutoff in (7.0, 4.5, 3.0):
+        for cutoff in (6.0, 4.0, 3.0):
             c2_al = (c2 - cQ) @ R + cP
+            t2_al = t2 @ R
             D = scipy.spatial.distance.cdist(c1, c2_al)
-            idx2 = np.argmin(D, axis=1)
-            min_d = D[np.arange(n1), idx2]
-            mask = min_d < cutoff
-            if mask.sum() >= max(15, int(0.15 * L)):
-                R, cP, cQ = fit_kabsch(c1[mask], c2[idx2[mask]])
+            dir_cos = np.clip(t1 @ t2_al.T, 0.0, 1.0)
+            S = (dir_cos ** 1.5) / (1.0 + (D / d0) ** 2)
+            j_for_i = np.argmax(S, axis=1)
+            i_for_j = np.argmax(S, axis=0)
+            mutual = (i_for_j[j_for_i] == np.arange(n1)) & (S[np.arange(n1), j_for_i] > 0.15)
+            m_i = np.where(mutual)[0]
+            m_j = j_for_i[m_i]
+            if len(m_i) >= 8:
+                scores = S[m_i, m_j]
+                dp = scores.copy()
+                prev = np.full(len(m_i), -1, dtype=int)
+                for a in range(len(m_i)):
+                    valid = (m_j[:a] < m_j[a]) & ((m_i[a] - m_i[:a]) <= 40) & ((m_j[a] - m_j[:a]) <= 40)
+                    if np.any(valid):
+                        cand = np.where(valid)[0]
+                        best_p = cand[np.argmax(dp[cand])]
+                        dp[a] += dp[best_p]
+                        prev[a] = best_p
+                cur = int(np.argmax(dp))
+                chain = []
+                while cur != -1:
+                    chain.append(cur)
+                    cur = prev[cur]
+                chain.reverse()
+                idx1, idx2 = m_i[chain], m_j[chain]
+                d_al = D[idx1, idx2]
+                mask = d_al < cutoff
+                if mask.sum() >= 8:
+                    R, cP, cQ = fit_kabsch(c1[idx1[mask]], c2[idx2[mask]])
+
         c2_al = (c2 - cQ) @ R + cP
+        t2_al = t2 @ R
         D = scipy.spatial.distance.cdist(c1, c2_al)
-        min_d = np.min(D, axis=1)
-        tm = float(np.sum(1.0 / (1.0 + (min_d / d0) ** 2)) / L)
-        core_mask = min_d < 3.5
-        if core_mask.sum() >= 10:
-            n_core = int(core_mask.sum())
-            core_rmsd = float(np.sqrt(np.mean(min_d[core_mask] ** 2)))
-        else:
-            top_k = np.sort(min_d)[:max(10, int(0.4 * L))]
-            n_core = len(top_k)
-            core_rmsd = float(np.sqrt(np.mean(top_k ** 2)))
-        if tm > best_tm:
-            best_tm = tm
-            best_transform = (R, cP, cQ)
-            best_stats = (core_rmsd, tm, n_core)
+        dir_cos = np.clip(t1 @ t2_al.T, 0.0, 1.0)
+        S = (dir_cos ** 1.5) / (1.0 + (D / d0) ** 2)
+        j_for_i = np.argmax(S, axis=1)
+        i_for_j = np.argmax(S, axis=0)
+        mutual = (i_for_j[j_for_i] == np.arange(n1)) & (S[np.arange(n1), j_for_i] > 0.12)
+        m_i = np.where(mutual)[0]
+        m_j = j_for_i[m_i]
+        if len(m_i) >= 8:
+            scores = 1.0 / (1.0 + (D[m_i, m_j] / d0) ** 2)
+            dp = scores.copy()
+            prev = np.full(len(m_i), -1, dtype=int)
+            for a in range(len(m_i)):
+                valid = (m_j[:a] < m_j[a])
+                if np.any(valid):
+                    cand = np.where(valid)[0]
+                    best_p = cand[np.argmax(dp[cand])]
+                    dp[a] += dp[best_p]
+                    prev[a] = best_p
+            cur = int(np.argmax(dp))
+            chain = []
+            while cur != -1:
+                chain.append(cur)
+                cur = prev[cur]
+            chain.reverse()
+            idx1, idx2 = m_i[chain], m_j[chain]
+            d_al = D[idx1, idx2]
+            tm = float(np.sum(1.0 / (1.0 + (d_al / d0) ** 2)) / L)
+            core = d_al < 3.8
+            if core.sum() >= 8:
+                # Re-fit R strictly on the core residues so the aligned motif locks cleanly
+                R_c, cP_c, cQ_c = fit_kabsch(c1[idx1[core]], c2[idx2[core]])
+                c2_core = (c2[idx2[core]] - cQ_c) @ R_c + cP_c
+                rmsd = float(np.sqrt(np.mean(np.sum((c1[idx1[core]] - c2_core) ** 2, axis=1))))
+                n_c = int(core.sum())
+                res1_core = r1[idx1[core]].tolist()
+                res2_core = r2[idx2[core]].tolist()
+                R, cP, cQ = R_c, cP_c, cQ_c
+            else:
+                rmsd = float(np.sqrt(np.mean(d_al ** 2)))
+                n_c = len(d_al)
+                res1_core = r1[idx1].tolist()
+                res2_core = r2[idx2].tolist()
+            rank_score = tm + 0.002 * n_c
+            if rank_score > best_score:
+                best_score = rank_score
+                best_transform = (R, cP, cQ)
+                best_stats = (rmsd, tm, n_c, res1_core, res2_core)
 
     R, cP, cQ = best_transform
     out_lines = []
@@ -670,7 +822,7 @@ def kabsch_superpose_pdb(pdb_ref, pdb_mov):
             new_xyz = (xyz - cQ) @ R + cP
             line = f"{line[:30]}{new_xyz[0]:8.3f}{new_xyz[1]:8.3f}{new_xyz[2]:8.3f}{line[54:]}"
         out_lines.append(line)
-    return "\n".join(out_lines), best_stats[0], best_stats[1], best_stats[2], plddt1, plddt2
+    return "\n".join(out_lines), best_stats[0], best_stats[1], best_stats[2], plddt1, plddt2, best_stats[3], best_stats[4]
 
 @app.route('/api/compare/<id1>/<id2>')
 def compare_proteins(id1, id2):
@@ -679,7 +831,7 @@ def compare_proteins(id1, id2):
     if s1 != 200 or s2 != 200:
         return jsonify({'error': f'Could not load 3D structure ({id1}: {s1}, {id2}: {s2})'}), 500
 
-    pdb2_aligned, core_rmsd, tm_score, n_core, plddt1, plddt2 = kabsch_superpose_pdb(pdb1, pdb2)
+    pdb2_aligned, core_rmsd, tm_score, n_core, plddt1, plddt2, res1_core, res2_core = kabsch_superpose_pdb(pdb1, pdb2)
 
     conn = psycopg.connect(DB_URI)
     cur = conn.cursor()
@@ -734,19 +886,106 @@ def compare_proteins(id1, id2):
     m1.pop('seq', None)
     m2.pop('seq', None)
 
+    substrate_cheminfo = None
+    try:
+        cur.execute("""
+            SELECT family_name
+            FROM orphan_discoveries
+            WHERE orphan_id IN (%s, %s) OR bait_id IN (%s, %s)
+            ORDER BY id DESC
+            LIMIT 1;
+        """, (id1, id2, id1, id2))
+        fam_row = cur.fetchone()
+        if fam_row and fam_row[0]:
+            cur.execute("""
+                SELECT family_name,
+                       substrate_name,
+                       ingested_kekule_or_salt_smiles,
+                       canonical_query_smiles,
+                       warhead_substructure_smiles,
+                       catalytic_role,
+                       wl_hash::text,
+                       molecules_are_identical(ingested_kekule_or_salt_smiles, canonical_query_smiles) AS kek_eq,
+                       (mol @> parse_smiles(warhead_substructure_smiles)) AS vf2_ok,
+                       (mol %% parse_smiles(canonical_query_smiles)) AS tanimoto
+                FROM swarm_enzyme_substrates
+                WHERE LOWER(family_name) = LOWER(%s)
+                LIMIT 1;
+            """, (fam_row[0],))
+            srow = cur.fetchone()
+            if srow:
+                substrate_cheminfo = {
+                    'family_name': srow[0],
+                    'substrate_name': srow[1],
+                    'ingested_smiles': srow[2],
+                    'canonical_smiles': srow[3],
+                    'warhead_smiles': srow[4],
+                    'catalytic_role': srow[5],
+                    'wl_hash': srow[6],
+                    'kekule_aromatic_match': bool(srow[7]),
+                    'vf2_warhead_match': bool(srow[8]),
+                    'ecfp4_tanimoto': round(float(srow[9]), 4)
+                }
+    except Exception:
+        conn.rollback()
+
     return jsonify({
         'pdb1': pdb1,
         'pdb2_aligned': pdb2_aligned,
         'meta1': m1,
         'meta2': m2,
+        'substrate_cheminfo': substrate_cheminfo,
         'alignment': {
             'core_rmsd': f"{core_rmsd:.2f}",
             'tm_score': f"{tm_score:.3f}",
             'aligned_residues': n_core,
             'sw_score': sw_score,
-            'esm_kmer_dist': f"{esm_kmer_dist:.4f}"
+            'esm_kmer_dist': f"{esm_kmer_dist:.4f}",
+            'res1_core': res1_core,
+            'res2_core': res2_core
         }
     })
+
+@app.route('/api/cheminfo')
+def query_cheminfo():
+    from flask import request
+    q_smiles = request.args.get('smiles', 'c1ccccc1')
+    conn = psycopg.connect(DB_URI)
+    cur = conn.cursor()
+    cur.execute("""
+        WITH q AS (
+            SELECT parse_smiles(%s) AS qmol,
+                   molecule_wl_hash(%s) AS qhash
+        )
+        SELECT s.family_name,
+               s.substrate_name,
+               s.ingested_kekule_or_salt_smiles,
+               s.canonical_query_smiles,
+               s.warhead_substructure_smiles,
+               s.catalytic_role,
+               s.wl_hash::text,
+               (s.wl_hash = q.qhash) AS exact_wl_match,
+               (s.mol @> q.qmol) AS vf2_substructure_match,
+               (s.mol %% q.qmol) AS ecfp4_tanimoto
+        FROM swarm_enzyme_substrates s, q
+        WHERE (s.mol @> q.qmol) OR (s.mol %% q.qmol) > 0.15
+        ORDER BY exact_wl_match DESC, vf2_substructure_match DESC, ecfp4_tanimoto DESC;
+    """, (q_smiles, q_smiles))
+    matches = []
+    for r in cur.fetchall():
+        matches.append({
+            'family_name': r[0],
+            'substrate_name': r[1],
+            'ingested_smiles': r[2],
+            'canonical_smiles': r[3],
+            'warhead_smiles': r[4],
+            'catalytic_role': r[5],
+            'wl_hash': r[6],
+            'exact_wl_match': bool(r[7]),
+            'vf2_substructure_match': bool(r[8]),
+            'ecfp4_tanimoto': round(float(r[9]), 4),
+        })
+    return jsonify({'query_smiles': q_smiles, 'matches': matches})
 
 @app.route('/api/data')
 def get_data():
