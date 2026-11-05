@@ -1,0 +1,2 @@
+User notified to check the arXiv API Terms of Use at https://info.arxiv.org/help/api/index.html and to always check the license of the papers retrieved by the skill for any restrictions.
+Timestamp: 2026-11-04T18:36:10-03:00
