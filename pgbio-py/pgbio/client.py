@@ -9,6 +9,13 @@ from .models import (
     EnergyDecompositionAudit,
     ExpressionCassette,
     GlobularFoldingProfile,
+    RasaProfile,
+    HBondAudit,
+    ChaperoneEvaluation,
+    ChaperoneCoreExampleAudit,
+    LigandProperties,
+    RangeFinderPocket,
+    RangeFinderEvaluation,
 )
 
 class PgBioClient:
@@ -584,6 +591,214 @@ class PgBioClient:
                     "fluorapatite_mg_per_l": float(row[2]),
                     "fractional_conversion": float(row[3]),
                 }
+
+    def calculate_rasa(self, pdb_text: str, probe_radius: float = 1.4) -> RasaProfile:
+        """
+        Computes Shrake-Rupley SASA and Tien (2013) Relative Accessible Surface Area (RASA)
+        natively in Rust inside PostgreSQL (Chaperone `rasa` block).
+        """
+        query = "SELECT bio_rasa(%s, %s)::text;"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (pdb_text, probe_radius))
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return RasaProfile(**data)
+
+    def audit_hydrogen_bonds(
+        self, pdb_text: str, binder_chain: str = "A", target_chain: str = "B"
+    ) -> HBondAudit:
+        """
+        Audits the 3D Hydrogen-Bond network (backbone, sidechain, cross-interface) and counts
+        Buried Unsatisfied Polar Atoms (BUNS) natively in PostgreSQL (Chaperone `hbond` block).
+        """
+        query = "SELECT audit_hydrogen_bonds(%s, %s, %s)::text;"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (pdb_text, binder_chain, target_chain))
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return HBondAudit(**data)
+
+    def evaluate_chaperone_design(
+        self,
+        candidate_pdb: str,
+        reference_backbone_pdb: str,
+        binder_chain: str = "A",
+        target_chain: str = "B",
+    ) -> ChaperoneEvaluation:
+        """
+        Executes Chaperone's post-oracle evaluation suite (`rmsd` + `rasa` + `hbond` + `globular`)
+        in a single fused Rust pass inside PostgreSQL.
+        """
+        query = "SELECT evaluate_chaperone_design(%s, %s, %s, %s)::text;"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (candidate_pdb, reference_backbone_pdb, binder_chain, target_chain),
+                )
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return ChaperoneEvaluation(**data)
+
+    def compute_chaperone_lineage_hash(
+        self, stage_name: str, parent_id: str, sequence: str, cycle_num: int = 0
+    ) -> str:
+        """
+        Generates a deterministic content-addressable lineage node ID for Chaperone
+        PipelineDataHandler rows across multi-stage workflows and cycles.
+        """
+        query = "SELECT chaperone_lineage_hash(%s, %s, %s, %s);"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (stage_name, parent_id, sequence, cycle_num))
+                row = cur.fetchone()
+                return str(row[0]) if row else ""
+
+    def list_chaperone_core_examples(self) -> List[dict]:
+        """
+        Returns the 8 official RosettaCommons Chaperone Core Examples
+        (`nanoparticle-design`, `peptide-binder`, `cortisol-binder`, `dna-binder`,
+        `enzyme-glycosidase`, `enzyme-protease`, `ribozyme-hammerhead`, `multi-mpnn`)
+        with their ready-to-evaluate 3D reference and candidate PDB structures.
+        """
+        query = """
+            SELECT example_name, category, pipeline_blocks, target_modality,
+                   binder_chain, target_chain, ligand_smiles, sequence,
+                   reference_pdb, candidate_pdb
+            FROM chaperone_core_examples();
+        """
+        results = []
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                for row in cur.fetchall():
+                    results.append(
+                        {
+                            "example_name": row[0],
+                            "category": row[1],
+                            "pipeline_blocks": row[2],
+                            "target_modality": row[3],
+                            "binder_chain": row[4],
+                            "target_chain": row[5],
+                            "ligand_smiles": row[6],
+                            "sequence": row[7],
+                            "reference_pdb": row[8],
+                            "candidate_pdb": row[9],
+                        }
+                    )
+        return results
+
+    def evaluate_chaperone_core_example(
+        self,
+        example_name: str,
+        candidate_pdb: str,
+        reference_pdb: str,
+        ligand_smiles: str = "",
+    ) -> ChaperoneCoreExampleAudit:
+        """
+        Evaluates any of the 8 official RosettaCommons Chaperone Core Examples natively in PostgreSQL.
+        """
+        query = "SELECT evaluate_chaperone_core_example(%s, %s, %s, %s)::text;"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (example_name, candidate_pdb, reference_pdb, ligand_smiles),
+                )
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return ChaperoneCoreExampleAudit(**data)
+
+    def compute_ligand_properties(self, smiles: str) -> LigandProperties:
+        """
+        Computes the 9 RangeFinder physicochemical properties (MW, logP, HBD, HBA, TPSA,
+        rotatable bonds, formal charge, aromatic rings, Fsp3) directly from a SMILES string in Rust.
+        """
+        query = "SELECT compute_ligand_properties(%s)::text;"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (smiles,))
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return LigandProperties(**data)
+
+    def predict_pocket_ranges(
+        self,
+        pocket_id: str,
+        pdb_text: str,
+        center_x: float,
+        center_y: float,
+        center_z: float,
+        radius_angstroms: float = 10.0,
+    ) -> RangeFinderPocket:
+        """
+        Predicts the 9 RangeFinder ligand property intervals [mu - 2|sigma|, mu + 2|sigma|]
+        and aromatic presence probability directly from a 10 Å protein pocket in PDB format.
+        """
+        query = "SELECT predict_pocket_ranges(%s, %s, %s, %s, %s, %s)::text;"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (pocket_id, pdb_text, center_x, center_y, center_z, radius_angstroms),
+                )
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return RangeFinderPocket(**data)
+
+    def empirical_pocket_ranges(
+        self, pocket_id: str, smiles_list: List[str]
+    ) -> RangeFinderPocket:
+        """
+        Computes empirical RangeFinder target intervals [mu - 2*sigma, mu + 2*sigma]
+        over a list of known binding ligands for a pocket.
+        """
+        query = "SELECT empirical_pocket_ranges(%s, %s::text[])::text;"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (pocket_id, smiles_list))
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return RangeFinderPocket(**data)
+
+    def evaluate_rangefinder_screening(
+        self,
+        pocket_id: str,
+        true_binder_smiles: List[str],
+        background_library_smiles: List[str],
+        include_formal_charge: bool = False,
+    ) -> RangeFinderEvaluation:
+        """
+        Evaluates a RangeFinder pocket's Range-IoU, GIoU loss, Library Reduction (1/r_p),
+        Recall, and Reduction-Recall F-Score (RRF) inside PostgreSQL.
+        """
+        query = """
+            SELECT evaluate_rangefinder_screening(
+                empirical_pocket_ranges(%s, %s::text[]),
+                %s::text[],
+                %s::text[],
+                %s
+            )::text;
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (
+                        pocket_id,
+                        true_binder_smiles,
+                        true_binder_smiles,
+                        background_library_smiles,
+                        include_formal_charge,
+                    ),
+                )
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return RangeFinderEvaluation(**data)
+
+
 
 
 
