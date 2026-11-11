@@ -4,6 +4,16 @@
 
 It is engineered for a single purpose: to completely eradicate the data bottlenecks in modern biology by pushing complex multiomics mathematics *directly into the database engine*. By unifying Genomics, Proteomics, and Transcriptomics into a shared computational space, `pg_bio` allows scientists to execute entire drug discovery pipelines and synthetic biology designs in milliseconds natively in SQL.
 
+> **🎬 Interactive Video Series & 3D Studio: "Hello World, `pg_bio`!"**
+> New to computational biology or multiomics in PostgreSQL? Explore our narrated 1080p video series paired with interactive **3Dmol.js** structures and **Systems Engineer $\leftrightarrow$ Structural Biologist** Rosetta Stone lenses:
+> * 🌐 **Live 3D Video Library on `ideia.me`:** [https://ideia.me/pg-bio-videos/](https://ideia.me/pg-bio-videos/)
+> * 🗂️ **Local Video & 3D Studio Catalog:** [`videos/README.md`](videos/README.md) · [`videos/series_01_hello_world_pg_bio/index.html`](videos/series_01_hello_world_pg_bio/index.html)
+> * **Episodes:**
+>   1. [**Ep 01: The Central Dogma in SQL (`int4range` GiST & Sequence Physics)**](videos/series_01_hello_world_pg_bio/ep01_central_dogma_and_genomics/studio_deck.html) — [MP4](videos/series_01_hello_world_pg_bio/ep01_central_dogma_and_genomics/ep01_central_dogma_and_genomics.mp4) · [SQL](videos/series_01_hello_world_pg_bio/ep01_central_dogma_and_genomics/live_demo.sql)
+>   2. [**Ep 02: From 1D Strings to 3D Atoms with Morton Curves (`z_order_encode` & SVD)**](videos/series_01_hello_world_pg_bio/ep02_3d_pockets_and_morton_curves/studio_deck.html) — [MP4](videos/series_01_hello_world_pg_bio/ep02_3d_pockets_and_morton_curves/ep02_3d_pockets_and_morton_curves.mp4) · [SQL](videos/series_01_hello_world_pg_bio/ep02_3d_pockets_and_morton_curves/live_demo.sql)
+>   3. [**Ep 03: Transcriptomics & CSR Sparse Attention Graphs (`SparseAttentionMap`)**](videos/series_01_hello_world_pg_bio/ep03_scrna_csr_and_attention_maps/studio_deck.html) — [MP4](videos/series_01_hello_world_pg_bio/ep03_scrna_csr_and_attention_maps/ep03_scrna_csr_and_attention_maps.mp4) · [SQL](videos/series_01_hello_world_pg_bio/ep03_scrna_csr_and_attention_maps/live_demo.sql)
+>   4. [**Ep 04: The Multiomics Holy Grail — Vectors & Live UniProt (`halfvec` HNSW)**](videos/series_01_hello_world_pg_bio/ep04_joint_vector_multiomics/studio_deck.html) — [MP4](videos/series_01_hello_world_pg_bio/ep04_joint_vector_multiomics/ep04_joint_vector_multiomics.mp4) · [SQL](videos/series_01_hello_world_pg_bio/ep04_joint_vector_multiomics/live_demo.sql)
+
 ---
 
 ## 🛑 The Data Bottleneck in Modern Biology
