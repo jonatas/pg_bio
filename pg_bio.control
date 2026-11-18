@@ -4,4 +4,4 @@ module_pathname = 'pg_bio'
 relocatable = false
 superuser = true
 trusted = false
-requires = 'vector'
+requires = 'vector, pg_vectorsearch'

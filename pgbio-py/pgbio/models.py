@@ -189,6 +189,23 @@ class RangeFinderEvaluation:
     rrf_score: float
 
 
+@dataclass
+class VectorIndexRecommendation:
+    row_count: int
+    dim: int
+    column_type: str
+    requires_storage_plain: bool
+    hnsw_est_mb: float
+    ivfflat_est_mb: float
+    prism_default_est_mb: float
+    prism_compact_est_mb: float
+    memory_reduction_factor: float
+    recommended_access_method: str
+    recommended_opclass: str
+    recommended_nlist: int
+    recommended_nprobe: int
+
+
 
 
 

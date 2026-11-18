@@ -32,17 +32,18 @@ def init_db():
     with psycopg.connect(DB_URI) as conn:
         with conn.cursor() as cur:
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            cur.execute("CREATE EXTENSION IF NOT EXISTS pg_vectorsearch;")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS proteins (
                     uniprot_id VARCHAR(15) PRIMARY KEY,
                     name TEXT NOT NULL,
                     sequence TEXT NOT NULL,
-                    embedding halfvec(1280) NOT NULL
+                    embedding halfvec(1280) STORAGE PLAIN NOT NULL
                 );
             """)
             
-            # Create HNSW Index BEFORE insertion so it updates incrementally across batches
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_protein_embedding ON proteins USING hnsw (embedding halfvec_cosine_ops);")
+            # Create PRISM Index (pg_vectorsearch) on existing halfvec(1280) column
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_protein_embedding ON proteins USING prism (embedding vec16_cosine_ops);")
 
 def load_checkpoint():
     if os.path.exists(CHECKPOINT_FILE):
