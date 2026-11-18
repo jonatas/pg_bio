@@ -16,6 +16,7 @@ from .models import (
     LigandProperties,
     RangeFinderPocket,
     RangeFinderEvaluation,
+    VectorIndexRecommendation,
 )
 
 class PgBioClient:
@@ -25,9 +26,10 @@ class PgBioClient:
     def _get_conn(self):
         return psycopg.connect(self.conn_string)
 
-    def find_homologues(self, query_sequence: str, limit: int = 5) -> List[Protein]:
+    def find_homologues(self, query_sequence: str, limit: int = 5, nprobe: int = 40) -> List[Protein]:
         """
-        Find proteins with similar ESM embeddings natively in the database using the HNSW `<=>` operator.
+        Find proteins with similar ESM embeddings natively in the database using PRISM (`pg_vectorsearch`)
+        or HNSW (`pgvector`) `<=>` cosine distance.
         """
         query = """
             SELECT uniprot_id, name, sequence, 
@@ -40,6 +42,7 @@ class PgBioClient:
         results = []
         with self._get_conn() as conn:
             with conn.cursor() as cur:
+                cur.execute("SELECT set_config('prism.nprobe', %s, true);", (str(nprobe),))
                 cur.execute(query, (query_sequence, query_sequence, limit))
                 for row in cur.fetchall():
                     results.append(Protein(
@@ -797,6 +800,25 @@ class PgBioClient:
                 row = cur.fetchone()
                 data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
                 return RangeFinderEvaluation(**data)
+
+    def evaluate_vector_index_tier(
+        self,
+        row_count: int,
+        dim: int = 1280,
+        use_halfvec: bool = True,
+        ram_budget_mb: int = 8192,
+    ) -> VectorIndexRecommendation:
+        """
+        Evaluates whether a biological vector table should use pgvector HNSW or pg_vectorsearch PRISM,
+        and calculates TOAST STORAGE PLAIN requirements and index footprint estimates.
+        """
+        query = "SELECT evaluate_vector_index_tier(%s, %s, %s, %s)::text;"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (row_count, dim, use_halfvec, ram_budget_mb))
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return VectorIndexRecommendation(**data)
 
 
 

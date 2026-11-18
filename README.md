@@ -71,14 +71,18 @@ To understand drug dosage, scientists use Single-Cell RNA-Seq. Humans have 20,00
 * **The Engine:** Because a single cell only expresses ~2,000 genes at a time, the matrix is 85%+ zeroes. `pg_bio` implements **Compressed Sparse Row (CSR)** architecture natively using parallel PostgreSQL Arrays (`expressed_gene_ids INT[]` and `expression_counts REAL[]`).
 * **The Advantage:** Storage overhead is slashed by 90%. Using parallel `LATERAL UNNEST() WITH ORDINALITY`, PostgreSQL unpacks the sparse data dynamically in execution memory to calculate highly precise RNA dosage levels in milliseconds.
 
-### Layer 4: Joint Vector Spaces (The Cross-Omic Holy Grail)
+### Layer 4: Joint Vector Spaces (`pg_vectorsearch` PRISM + `pgvector` `halfvec(1280) STORAGE PLAIN`)
 Traditionally, DNA sequences and 3D Protein folds live in different worlds. `pg_bio` breaks down that wall.
 
-* **The Engine:** By utilizing `pgvector` alongside `pg_bio`, we map the outputs of Genomic Foundation Models (like Enformer) and Proteomic Foundation Models (like ESM-2) into a **shared 1280-dimensional mathematical space**.
-* **The Advantage:** For the first time, you can execute cross-domain queries. You can ask the database to mathematically link a physical DNA regulatory enhancer directly to a 3D Protein structure using Cosine Distance (`<=>`).
+* **The Engine:** By combining Tiger Data's [`pg_vectorsearch`](https://github.com/timescale/pg_vectorsearch) **PRISM** index access method (1-bit RaBitQ quantization with theoretical error bounds, SOAR spill-orthogonal assignment, and hierarchical centroid routing) with `pgvector`'s `halfvec(1280) STORAGE PLAIN` columns and `pg_bio`'s `<~>` hybrid Smith-Waterman operator, we map Genomic Foundation Models (like Enformer) and Proteomic Foundation Models (like ESM-2) into a **shared 1280-dimensional mathematical space**.
+* **The Advantage:** Across **2,340,766** UniProt proteins, PRISM shrinks the vector index by **9.72×** (`8,772 MB` HNSW $\rightarrow$ `902 MB` PRISM), saves **7.65 GiB** of total disk/RAM, builds in **3.08 minutes** (down from 27 hours), and accelerates `<=>` cosine and `<~>` hybrid homology searches by **7.5× to 11.3×** (`26–37 ms` vs `197–417 ms`).
+* **Reference Documentation & Benchmark:** [`docs/16_pg_vectorsearch_vs_pgvector_benchmark.md`](docs/16_pg_vectorsearch_vs_pgvector_benchmark.md) | [`scripts/setup_and_benchmark_parallel_2m_proteome.py`](scripts/setup_and_benchmark_parallel_2m_proteome.py)
 * **SQL Example:**
   ```sql
-  -- Find which DNA enhancer matches the structural embedding of the P0DPB7 Protein
+  -- Build a 902 MB PRISM index over 2.34M 1280-D protein embeddings in ~3 minutes:
+  CREATE INDEX idx_proteins_prism_embedding ON proteins USING prism (embedding vec16_cosine_ops);
+
+  -- Find which DNA enhancer matches the structural embedding of the P0DPB7 Protein:
   SELECT dna.locus, (dna.embedding <=> protein.embedding) as cross_omic_distance
   FROM dna_embeddings dna, proteins protein
   WHERE protein.uniprot_id = 'P0DPB7'

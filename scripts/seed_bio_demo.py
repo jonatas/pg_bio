@@ -180,6 +180,7 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
         with conn.cursor() as cur:
             print("Installing our custom pg_bio extension...")
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            cur.execute("CREATE EXTENSION IF NOT EXISTS pg_vectorsearch;")
             cur.execute("CREATE EXTENSION IF NOT EXISTS pg_bio;")
             
             # 1. Create Tables
@@ -188,7 +189,7 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
                     uniprot_id VARCHAR(20) PRIMARY KEY,
                     name TEXT,
                     sequence TEXT,
-                    embedding halfvec(1280)
+                    embedding halfvec(1280) STORAGE PLAIN
                 );
             """)
             
@@ -202,9 +203,9 @@ def setup_schema_and_seed(source, organism_id, organism_raw, limit):
             """)
             
             # Create Indices BEFORE insertion so they update incrementally across batches
-            print("Ensuring spatial Z-Order index and HNSW vector index exist...")
+            print("Ensuring spatial Z-Order index and PRISM vector index exist...")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_spatial_z_order ON protein_atoms (z_index);")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_protein_embedding ON proteins USING hnsw (embedding halfvec_cosine_ops);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_protein_embedding ON proteins USING prism (embedding vec16_cosine_ops);")
 
             # 2. Download Data
             inserted_count = 0

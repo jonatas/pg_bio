@@ -1,0 +1,359 @@
+{
+  "sample_size": 50000,
+  "num_queries": 25,
+  "storage_comparison": {
+    "external_default": {
+      "main_mb": 21.73,
+      "toast_mb": 130.36,
+      "table_total_mb": 154.32
+    },
+    "plain_inline": {
+      "main_mb": 130.21,
+      "toast_mb": 22.71,
+      "table_total_mb": 155.16
+    },
+    "prism_external_build_s": 6.87,
+    "prism_external_p50_ms": 4.83,
+    "prism_external_mean_ms": 5.33
+  },
+  "brute_force": {
+    "mean_ms": 117.51,
+    "p50_ms": 118.44
+  },
+  "indexes": {
+    "prism_default": {
+      "build_time_s": 3.18,
+      "size_mb": 19.87,
+      "settings": {
+        "dim": {
+          "setting": "1280",
+          "source": "column"
+        },
+        "metric": {
+          "setting": "cosine",
+          "source": "opclass"
+        },
+        "nlist": {
+          "setting": "225",
+          "source": "auto"
+        },
+        "fan_out": {
+          "setting": "15",
+          "source": "auto"
+        },
+        "nlevels": {
+          "setting": "2",
+          "source": "derived"
+        },
+        "target_pages": {
+          "setting": "3",
+          "source": "default"
+        },
+        "target_entries": {
+          "setting": "256",
+          "source": "derived"
+        },
+        "centroid_pages": {
+          "setting": "16",
+          "source": "maintained"
+        },
+        "first_posting": {
+          "setting": "17",
+          "source": "derived"
+        },
+        "posting_pages": {
+          "setting": "2526",
+          "source": "derived"
+        },
+        "centroid_format": {
+          "setting": "fastscan",
+          "source": "auto"
+        },
+        "fastscan": {
+          "setting": "on",
+          "source": "auto"
+        },
+        "soar_lambda": {
+          "setting": "1",
+          "source": "default"
+        },
+        "boundary_epsilon": {
+          "setting": "0.35",
+          "source": "default"
+        },
+        "kmeans_nredo": {
+          "setting": "1",
+          "source": "default"
+        },
+        "distance_mode": {
+          "setting": "asymmetric",
+          "source": "default"
+        },
+        "nprobe": {
+          "setting": "20",
+          "source": "session"
+        }
+      }
+    },
+    "prism_compact": {
+      "build_time_s": 2.7,
+      "size_mb": 11.38
+    },
+    "ivfflat": {
+      "build_time_s": 44.89,
+      "size_mb": 131.88
+    },
+    "hnsw": {
+      "build_time_s": 63.23,
+      "size_mb": 195.16
+    }
+  },
+  "query_sweeps": [
+    {
+      "mean_ms": 1.42,
+      "p50_ms": 1.36,
+      "p95_ms": 1.98,
+      "qps": 705.5,
+      "recall_at_10": 36.8,
+      "recall_at_50": 24.48,
+      "index": "prism_default",
+      "param": "nprobe=2",
+      "label": "PRISM (default, nprobe=2)"
+    },
+    {
+      "mean_ms": 1.57,
+      "p50_ms": 1.51,
+      "p95_ms": 2.17,
+      "qps": 636.3,
+      "recall_at_10": 56.4,
+      "recall_at_50": 42.08,
+      "index": "prism_default",
+      "param": "nprobe=5",
+      "label": "PRISM (default, nprobe=5)"
+    },
+    {
+      "mean_ms": 1.51,
+      "p50_ms": 1.38,
+      "p95_ms": 2.07,
+      "qps": 660.9,
+      "recall_at_10": 74.4,
+      "recall_at_50": 59.84,
+      "index": "prism_default",
+      "param": "nprobe=0",
+      "label": "PRISM (default, nprobe=auto=20)"
+    },
+    {
+      "mean_ms": 1.67,
+      "p50_ms": 1.67,
+      "p95_ms": 2.04,
+      "qps": 599.9,
+      "recall_at_10": 88.4,
+      "recall_at_50": 78.08,
+      "index": "prism_default",
+      "param": "nprobe=20",
+      "label": "PRISM (default, nprobe=20)"
+    },
+    {
+      "mean_ms": 2.16,
+      "p50_ms": 1.9,
+      "p95_ms": 3.53,
+      "qps": 462.6,
+      "recall_at_10": 98.4,
+      "recall_at_50": 93.52,
+      "index": "prism_default",
+      "param": "nprobe=40",
+      "label": "PRISM (default, nprobe=40)"
+    },
+    {
+      "mean_ms": 2.95,
+      "p50_ms": 2.75,
+      "p95_ms": 4.2,
+      "qps": 339.2,
+      "recall_at_10": 99.2,
+      "recall_at_50": 97.92,
+      "index": "prism_default",
+      "param": "nprobe=60",
+      "label": "PRISM (default, nprobe=60)"
+    },
+    {
+      "mean_ms": 1.92,
+      "p50_ms": 1.74,
+      "p95_ms": 3.34,
+      "qps": 521.8,
+      "recall_at_10": 32.4,
+      "recall_at_50": 27.04,
+      "index": "prism_compact",
+      "param": "nprobe=5",
+      "label": "PRISM (compact, nprobe=5)"
+    },
+    {
+      "mean_ms": 2.02,
+      "p50_ms": 1.88,
+      "p95_ms": 2.7,
+      "qps": 495.7,
+      "recall_at_10": 48.4,
+      "recall_at_50": 39.84,
+      "index": "prism_compact",
+      "param": "nprobe=0",
+      "label": "PRISM (compact, nprobe=auto)"
+    },
+    {
+      "mean_ms": 2.71,
+      "p50_ms": 2.52,
+      "p95_ms": 5.38,
+      "qps": 368.7,
+      "recall_at_10": 68.8,
+      "recall_at_50": 56.32,
+      "index": "prism_compact",
+      "param": "nprobe=20",
+      "label": "PRISM (compact, nprobe=20)"
+    },
+    {
+      "mean_ms": 4.17,
+      "p50_ms": 3.85,
+      "p95_ms": 7.22,
+      "qps": 240.0,
+      "recall_at_10": 85.2,
+      "recall_at_50": 76.64,
+      "index": "prism_compact",
+      "param": "nprobe=40",
+      "label": "PRISM (compact, nprobe=40)"
+    },
+    {
+      "mean_ms": 5.75,
+      "p50_ms": 5.01,
+      "p95_ms": 10.16,
+      "qps": 173.8,
+      "recall_at_10": 9.6,
+      "recall_at_50": 7.28,
+      "index": "ivfflat",
+      "param": "probes=1",
+      "label": "pgvector IVFFlat (probes=1)"
+    },
+    {
+      "mean_ms": 10.04,
+      "p50_ms": 10.28,
+      "p95_ms": 14.69,
+      "qps": 99.6,
+      "recall_at_10": 33.2,
+      "recall_at_50": 23.12,
+      "index": "ivfflat",
+      "param": "probes=5",
+      "label": "pgvector IVFFlat (probes=5)"
+    },
+    {
+      "mean_ms": 12.84,
+      "p50_ms": 12.91,
+      "p95_ms": 16.83,
+      "qps": 77.9,
+      "recall_at_10": 50.4,
+      "recall_at_50": 37.2,
+      "index": "ivfflat",
+      "param": "probes=10",
+      "label": "pgvector IVFFlat (probes=10)"
+    },
+    {
+      "mean_ms": 18.72,
+      "p50_ms": 17.37,
+      "p95_ms": 26.16,
+      "qps": 53.4,
+      "recall_at_10": 66.8,
+      "recall_at_50": 52.96,
+      "index": "ivfflat",
+      "param": "probes=20",
+      "label": "pgvector IVFFlat (probes=20)"
+    },
+    {
+      "mean_ms": 23.09,
+      "p50_ms": 22.43,
+      "p95_ms": 26.47,
+      "qps": 43.3,
+      "recall_at_10": 80.8,
+      "recall_at_50": 70.8,
+      "index": "ivfflat",
+      "param": "probes=40",
+      "label": "pgvector IVFFlat (probes=40)"
+    },
+    {
+      "mean_ms": 3.65,
+      "p50_ms": 3.78,
+      "p95_ms": 4.47,
+      "qps": 274.3,
+      "recall_at_10": 86.8,
+      "recall_at_50": 18.08,
+      "index": "hnsw",
+      "param": "ef_search=10",
+      "label": "pgvector HNSW (ef_search=10)"
+    },
+    {
+      "mean_ms": 8.15,
+      "p50_ms": 8.75,
+      "p95_ms": 9.62,
+      "qps": 122.7,
+      "recall_at_10": 96.0,
+      "recall_at_50": 77.84,
+      "index": "hnsw",
+      "param": "ef_search=40",
+      "label": "pgvector HNSW (ef_search=40)"
+    },
+    {
+      "mean_ms": 13.22,
+      "p50_ms": 13.56,
+      "p95_ms": 15.25,
+      "qps": 75.6,
+      "recall_at_10": 98.4,
+      "recall_at_50": 94.8,
+      "index": "hnsw",
+      "param": "ef_search=100",
+      "label": "pgvector HNSW (ef_search=100)"
+    },
+    {
+      "mean_ms": 26.76,
+      "p50_ms": 26.83,
+      "p95_ms": 29.65,
+      "qps": 37.4,
+      "recall_at_10": 99.6,
+      "recall_at_50": 98.72,
+      "index": "hnsw",
+      "param": "ef_search=200",
+      "label": "pgvector HNSW (ef_search=200)"
+    }
+  ],
+  "hybrid_pg_bio": {
+    "prism_nprobe5": {
+      "mean_ms": 14.0,
+      "p50_ms": 12.59,
+      "hybrid_recall_at_5": 45.33
+    },
+    "prism_auto": {
+      "mean_ms": 14.03,
+      "p50_ms": 11.97,
+      "hybrid_recall_at_5": 64.0
+    },
+    "prism_nprobe30": {
+      "mean_ms": 16.96,
+      "p50_ms": 17.59,
+      "hybrid_recall_at_5": 78.67
+    },
+    "ivfflat_probes10": {
+      "mean_ms": 27.33,
+      "p50_ms": 24.87,
+      "hybrid_recall_at_5": 40.0
+    },
+    "hnsw_ef40": {
+      "mean_ms": 28.03,
+      "p50_ms": 28.02,
+      "hybrid_recall_at_5": 81.33
+    },
+    "hnsw_ef100": {
+      "mean_ms": 30.55,
+      "p50_ms": 28.63,
+      "hybrid_recall_at_5": 85.33
+    },
+    "hnsw_ef200": {
+      "mean_ms": 42.97,
+      "p50_ms": 42.35,
+      "hybrid_recall_at_5": 86.67
+    }
+  }
+}

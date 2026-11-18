@@ -1,0 +1,185 @@
+{
+  "row_count": 2340766,
+  "copy_time_s": 180.74,
+  "pkey_analyze_time_s": 116.11,
+  "prism_build_time_s": 184.68,
+  "prism_settings": {
+    "dim": {
+      "setting": "1280",
+      "source": "column"
+    },
+    "metric": {
+      "setting": "cosine",
+      "source": "opclass"
+    },
+    "nlist": {
+      "setting": "9216",
+      "source": "auto"
+    },
+    "fan_out": {
+      "setting": "96",
+      "source": "auto"
+    },
+    "nlevels": {
+      "setting": "2",
+      "source": "derived"
+    },
+    "target_pages": {
+      "setting": "3",
+      "source": "default"
+    },
+    "target_entries": {
+      "setting": "256",
+      "source": "derived"
+    },
+    "centroid_pages": {
+      "setting": "291",
+      "source": "maintained"
+    },
+    "first_posting": {
+      "setting": "292",
+      "source": "derived"
+    },
+    "posting_pages": {
+      "setting": "115197",
+      "source": "derived"
+    },
+    "centroid_format": {
+      "setting": "fastscan",
+      "source": "auto"
+    },
+    "fastscan": {
+      "setting": "on",
+      "source": "auto"
+    },
+    "soar_lambda": {
+      "setting": "1",
+      "source": "default"
+    },
+    "boundary_epsilon": {
+      "setting": "0.35",
+      "source": "default"
+    },
+    "kmeans_nredo": {
+      "setting": "1",
+      "source": "default"
+    },
+    "distance_mode": {
+      "setting": "asymmetric",
+      "source": "default"
+    },
+    "nprobe": {
+      "setting": "48",
+      "source": "auto"
+    }
+  },
+  "storage": {
+    "proteins_hnsw_external": {
+      "table_name": "proteins",
+      "index_name": "idx_protein_embedding",
+      "main_heap_mb": 1053.66,
+      "toast_heap_mb": 6112.26,
+      "vector_index_mb": 8772.13,
+      "all_indexes_mb": 8833.37,
+      "total_footprint_mb": 16101.81,
+      "est_rows": 2340054
+    },
+    "proteins_prism_plain": {
+      "table_name": "proteins_prism",
+      "index_name": "idx_proteins_prism_embedding",
+      "main_heap_mb": 6095.75,
+      "toast_heap_mb": 1105.83,
+      "vector_index_mb": 902.26,
+      "all_indexes_mb": 963.47,
+      "total_footprint_mb": 8266.57,
+      "est_rows": 2340766
+    },
+    "index_size_reduction_factor": 9.72,
+    "total_disk_saved_mb": 7835.24
+  },
+  "ann_top10_runs": {
+    "proteins_hnsw": {
+      "ef_40": {
+        "p50_ms": 197.22,
+        "mean_ms": 186.97,
+        "p95_ms": 232.6,
+        "qps": 5.3,
+        "avg_top10_cosine_dist": 0.067983,
+        "avg_buffer_blocks_hit_or_read": 3304.2
+      },
+      "ef_100": {
+        "p50_ms": 417.31,
+        "mean_ms": 397.82,
+        "p95_ms": 522.27,
+        "qps": 2.5,
+        "avg_top10_cosine_dist": 0.067326,
+        "avg_buffer_blocks_hit_or_read": 6706.2
+      },
+      "ef_200": {
+        "p50_ms": 784.42,
+        "mean_ms": 773.63,
+        "p95_ms": 926.89,
+        "qps": 1.3,
+        "avg_top10_cosine_dist": 0.066825,
+        "avg_buffer_blocks_hit_or_read": 12123.4
+      }
+    },
+    "proteins_prism": {
+      "nprobe_10": {
+        "p50_ms": 9.27,
+        "mean_ms": 8.56,
+        "p95_ms": 12.16,
+        "qps": 116.8,
+        "avg_top10_cosine_dist": 0.071182,
+        "avg_buffer_blocks_hit_or_read": 525.2
+      },
+      "nprobe_0": {
+        "p50_ms": 26.33,
+        "mean_ms": 25.21,
+        "p95_ms": 39.61,
+        "qps": 39.7,
+        "avg_top10_cosine_dist": 0.067944,
+        "avg_buffer_blocks_hit_or_read": 1994.4
+      },
+      "nprobe_40": {
+        "p50_ms": 20.26,
+        "mean_ms": 18.57,
+        "p95_ms": 27.0,
+        "qps": 53.8,
+        "avg_top10_cosine_dist": 0.068154,
+        "avg_buffer_blocks_hit_or_read": 1764
+      },
+      "nprobe_80": {
+        "p50_ms": 37.05,
+        "mean_ms": 33.31,
+        "p95_ms": 47.7,
+        "qps": 30.0,
+        "avg_top10_cosine_dist": 0.067319,
+        "avg_buffer_blocks_hit_or_read": 2932.4
+      }
+    },
+    "top10_agreement_pct": 87.67
+  },
+  "hybrid_pg_bio_2m": {
+    "hnsw_ef40": {
+      "p50_ms": 313.6,
+      "mean_ms": 295.14,
+      "avg_top1_hybrid_score": 0.28165
+    },
+    "hnsw_ef100": {
+      "p50_ms": 589.52,
+      "mean_ms": 594.75,
+      "avg_top1_hybrid_score": 0.28068
+    },
+    "prism_auto": {
+      "p50_ms": 141.71,
+      "mean_ms": 153.65,
+      "avg_top1_hybrid_score": 0.27906
+    },
+    "prism_nprobe40": {
+      "p50_ms": 141.56,
+      "mean_ms": 151.67,
+      "avg_top1_hybrid_score": 0.27931
+    }
+  }
+}
