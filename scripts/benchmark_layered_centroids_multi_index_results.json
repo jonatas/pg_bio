@@ -1,0 +1,86 @@
+{
+  "experiment_1_morton_3d_octree": {
+    "dataset_atoms": 200000,
+    "num_queries": 20,
+    "naive_1range": {
+      "p50_ms": 6.25,
+      "mean_ms": 9.89,
+      "avg_candidates_scanned": 30181
+    },
+    "layered_octree_24ranges": {
+      "p50_ms": 1.64,
+      "mean_ms": 2.33,
+      "avg_candidates_scanned": 545.8,
+      "candidate_reduction_factor": 55.3,
+      "speedup_p50": 3.82,
+      "speedup_mean": 4.25,
+      "recall_pct": 100.0
+    },
+    "layered_octree_64ranges": {
+      "p50_ms": 0.98,
+      "mean_ms": 0.96,
+      "avg_candidates_scanned": 407.6,
+      "candidate_reduction_factor": 74.05,
+      "speedup_p50": 6.38,
+      "speedup_mean": 10.25,
+      "recall_pct": 100.0
+    }
+  },
+  "experiment_2_ecfp4_fastscan_tanimoto": {
+    "dataset_molecules": 10000,
+    "tanimoto_threshold": 0.7,
+    "baseline_full_scan": {
+      "p50_ms": 529.65,
+      "mean_ms": 528.65,
+      "molecules_evaluated": 10000.0
+    },
+    "register_fastscan_exact": {
+      "p50_ms": 16.98,
+      "mean_ms": 16.55,
+      "avg_survivors_rechecked": 11.2,
+      "pruned_pct": 99.89,
+      "speedup_p50": 31.19,
+      "recall_pct": 100.0
+    },
+    "layered_centroid_soar_register": {
+      "p50_ms": 3.35,
+      "mean_ms": 3.35,
+      "avg_survivors_rechecked": 6.7,
+      "pruned_pct": 99.93,
+      "speedup_p50": 158.15,
+      "recall_pct": 75.17
+    }
+  },
+  "experiment_3_rangefinder_9d_pockets": {
+    "dataset_pockets": 4856,
+    "num_centroid_clusters": 37,
+    "baseline_composite_scan": {
+      "p50_ms": 103.13,
+      "mean_ms": 103.67
+    },
+    "register_fastscan_100pct": {
+      "p50_ms": 7.79,
+      "mean_ms": 7.52,
+      "speedup_p50": 13.24,
+      "recall_at_10_pct": 100.0
+    },
+    "layered_envelope_nprobe2": {
+      "p50_ms": 5.05,
+      "mean_ms": 4.78,
+      "speedup_p50": 20.42,
+      "recall_at_10_pct": 96.5
+    },
+    "layered_envelope_nprobe4": {
+      "p50_ms": 5.79,
+      "mean_ms": 5.64,
+      "speedup_p50": 17.82,
+      "recall_at_10_pct": 97.5
+    },
+    "layered_envelope_nprobe8": {
+      "p50_ms": 6.8,
+      "mean_ms": 6.7,
+      "speedup_p50": 15.16,
+      "recall_at_10_pct": 99.5
+    }
+  }
+}

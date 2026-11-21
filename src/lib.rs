@@ -6798,6 +6798,884 @@ $$;
     requires = [pocket_matches_ligand, pocket_interval_bounds]
 );
 
+// =====================================================================
+// 16. PG_VECTORSEARCH-INSPIRED LAYERED CENTROIDS & ERROR-BOUNDED FASTSCAN
+//     FOR 3D MORTON OCTREES, 1024-BIT ECFP4 TANIMOTO & 9D POCKETS
+// =====================================================================
+
+/// 16A. Layered 3D Morton Octree Centroid Router with Sphere-Cube Lower & Upper Error Bounds.
+/// Inspired by `pg_vectorsearch` (`centroid_search.c`): instead of a flat 1D `[min_z, max_z]` range
+/// that scans 80-95% of the B-tree whenever a 3D sphere crosses an octree boundary plane (e.g. x=0, y=0, z=0),
+/// this function descends the 21-level 3D Morton octree top-down:
+/// - Prunes any octant whose minimum Euclidean distance to `(center_x, center_y, center_z)` exceeds `radius`
+///   (`d_min > R`, 0% false negatives, 100% mathematical recall).
+/// - Flags any octant whose maximum Euclidean distance is within `radius` (`d_max <= R`) as `fully_contained = true`,
+///   allowing SQL queries to skip the Pythagorean `sqrt()` heap recheck on interior atoms.
+/// - Refines boundary octants best-first up to `max_ranges` and merges contiguous Z-order intervals.
+#[pg_extern(immutable, parallel_safe)]
+pub fn z_order_layered_sphere_ranges(
+    center_x: f64,
+    center_y: f64,
+    center_z: f64,
+    radius: f64,
+    max_ranges: i32,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(z_min, i64),
+        name!(z_max, i64),
+        name!(fully_contained, bool),
+    ),
+> {
+    let r = radius.max(0.0);
+    let r_sq = r * r;
+    let target_ranges = (max_ranges.clamp(1, 512)) as usize;
+
+    #[derive(Clone, Copy)]
+    struct OctNode {
+        shift: u32, // 0..=21 (number of unfixed bit planes per axis)
+        bx: u64,    // base x in 0..2^21 (shifted by `shift`)
+        by: u64,
+        bz: u64,
+        fully_contained: bool,
+    }
+
+    impl OctNode {
+        #[inline]
+        fn z_interval(&self) -> (i64, i64) {
+            let z0 = (split_by_3(self.bx) | (split_by_3(self.by) << 1) | (split_by_3(self.bz) << 2)) as i64;
+            let span_bits = 3 * self.shift;
+            let mask: i64 = if span_bits >= 63 {
+                i64::MAX
+            } else if span_bits == 0 {
+                0
+            } else {
+                (1i64 << span_bits) - 1
+            };
+            (z0, z0 | mask)
+        }
+    }
+
+    // Physical coordinate mapping matches z_order_encode:
+    // scaled = ((v.clamp(-500.0, 500.0) + 500.0) * 1000.0) as u64 & 0x1FFFFF
+    // Therefore integer u in [0, 2097151] maps to physical interval [(u as f64)/1000.0 - 500.0, ((u + 1) as f64)/1000.0 - 500.0].
+    let cube_dist_bounds_sq = |bx: u64, by: u64, bz: u64, shift: u32| -> (f64, f64) {
+        let size = 1u64 << shift;
+        let x0 = (bx as f64) / 1000.0 - 500.0;
+        let x1 = ((bx + size) as f64) / 1000.0 - 500.0;
+        let y0 = (by as f64) / 1000.0 - 500.0;
+        let y1 = ((by + size) as f64) / 1000.0 - 500.0;
+        let z0 = (bz as f64) / 1000.0 - 500.0;
+        let z1 = ((bz + size) as f64) / 1000.0 - 500.0;
+
+        let dx_min = if center_x < x0 {
+            x0 - center_x
+        } else if center_x > x1 {
+            center_x - x1
+        } else {
+            0.0
+        };
+        let dy_min = if center_y < y0 {
+            y0 - center_y
+        } else if center_y > y1 {
+            center_y - y1
+        } else {
+            0.0
+        };
+        let dz_min = if center_z < z0 {
+            z0 - center_z
+        } else if center_z > z1 {
+            center_z - z1
+        } else {
+            0.0
+        };
+        let d_min_sq = dx_min * dx_min + dy_min * dy_min + dz_min * dz_min;
+
+        let dx_max = (center_x - x0).abs().max((center_x - x1).abs());
+        let dy_max = (center_y - y0).abs().max((center_y - y1).abs());
+        let dz_max = (center_z - z0).abs().max((center_z - z1).abs());
+        let d_max_sq = dx_max * dx_max + dy_max * dy_max + dz_max * dz_max;
+
+        (d_min_sq, d_max_sq)
+    };
+
+    let mut frontier: Vec<OctNode> = vec![OctNode {
+        shift: 21,
+        bx: 0,
+        by: 0,
+        bz: 0,
+        fully_contained: false,
+    }];
+    let mut accepted_interior: Vec<OctNode> = Vec::new();
+
+    // Choose adaptive leaf shift so octree cell width (~2^shift * 0.001 Å) is ~ radius / 3.5 (at least shift 8 = 0.256 Å)
+    let ideal_cell_angstroms = (r / 3.5).max(0.256);
+    let min_shift = ((ideal_cell_angstroms * 1000.0).log2().floor() as u32).clamp(8, 16);
+
+    // Descend level-by-level from level 21 down to min_shift
+    for _level in ((min_shift + 1)..=21).rev() {
+        if frontier.is_empty() {
+            break;
+        }
+        // Safety ceiling so pathological huge radii never allocate more than 2048 active frontier cubes
+        if frontier.len() > 2048 {
+            break;
+        }
+
+        let mut next_frontier = Vec::with_capacity(frontier.len() * 4);
+        for node in &frontier {
+            if node.shift <= min_shift {
+                next_frontier.push(*node);
+                continue;
+            }
+            let child_shift = node.shift - 1;
+            let step = 1u64 << child_shift;
+            for oct in 0..8u64 {
+                let cbx = node.bx + ((oct & 1) * step);
+                let cby = node.by + (((oct >> 1) & 1) * step);
+                let cbz = node.bz + (((oct >> 2) & 1) * step);
+
+                // Clamp to valid [0, 1_001_000] physical coordinate space
+                if cbx > 1_001_000 || cby > 1_001_000 || cbz > 1_001_000 {
+                    continue;
+                }
+
+                let (d_min_sq, d_max_sq) = cube_dist_bounds_sq(cbx, cby, cbz, child_shift);
+                if d_min_sq > r_sq {
+                    // RaBitQ-style Lower Error Bound Pruning: 100% of this octant is outside the sphere!
+                    continue;
+                }
+                if d_max_sq <= r_sq {
+                    // Upper Error Bound Guarantee: 100% of this octant is inside the sphere!
+                    accepted_interior.push(OctNode {
+                        shift: child_shift,
+                        bx: cbx,
+                        by: cby,
+                        bz: cbz,
+                        fully_contained: true,
+                    });
+                } else {
+                    next_frontier.push(OctNode {
+                        shift: child_shift,
+                        bx: cbx,
+                        by: cby,
+                        bz: cbz,
+                        fully_contained: false,
+                    });
+                }
+            }
+        }
+        frontier = next_frontier;
+    }
+
+    let mut raw_intervals: Vec<(i64, i64, bool)> = Vec::with_capacity(accepted_interior.len() + frontier.len());
+    for node in accepted_interior.into_iter().chain(frontier.into_iter()) {
+        let (z0, z1) = node.z_interval();
+        raw_intervals.push((z0, z1, node.fully_contained));
+    }
+    raw_intervals.sort_by_key(|r| r.0);
+
+    // 1. Merge directly contiguous intervals with compatible containment flags
+    let mut merged: Vec<(i64, i64, bool)> = Vec::with_capacity(raw_intervals.len());
+    for (z0, z1, fc) in raw_intervals {
+        if let Some(last) = merged.last_mut() {
+            if z0 <= last.1 + 1 && last.2 == fc {
+                last.1 = last.1.max(z1);
+                continue;
+            } else if z0 <= last.1 + 1 {
+                // Merge adjacent interior + boundary into a conservative boundary range
+                last.1 = last.1.max(z1);
+                last.2 = last.2 && fc;
+                continue;
+            }
+        }
+        merged.push((z0, z1, fc));
+    }
+
+    // 2. If merged intervals still exceed `target_ranges`, coalesce the pairs with the smallest Z-gap
+    while merged.len() > target_ranges {
+        let mut best_idx = 0;
+        let mut min_gap = i64::MAX;
+        for i in 0..(merged.len() - 1) {
+            let gap = merged[i + 1].0 - merged[i].1;
+            if gap < min_gap {
+                min_gap = gap;
+                best_idx = i;
+            }
+        }
+        let next = merged.remove(best_idx + 1);
+        merged[best_idx].1 = merged[best_idx].1.max(next.1);
+        merged[best_idx].2 = false; // bridged gap is no longer guaranteed 100% interior
+    }
+
+    pgrx::iter::TableIterator::new(merged.into_iter())
+}
+
+/// 16B. Compact 36-Byte Quantized Fastscan Sketch & Layered Centroid Descriptor for 1024-Bit ECFP4 Fingerprints.
+/// Inspired by `pg_vectorsearch`'s RaBitQ + Fastscan posting layout:
+/// - `level1_centroid` (0..15) & `level2_centroid` (0..127): 2-level hierarchical bit-density centroid routing.
+/// - `soar_centroid` (0..127): SOAR spill-orthogonal secondary cluster assignment for boundary molecules.
+/// - `popcount`: Exact 1-bit count `|A|` across the 1024-bit ECFP4 fingerprint.
+/// - `block_counts`: Eight 8-bit exact popcounts `[c_0..c_7]` across the eight 128-bit sub-blocks, packed into one `i64`.
+/// - `sketch_lo`, `sketch_hi`: 128-bit (8:1 OR-folded) Fastscan bit sketch where bit `j` is 1 iff byte `j` of the 1024-bit ECFP4 is non-zero.
+#[derive(PostgresType, Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Ecfp4FastscanSketch {
+    pub level1_centroid: i16,
+    pub level2_centroid: i16,
+    pub soar_centroid: i16,
+    pub popcount: i16,
+    pub block_counts: i64,
+    pub sketch_lo: i64,
+    pub sketch_hi: i64,
+}
+
+#[inline]
+fn compute_sketch_from_ecfp_words(words: &[u64]) -> Ecfp4FastscanSketch {
+    if words.len() != 16 {
+        return Ecfp4FastscanSketch {
+            level1_centroid: 0,
+            level2_centroid: 0,
+            soar_centroid: 0,
+            popcount: 0,
+            block_counts: 0,
+            sketch_lo: 0,
+            sketch_hi: 0,
+        };
+    }
+
+    let mut total_pop: u32 = 0;
+    let mut b_counts = [0u8; 8];
+    let mut sketch_lo: u64 = 0;
+    let mut sketch_hi: u64 = 0;
+
+    // 1. Compute 8 block popcounts (each block = 2 x u64 = 128 bits) and 128-bit 8:1 OR-folded sketch
+    for blk in 0..8 {
+        let w0 = words[blk * 2];
+        let w1 = words[blk * 2 + 1];
+        let c = (w0.count_ones() + w1.count_ones()) as u8;
+        b_counts[blk] = c;
+        total_pop += c as u32;
+
+        // Fold each byte of w0 and w1 into 1 bit of the 128-bit sketch
+        for byte_idx in 0..8 {
+            let b0 = (w0 >> (byte_idx * 8)) & 0xFF;
+            let b1 = (w1 >> (byte_idx * 8)) & 0xFF;
+            let bit_pos0 = blk * 16 + byte_idx;
+            let bit_pos1 = blk * 16 + 8 + byte_idx;
+            if b0 != 0 {
+                if bit_pos0 < 64 {
+                    sketch_lo |= 1u64 << bit_pos0;
+                } else {
+                    sketch_hi |= 1u64 << (bit_pos0 - 64);
+                }
+            }
+            if b1 != 0 {
+                if bit_pos1 < 64 {
+                    sketch_lo |= 1u64 << bit_pos1;
+                } else {
+                    sketch_hi |= 1u64 << (bit_pos1 - 64);
+                }
+            }
+        }
+    }
+
+    let packed_blocks = u64::from_le_bytes(b_counts) as i64;
+
+    // 2. Layered Centroid Routing (Level 1: 16 super-centroids, Level 2: 128 leaf centroids + SOAR secondary)
+    // Project the 8-block chemical density vector onto 4 orthogonal Haar/Walsh-Hadamard axes (Fast Rotate, like RaBitQ!)
+    let b: [i32; 8] = [
+        b_counts[0] as i32,
+        b_counts[1] as i32,
+        b_counts[2] as i32,
+        b_counts[3] as i32,
+        b_counts[4] as i32,
+        b_counts[5] as i32,
+        b_counts[6] as i32,
+        b_counts[7] as i32,
+    ];
+    let h0 = (b[0] + b[1] + b[2] + b[3]) - (b[4] + b[5] + b[6] + b[7]);
+    let h1 = (b[0] + b[1] - b[2] - b[3]) + (b[4] + b[5] - b[6] - b[7]);
+    let h2 = (b[0] - b[1] + b[2] - b[3]) + (b[4] - b[5] + b[6] - b[7]);
+    let h3 = (b[0] - b[1] - b[2] + b[3]) - (b[4] - b[5] - b[6] + b[7]);
+    let h4 = (b[0] + b[1] - b[2] - b[3]) - (b[4] + b[5] - b[6] - b[7]);
+    let h5 = (b[0] - b[1] + b[2] - b[3]) - (b[4] - b[5] + b[6] - b[7]);
+    let h6 = (total_pop as i32) - 36; // density tier split around typical 36-bit ECFP4 popcount
+
+    let l1 = ((if h0 >= 0 { 1 } else { 0 })
+        | (if h1 >= 0 { 2 } else { 0 })
+        | (if h2 >= 0 { 4 } else { 0 })
+        | (if h6 >= 0 { 8 } else { 0 })) as i16;
+
+    let l2_sub = ((if h3 >= 0 { 1 } else { 0 })
+        | (if h4 >= 0 { 2 } else { 0 })
+        | (if h5 >= 0 { 4 } else { 0 })) as i16;
+    let l2 = (l1 << 3) | l2_sub;
+
+    // SOAR secondary assignment: flip the weakest (closest-to-zero boundary) Walsh-Hadamard projection bit
+    // so near-boundary molecules are replicated to the spill-orthogonal neighbor cluster!
+    let axes = [
+        (h0.abs(), 1i16 << 3),
+        (h1.abs(), 2i16 << 3),
+        (h2.abs(), 4i16 << 3),
+        (h6.abs(), 8i16 << 3),
+        (h3.abs(), 1i16),
+        (h4.abs(), 2i16),
+        (h5.abs(), 4i16),
+    ];
+    let mut min_margin = i32::MAX;
+    let mut flip_bit = 1i16;
+    for &(margin, bit) in &axes {
+        if margin < min_margin {
+            min_margin = margin;
+            flip_bit = bit;
+        }
+    }
+    let soar = l2 ^ flip_bit;
+
+    Ecfp4FastscanSketch {
+        level1_centroid: l1,
+        level2_centroid: l2,
+        soar_centroid: soar,
+        popcount: total_pop as i16,
+        block_counts: packed_blocks,
+        sketch_lo: sketch_lo as i64,
+        sketch_hi: sketch_hi as i64,
+    }
+}
+
+/// Builds a compact 36-byte `Ecfp4FastscanSketch` directly from a SMILES string.
+#[pg_extern(immutable, parallel_safe)]
+pub fn ecfp4_fastscan_sketch(smiles: &str) -> Ecfp4FastscanSketch {
+    let mol = parse_smiles(smiles);
+    compute_sketch_from_ecfp_words(&mol.ecfp_bits)
+}
+
+/// Builds a compact 36-byte `Ecfp4FastscanSketch` from an already-parsed `Molecule`.
+#[pg_extern(immutable, parallel_safe)]
+pub fn molecule_fastscan_sketch(mol: Molecule) -> Ecfp4FastscanSketch {
+    compute_sketch_from_ecfp_words(&mol.ecfp_bits)
+}
+
+/// Computes a 100% mathematically guaranteed Upper Bound on the 1024-bit ECFP4 Tanimoto similarity
+/// (`molecule_tanimoto(A, B) <= ecfp4_tanimoto_upper_bound(sketch_A, sketch_B)` with ZERO false negatives!)
+/// using only the 36-byte `Ecfp4FastscanSketch` (8-Block L1 Histogram Bound + 128-Bit 8:1 OR-Folded Fastscan Bound).
+#[pg_extern(immutable, parallel_safe)]
+pub fn ecfp4_tanimoto_upper_bound(a: Ecfp4FastscanSketch, b: Ecfp4FastscanSketch) -> f64 {
+    let pop_a = (a.popcount.max(0)) as u32;
+    let pop_b = (b.popcount.max(0)) as u32;
+    if pop_a == 0 && pop_b == 0 {
+        return 1.0;
+    }
+    if pop_a == 0 || pop_b == 0 {
+        return 0.0;
+    }
+
+    // 1. 8-Block Exact L1 Histogram Intersection Upper Bound: sum_{k=0..7} min(c_{A,k}, c_{B,k})
+    let ba = (a.block_counts as u64).to_le_bytes();
+    let bb = (b.block_counts as u64).to_le_bytes();
+    let mut ub_block: u32 = 0;
+    for k in 0..8 {
+        ub_block += ba[k].min(bb[k]) as u32;
+    }
+
+    // 2. 128-Bit 8:1 OR-Folded Fastscan Sketch Disjoint Bit Lower Bound:
+    // Every bit set in S(A) & !S(B) means an entire non-zero byte of A (at least 1 set bit) has 0 overlap with B!
+    let sa_lo = a.sketch_lo as u64;
+    let sa_hi = a.sketch_hi as u64;
+    let sb_lo = b.sketch_lo as u64;
+    let sb_hi = b.sketch_hi as u64;
+
+    let diff_a = (sa_lo & !sb_lo).count_ones() + (sa_hi & !sb_hi).count_ones();
+    let diff_b = (sb_lo & !sa_lo).count_ones() + (sb_hi & !sa_hi).count_ones();
+
+    let ub_sketch_a = pop_a.saturating_sub(diff_a);
+    let ub_sketch_b = pop_b.saturating_sub(diff_b);
+    let ub_inter = ub_block.min(ub_sketch_a).min(ub_sketch_b);
+
+    let denom = pop_a + pop_b - ub_inter;
+    if denom == 0 {
+        1.0
+    } else {
+        (ub_inter as f64) / (denom as f64)
+    }
+}
+
+/// 16C. Layered Centroid Routing & Exact Cluster Envelope Upper Bound for 9D RangeFinder Active-Site Pockets.
+/// Assigns a `RangeFinderPocket` to a 2-level hierarchical centroid tree (`level1_id` in `0..15`,
+/// `level2_id` in `0..63`, plus `soar_secondary_id` in `0..63` for spill-orthogonal boundary replication)
+/// and computes the exact theoretical Upper Bound on `pocket_range_iou(query, P)` for any pocket `P`
+/// inside a cluster's bounding envelope `(env_mins, env_maxs, env_min_widths)`.
+#[pg_extern(immutable, parallel_safe)]
+pub fn pocket_layered_centroid_assign(
+    pocket: RangeFinderPocket,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(level1_centroid, i32),
+        name!(level2_centroid, i32),
+        name!(soar_centroid, i32),
+    ),
+> {
+    // Normalize the 8 non-degenerate pocket interval centers & widths around empirical proteome medians
+    let z0 = (pocket.mw_mu - 265.0) / 40.0;
+    let z1 = (pocket.logp_mu - 3.10) / 0.80;
+    let z2 = (pocket.tpsa_mu - 58.0) / 18.0;
+    let z3 = (pocket.hba_mu - 3.60) / 1.10;
+    let z4 = (pocket.hbd_mu - 1.35) / 0.55;
+    let z5 = (pocket.rot_mu - 3.80) / 1.20;
+    let z6 = (pocket.fsp3_mu - 0.42) / 0.15;
+
+    // Fast Walsh-Hadamard orthogonal rotation (RaBitQ-style) to decorrelate correlated physicochemical axes
+    let r0 = z0 + z1 - z2 + z3;
+    let r1 = z0 - z1 + z2 - z4;
+    let r2 = z1 + z2 - z5 - z6;
+    let r3 = z0 + z3 - z4 - z5;
+    let r4 = z2 - z3 + z5 - z6;
+    let r5 = z0 - z2 + z4 + z6;
+
+    let l1 = ((if r0 >= 0.0 { 1 } else { 0 })
+        | (if r1 >= 0.0 { 2 } else { 0 })
+        | (if r2 >= 0.0 { 4 } else { 0 })
+        | (if r3 >= 0.0 { 8 } else { 0 })) as i32;
+
+    let l2_sub = ((if r4 >= 0.0 { 1 } else { 0 }) | (if r5 >= 0.0 { 2 } else { 0 })) as i32;
+    let l2 = (l1 << 2) | l2_sub;
+
+    // SOAR spill-orthogonal secondary cluster: flip the coordinate closest to the decision hyperplane (0.0)
+    let margins = [
+        (r0.abs(), 1i32 << 2),
+        (r1.abs(), 2i32 << 2),
+        (r2.abs(), 4i32 << 2),
+        (r3.abs(), 8i32 << 2),
+        (r4.abs(), 1i32),
+        (r5.abs(), 2i32),
+    ];
+    let mut min_m = f64::MAX;
+    let mut flip = 1i32;
+    for &(m, bit) in &margins {
+        if m < min_m {
+            min_m = m;
+            flip = bit;
+        }
+    }
+    let soar = l2 ^ flip;
+
+    pgrx::iter::TableIterator::once((l1, l2, soar))
+}
+
+/// Computes the exact theoretical Upper Bound on `pocket_range_iou(query, P, include_formal_charge)`
+/// for ANY pocket `P` contained within a cluster's bounding envelope:
+/// - `env_mins`: `[min(P.l_d)]` across all pockets `P` in the cluster
+/// - `env_maxs`: `[max(P.u_d)]` across all pockets `P` in the cluster
+/// - `env_min_widths`: `[min(P.u_d - P.l_d)]` across all pockets `P` in the cluster
+/// Guarantee: `pocket_range_iou(query, P, include_formal_charge) <= pocket_envelope_iou_upper_bound(...)` (100% recall).
+#[pg_extern(immutable, parallel_safe)]
+pub fn pocket_envelope_iou_upper_bound(
+    query: RangeFinderPocket,
+    env_mins: Vec<f64>,
+    env_maxs: Vec<f64>,
+    env_min_widths: Vec<f64>,
+    include_formal_charge: bool,
+) -> f64 {
+    let q_bounds: [(f64, f64); 9] = [
+        (query.mw_min, query.mw_max),
+        (query.logp_min, query.logp_max),
+        (query.hbd_min, query.hbd_max),
+        (query.hba_min, query.hba_max),
+        (query.tpsa_min, query.tpsa_max),
+        (query.rot_min, query.rot_max),
+        (query.charge_min, query.charge_max),
+        (query.arom_min, query.arom_max),
+        (query.fsp3_min, query.fsp3_max),
+    ];
+
+    if env_mins.len() < 9 || env_maxs.len() < 9 || env_min_widths.len() < 9 {
+        return 1.0;
+    }
+
+    let mut sum_ub = 0.0;
+    let mut count = 0usize;
+    for d in 0..9 {
+        if !include_formal_charge && d == 6 {
+            continue;
+        }
+        let (ql, qu) = q_bounds[d];
+        let qw = (qu - ql).max(0.0);
+        let cl = env_mins[d];
+        let cu = env_maxs[d];
+        let cw_min = env_min_widths[d].max(0.0);
+
+        // Max possible 1D intersection between [ql, qu] and any [pl, pu] subset of [cl, cu]
+        let inter_max = (qu.min(cu) - ql.max(cl)).max(0.0).min(qw);
+        // Min possible 1D union: for any interval P of width w_P >= cw_min and intersection I <= inter_max,
+        // Union = qw + w_P - I >= qw + max(cw_min, I) - I = qw + max(0, cw_min - I)
+        let union_min = qw + (cw_min - inter_max).max(0.0);
+        let overlaps_at_all = qu + 1e-9 >= cl && ql <= cu + 1e-9;
+        let iou_ub = if !overlaps_at_all {
+            0.0
+        } else if union_min <= 1e-12 {
+            1.0
+        } else {
+            (inter_max / union_min).clamp(0.0, 1.0)
+        };
+        sum_ub += iou_ub;
+        count += 1;
+    }
+
+    if count == 0 {
+        0.0
+    } else {
+        sum_ub / (count as f64)
+    }
+}
+
+/// 16D. Register-Direct Zero-Deserialization Fastscan Kernels for 1024-Bit ECFP4 & 9D RangeFinder Pockets.
+/// Eliminates CBOR/JSON composite deserialization overhead during Stage-1 & Stage-2 index scans by packing
+/// quantized sketches and interval bounds directly into native 64-bit PostgreSQL `bigint` CPU registers.
+
+/// Returns the 16 x 64-bit (1024-bit) ECFP4 words and 4 register sketch fields directly from a SMILES string
+/// so tables can store them inline (`STORAGE PLAIN`) with zero `Molecule` graph deserialization during Tanimoto scans.
+#[pg_extern(immutable, parallel_safe)]
+pub fn ecfp4_register_descriptor(
+    smiles: &str,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(l1_centroid, i16),
+        name!(l2_centroid, i16),
+        name!(soar_centroid, i16),
+        name!(popcount, i16),
+        name!(block_counts, i64),
+        name!(sketch_lo, i64),
+        name!(sketch_hi, i64),
+        name!(ecfp_words, Vec<i64>),
+    ),
+> {
+    let mol = parse_smiles(smiles);
+    let sk = compute_sketch_from_ecfp_words(&mol.ecfp_bits);
+    let words: Vec<i64> = mol.ecfp_bits.iter().map(|&w| w as i64).collect();
+    pgrx::iter::TableIterator::once((
+        sk.level1_centroid,
+        sk.level2_centroid,
+        sk.soar_centroid,
+        sk.popcount,
+        sk.block_counts,
+        sk.sketch_lo,
+        sk.sketch_hi,
+        words,
+    ))
+}
+
+/// Register-direct 100% guaranteed Tanimoto Upper Bound taking raw `smallint` and `bigint` columns by value
+/// (zero heap allocations, zero composite varlena detoasting).
+#[pg_extern(immutable, parallel_safe)]
+pub fn ecfp4_fastscan_ub_raw(
+    pop_a: i16,
+    blocks_a: i64,
+    lo_a: i64,
+    hi_a: i64,
+    pop_b: i16,
+    blocks_b: i64,
+    lo_b: i64,
+    hi_b: i64,
+) -> f64 {
+    let pa = (pop_a.max(0)) as u32;
+    let pb = (pop_b.max(0)) as u32;
+    if pa == 0 && pb == 0 {
+        return 1.0;
+    }
+    if pa == 0 || pb == 0 {
+        return 0.0;
+    }
+
+    let ba = (blocks_a as u64).to_le_bytes();
+    let bb = (blocks_b as u64).to_le_bytes();
+    let mut ub_block: u32 = 0;
+    for k in 0..8 {
+        ub_block += ba[k].min(bb[k]) as u32;
+    }
+
+    let sa_lo = lo_a as u64;
+    let sa_hi = hi_a as u64;
+    let sb_lo = lo_b as u64;
+    let sb_hi = hi_b as u64;
+
+    let diff_a = (sa_lo & !sb_lo).count_ones() + (sa_hi & !sb_hi).count_ones();
+    let diff_b = (sb_lo & !sa_lo).count_ones() + (sb_hi & !sa_hi).count_ones();
+
+    let ub_inter = ub_block
+        .min(pa.saturating_sub(diff_a))
+        .min(pb.saturating_sub(diff_b));
+    let denom = pa + pb - ub_inter;
+    if denom == 0 {
+        1.0
+    } else {
+        (ub_inter as f64) / (denom as f64)
+    }
+}
+
+/// Computes a 100% mathematically guaranteed Upper Bound on Tanimoto similarity between a query molecule
+/// `(q_pop, q_blocks, q_lo, q_hi)` and ANY molecule inside a cluster envelope
+/// `(c_min_pop, c_max_pop, c_max_blocks, c_or_lo, c_or_hi)`:
+/// - `c_max_blocks`: 8 packed bytes where byte `k` is `max_{M in C} block_popcount(M, k)`
+/// - `c_or_lo, c_or_hi`: bitwise OR of `(sketch_lo, sketch_hi)` across all molecules `M in C`
+/// Guarantees 100.0% Exact Recall when pruning entire centroid clusters (`T_exact(Q, M) <= ecfp4_cluster_envelope_ub_raw(...)`).
+#[pg_extern(immutable, parallel_safe)]
+pub fn ecfp4_cluster_envelope_ub_raw(
+    q_pop: i16,
+    q_blocks: i64,
+    q_lo: i64,
+    q_hi: i64,
+    c_min_pop: i16,
+    c_max_pop: i16,
+    c_max_blocks: i64,
+    c_or_lo: i64,
+    c_or_hi: i64,
+) -> f64 {
+    let qp = (q_pop.max(0)) as u32;
+    let c_min = (c_min_pop.max(0)) as u32;
+    let c_max = (c_max_pop.max(0)) as u32;
+    if qp == 0 || c_max == 0 {
+        return 0.0;
+    }
+
+    // 1. Popcount window upper bound across [c_min, c_max]
+    let pop_ub = if qp <= c_min {
+        (qp as f64) / (c_min as f64)
+    } else if qp >= c_max {
+        (c_max as f64) / (qp as f64)
+    } else {
+        1.0
+    };
+
+    // 2. 8-Block L1 Envelope Upper Bound: sum_{k=0..7} min(q_block[k], c_max_block[k])
+    let qb = (q_blocks as u64).to_le_bytes();
+    let cb = (c_max_blocks as u64).to_le_bytes();
+    let mut ub_block: u32 = 0;
+    for k in 0..8 {
+        ub_block += qb[k].min(cb[k]) as u32;
+    }
+
+    // 3. 128-Bit Cluster Bitwise-OR Sketch Disjoint Lower Bound:
+    // Any bit set in S(Q) that is 0 in S_OR(C) is 0 in EVERY molecule M in cluster C!
+    let qlo = q_lo as u64;
+    let qhi = q_hi as u64;
+    let clo = c_or_lo as u64;
+    let chi = c_or_hi as u64;
+    let diff_q = (qlo & !clo).count_ones() + (qhi & !chi).count_ones();
+
+    let ub_inter = ub_block
+        .min(qp.saturating_sub(diff_q))
+        .min(c_max);
+
+    // Since T = I / (|Q| + |M| - I) is monotonically increasing in I and decreasing in |M|,
+    // maximum possible T occurs at I = ub_inter and |M| = max(c_min, ub_inter).
+    let m_min_feasible = c_min.max(ub_inter);
+    let denom = qp + m_min_feasible - ub_inter;
+    let env_ub = if denom == 0 {
+        1.0
+    } else {
+        (ub_inter as f64) / (denom as f64)
+    };
+    env_ub.min(pop_ub)
+}
+
+/// Exact 1024-bit Tanimoto similarity on two `bigint[16]` arrays (using hardware `count_ones` without deserializing `Molecule` graphs).
+#[pg_extern(immutable, parallel_safe)]
+pub fn ecfp4_tanimoto_words_raw(words_a: Vec<i64>, words_b: Vec<i64>) -> f64 {
+    if words_a.len() != 16 || words_b.len() != 16 {
+        return 0.0;
+    }
+    let mut inter: u32 = 0;
+    let mut union: u32 = 0;
+    for i in 0..16 {
+        let wa = words_a[i] as u64;
+        let wb = words_b[i] as u64;
+        inter += (wa & wb).count_ones();
+        union += (wa | wb).count_ones();
+    }
+    if union == 0 {
+        1.0
+    } else {
+        (inter as f64) / (union as f64)
+    }
+}
+
+// Physical domain bounds for 8-property RangeFinder 16-byte register quantization (`lo_code: i64, hi_code: i64`)
+const RF_DOM_MIN: [f64; 8] = [50.0, -4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+const RF_DOM_MAX: [f64; 8] = [650.0, 10.0, 10.0, 16.0, 220.0, 16.0, 6.0, 1.0];
+
+/// Quantizes an 8-property RangeFinder pocket into two 64-bit register codes (`lo_code: i64`, `hi_code: i64` = 16 bytes total)
+/// plus balanced 2-level centroid IDs (`l1_centroid`, `l2_centroid`, `soar_centroid`).
+/// Each byte `d` of `lo_code` is the floor-quantized lower bound `q_l in 0..255` and each byte `d` of `hi_code`
+/// is the ceil-quantized upper bound `q_u in 0..255`, guaranteeing `[q_l, q_u]` outer-bounds `[l_d, u_d]`.
+#[pg_extern(immutable, parallel_safe)]
+pub fn pocket_quantize_fastscan(
+    mw_min: f64, mw_max: f64,
+    logp_min: f64, logp_max: f64,
+    hbd_min: f64, hbd_max: f64,
+    hba_min: f64, hba_max: f64,
+    tpsa_min: f64, tpsa_max: f64,
+    rot_min: f64, rot_max: f64,
+    arom_min: f64, arom_max: f64,
+    fsp3_min: f64, fsp3_max: f64,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(l1_centroid, i16),
+        name!(l2_centroid, i16),
+        name!(soar_centroid, i16),
+        name!(lo_code, i64),
+        name!(hi_code, i64),
+    ),
+> {
+    let mins = [mw_min, logp_min, hbd_min, hba_min, tpsa_min, rot_min, arom_min, fsp3_min];
+    let maxs = [mw_max, logp_max, hbd_max, hba_max, tpsa_max, rot_max, arom_max, fsp3_max];
+
+    let mut q_lo = [0u8; 8];
+    let mut q_hi = [0u8; 8];
+    for d in 0..8 {
+        let span = RF_DOM_MAX[d] - RF_DOM_MIN[d];
+        let norm_l = ((mins[d] - RF_DOM_MIN[d]) / span).clamp(0.0, 1.0) * 255.0;
+        let norm_u = ((maxs[d] - RF_DOM_MIN[d]) / span).clamp(0.0, 1.0) * 255.0;
+        q_lo[d] = (norm_l.floor() as i32).clamp(0, 255) as u8;
+        q_hi[d] = (norm_u.ceil() as i32).clamp(0, 255) as u8;
+    }
+
+    // Calibrated around actual 4,856 AlphaFold pocket distribution medians in swarm_pocket_ranges
+    let mw_c = 0.5 * (mw_min + mw_max);
+    let logp_c = 0.5 * (logp_min + logp_max);
+    let tpsa_c = 0.5 * (tpsa_min + tpsa_max);
+    let hba_c = 0.5 * (hba_min + hba_max);
+    let hbd_c = 0.5 * (hbd_min + hbd_max);
+    let rot_c = 0.5 * (rot_min + rot_max);
+    let arom_c = 0.5 * (arom_min + arom_max);
+    let fsp3_c = 0.5 * (fsp3_min + fsp3_max);
+
+    let z0 = (mw_c - 271.5) / 12.0;
+    let z1 = (logp_c - 3.32) / 0.45;
+    let z2 = (tpsa_c - 59.5) / 10.0;
+    let z3 = (hba_c - 3.65) / 0.50;
+    let z4 = (hbd_c - 1.38) / 0.30;
+    let z5 = (rot_c - 3.92) / 0.55;
+    let z6 = (arom_c - 1.32) / 0.35;
+    let z7 = (fsp3_c - 0.41) / 0.08;
+
+    let r0 = z0 + z1 - z2 + z7;
+    let r1 = z0 - z1 + z3 - z6;
+    let r2 = z1 + z2 - z4 - z5;
+    let r3 = z2 - z3 + z4 - z7;
+    let r4 = z0 - z3 + z5 - z6;
+    let r5 = z1 - z4 + z6 - z7;
+
+    let l1 = ((if r0 >= 0.0 { 1 } else { 0 })
+        | (if r1 >= 0.0 { 2 } else { 0 })
+        | (if r2 >= 0.0 { 4 } else { 0 })
+        | (if r3 >= 0.0 { 8 } else { 0 })) as i16;
+    let l2_sub = ((if r4 >= 0.0 { 1 } else { 0 }) | (if r5 >= 0.0 { 2 } else { 0 })) as i16;
+    let l2 = (l1 << 2) | l2_sub;
+
+    let margins = [
+        (r0.abs(), 1i16 << 2),
+        (r1.abs(), 2i16 << 2),
+        (r2.abs(), 4i16 << 2),
+        (r3.abs(), 8i16 << 2),
+        (r4.abs(), 1i16),
+        (r5.abs(), 2i16),
+    ];
+    let mut min_m = f64::MAX;
+    let mut flip = 1i16;
+    for &(m, bit) in &margins {
+        if m < min_m {
+            min_m = m;
+            flip = bit;
+        }
+    }
+    let soar = l2 ^ flip;
+
+    pgrx::iter::TableIterator::once((
+        l1,
+        l2,
+        soar,
+        u64::from_le_bytes(q_lo) as i64,
+        u64::from_le_bytes(q_hi) as i64,
+    ))
+}
+
+/// Computes a 100% mathematically guaranteed Upper Bound on the 8-property Range-IoU between two pockets
+/// using ONLY their two 64-bit register codes (`lo_code: i64, hi_code: i64` = 16 bytes total).
+#[pg_extern(immutable, parallel_safe)]
+pub fn pocket_fastscan_iou_ub_raw(
+    a_lo_code: i64,
+    a_hi_code: i64,
+    b_lo_code: i64,
+    b_hi_code: i64,
+) -> f64 {
+    let alo = (a_lo_code as u64).to_le_bytes();
+    let ahi = (a_hi_code as u64).to_le_bytes();
+    let blo = (b_lo_code as u64).to_le_bytes();
+    let bhi = (b_hi_code as u64).to_le_bytes();
+
+    let mut sum_ub = 0.0;
+    for d in 0..8 {
+        let al = alo[d] as i32;
+        let au = ahi[d] as i32;
+        let bl = blo[d] as i32;
+        let bu = bhi[d] as i32;
+
+        // Disjoint outer intervals => exact intersection is 0!
+        if au < bl || bu < al {
+            continue;
+        }
+        // Outer intersection in quantized bins (at most 1 bin larger on each end than true intersection)
+        let inter_max = (au.min(bu) - al.max(bl)).max(0) as f64;
+        // True interval width is at least (q_hi - q_lo - 2) bins
+        let wa_min = (au - al - 2).max(0) as f64;
+        let wb_min = (bu - bl - 2).max(0) as f64;
+        let union_min = (wa_min + wb_min - inter_max)
+            .max(wa_min)
+            .max(wb_min)
+            .max(inter_max);
+
+        let iou_ub = if union_min <= 0.0 {
+            1.0
+        } else {
+            (inter_max / union_min).clamp(0.0, 1.0)
+        };
+        sum_ub += iou_ub;
+    }
+    sum_ub / 8.0
+}
+
+/// Computes exact 8-property Range-IoU directly on native `float8` columns (zero `RangeFinderPocket` CBOR deserialization!).
+#[pg_extern(immutable, parallel_safe)]
+pub fn pocket_iou_8prop_raw(
+    a_mw_min: f64, a_mw_max: f64, a_logp_min: f64, a_logp_max: f64,
+    a_hbd_min: f64, a_hbd_max: f64, a_hba_min: f64, a_hba_max: f64,
+    a_tpsa_min: f64, a_tpsa_max: f64, a_rot_min: f64, a_rot_max: f64,
+    a_arom_min: f64, a_arom_max: f64, a_fsp3_min: f64, a_fsp3_max: f64,
+    b_mw_min: f64, b_mw_max: f64, b_logp_min: f64, b_logp_max: f64,
+    b_hbd_min: f64, b_hbd_max: f64, b_hba_min: f64, b_hba_max: f64,
+    b_tpsa_min: f64, b_tpsa_max: f64, b_rot_min: f64, b_rot_max: f64,
+    b_arom_min: f64, b_arom_max: f64, b_fsp3_min: f64, b_fsp3_max: f64,
+) -> f64 {
+    let pairs = [
+        (a_mw_min, a_mw_max, b_mw_min, b_mw_max),
+        (a_logp_min, a_logp_max, b_logp_min, b_logp_max),
+        (a_hbd_min, a_hbd_max, b_hbd_min, b_hbd_max),
+        (a_hba_min, a_hba_max, b_hba_min, b_hba_max),
+        (a_tpsa_min, a_tpsa_max, b_tpsa_min, b_tpsa_max),
+        (a_rot_min, a_rot_max, b_rot_min, b_rot_max),
+        (a_arom_min, a_arom_max, b_arom_min, b_arom_max),
+        (a_fsp3_min, a_fsp3_max, b_fsp3_min, b_fsp3_max),
+    ];
+    let mut sum = 0.0;
+    for &(l1, u1, l2, u2) in &pairs {
+        sum += pgbio_interval_iou_and_giou(l1, u1, l2, u2).0;
+    }
+    sum / 8.0
+}
+
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
 mod tests {
@@ -7942,6 +8820,159 @@ ATOM      9  CA  TRP A  13      -1.500   0.800   2.200  1.00 94.00           C  
             LIMIT 1;"
         ).unwrap().unwrap();
         assert!(top_match == "P_2" || top_match == "P_3");
+    }
+
+    #[pg_test]
+    fn test_layered_centroids_morton_ecfp4_and_pockets() {
+        // 1. Test 3D Morton Layered Octree Sphere Router across the (24.288, 24.288, 24.288) 2^19 = 524,288 major octree boundary
+        // and the (0, 0, 0) origin!
+        let cx = 24.0;
+        let cy = 24.0;
+        let cz = 24.0;
+        let radius = 4.0;
+        let naive_min = crate::z_order_encode(cx - radius, cy - radius, cz - radius);
+        let naive_max = crate::z_order_encode(cx + radius, cy + radius, cz + radius);
+        let naive_span = (naive_max - naive_min) as f64;
+
+        let ranges: Vec<_> = crate::z_order_layered_sphere_ranges(cx, cy, cz, radius, 32).collect();
+        assert!(!ranges.is_empty() && ranges.len() <= 32);
+        let layered_span: f64 = ranges.iter().map(|r| (r.1 - r.0 + 1) as f64).sum();
+        // Layered octree pruning eliminates >99.9% of the dead Morton Z-jump span!
+        assert!(
+            layered_span < naive_span * 0.001,
+            "Expected layered span ({}) < 0.1% of naive span ({})",
+            layered_span,
+            naive_span
+        );
+
+        // Verify 100% recall on test points inside the 4.0 A sphere around (24.0, 24.0, 24.0)
+        let inside_pts = [
+            (24.0, 24.0, 24.0),
+            (24.0 - 2.1, 24.0 + 1.5, 24.0 - 1.2),
+            (24.0 + 2.2, 24.0 - 1.8, 24.0 + 1.9),
+            (24.0 - 1.0, 24.0 - 1.0, 24.0 + 2.5),
+            (24.0 + 3.9, 24.0, 24.0),
+        ];
+        for (px, py, pz) in inside_pts {
+            let z = crate::z_order_encode(px, py, pz);
+            let covered = ranges.iter().any(|&(z0, z1, _)| z >= z0 && z <= z1);
+            assert!(covered, "Point ({}, {}, {}) with z={} was missed by layered ranges!", px, py, pz, z);
+        }
+
+        // 2. Test 1024-Bit ECFP4 Fastscan Sketch & 100% Guaranteed Tanimoto Upper Bound
+        let smiles_set = [
+            "CC(=O)OC1=CC=CC=C1C(=O)O",       // Aspirin (Kekule)
+            "CC(=O)Oc1ccccc1C(=O)O",          // Aspirin (Aromatic)
+            "CC(C)Cc1ccc(C(C)C(=O)O)cc1",     // Ibuprofen
+            "COc1ccc2cc(C(C)C(=O)O)ccc2c1",   // Naproxen
+            "Cn1cnc2c1c(=O)n(C)c(=O)n2C",     // Caffeine
+            "C1CCCCC1",                       // Cyclohexane
+            "CCCCCCCCCCCCCCCCCC(=O)O",        // Stearic acid
+        ];
+        let mols: Vec<_> = smiles_set.iter().map(|s| crate::parse_smiles(s)).collect();
+        let sketches: Vec<_> = mols.iter().cloned().map(crate::molecule_fastscan_sketch).collect();
+
+        // Kekule and aromatic Aspirin must have identical Fastscan sketches and centroids
+        assert_eq!(sketches[0], sketches[1]);
+
+        for i in 0..mols.len() {
+            for j in 0..mols.len() {
+                let exact_t = crate::molecule_tanimoto(mols[i].clone(), mols[j].clone());
+                let ub_t = crate::ecfp4_tanimoto_upper_bound(sketches[i].clone(), sketches[j].clone());
+                assert!(
+                    ub_t + 1e-12 >= exact_t,
+                    "Upper bound {} violated exact Tanimoto {} for pair ({}, {})",
+                    ub_t,
+                    exact_t,
+                    i,
+                    j
+                );
+            }
+        }
+        // Dissimilar pair (Aspirin vs Cyclohexane) upper bound must prune aggressively (< 0.35)
+        let ub_asp_cyc = crate::ecfp4_tanimoto_upper_bound(sketches[0].clone(), sketches[5].clone());
+        assert!(ub_asp_cyc < 0.35);
+
+        // 3. Test 9D RangeFinder Pocket Layered Centroid Assignment & Exact Envelope Upper Bound
+        let p_cox2 = crate::empirical_pocket_ranges(
+            "COX2",
+            vec![
+                "CC(=O)Oc1ccccc1C(=O)O".to_string(),
+                "CC(C)Cc1ccc(C(C)C(=O)O)cc1".to_string(),
+                "COc1ccc2cc(C(C)C(=O)O)ccc2c1".to_string(),
+            ],
+        );
+        let p_alkane = crate::empirical_pocket_ranges(
+            "ALKANE",
+            vec![
+                "C1CCCCC1".to_string(),
+                "CCCCCCCC".to_string(),
+                "CCCCCCCCCC".to_string(),
+            ],
+        );
+        let c_cox2: Vec<_> = crate::pocket_layered_centroid_assign(p_cox2.clone()).collect();
+        assert_eq!(c_cox2.len(), 1);
+        assert!(c_cox2[0].0 >= 0 && c_cox2[0].0 < 16);
+        assert!(c_cox2[0].1 >= 0 && c_cox2[0].1 < 64);
+        assert_ne!(c_cox2[0].1, c_cox2[0].2); // SOAR secondary cluster is distinct from primary leaf
+
+        // Envelope containing only p_alkane must strictly upper-bound exact IoU(p_cox2, p_alkane)
+        let env_mins = vec![
+            p_alkane.mw_min, p_alkane.logp_min, p_alkane.hbd_min, p_alkane.hba_min,
+            p_alkane.tpsa_min, p_alkane.rot_min, p_alkane.charge_min, p_alkane.arom_min, p_alkane.fsp3_min,
+        ];
+        let env_maxs = vec![
+            p_alkane.mw_max, p_alkane.logp_max, p_alkane.hbd_max, p_alkane.hba_max,
+            p_alkane.tpsa_max, p_alkane.rot_max, p_alkane.charge_max, p_alkane.arom_max, p_alkane.fsp3_max,
+        ];
+        let env_widths: Vec<f64> = env_mins.iter().zip(env_maxs.iter()).map(|(l, u)| (u - l).max(0.0)).collect();
+
+        let exact_iou = crate::pocket_range_iou(p_cox2.clone(), p_alkane.clone(), false);
+        let ub_iou = crate::pocket_envelope_iou_upper_bound(p_cox2.clone(), env_mins, env_maxs, env_widths, false);
+        assert!((ub_iou - exact_iou).abs() < 1e-9);
+
+        // 4. Verify Register-Direct Zero-Deserialization Fastscan Kernels (ecfp4_fastscan_ub_raw & pocket_fastscan_iou_ub_raw)
+        let d_asp: Vec<_> = crate::ecfp4_register_descriptor("CC(=O)Oc1ccccc1C(=O)O").collect();
+        let d_cyc: Vec<_> = crate::ecfp4_register_descriptor("C1CCCCC1").collect();
+        let raw_ub = crate::ecfp4_fastscan_ub_raw(
+            d_asp[0].3, d_asp[0].4, d_asp[0].5, d_asp[0].6,
+            d_cyc[0].3, d_cyc[0].4, d_cyc[0].5, d_cyc[0].6,
+        );
+        let cluster_ub = crate::ecfp4_cluster_envelope_ub_raw(
+            d_asp[0].3, d_asp[0].4, d_asp[0].5, d_asp[0].6,
+            d_cyc[0].3, d_cyc[0].3, d_cyc[0].4, d_cyc[0].5, d_cyc[0].6,
+        );
+        let raw_t = crate::ecfp4_tanimoto_words_raw(d_asp[0].7.clone(), d_cyc[0].7.clone());
+        assert!(raw_ub + 1e-12 >= raw_t);
+        assert!(cluster_ub + 1e-12 >= raw_ub);
+        assert!(cluster_ub < 0.35);
+        assert!(raw_ub < 0.35);
+
+        let q_cox2: Vec<_> = crate::pocket_quantize_fastscan(
+            p_cox2.mw_min, p_cox2.mw_max, p_cox2.logp_min, p_cox2.logp_max,
+            p_cox2.hbd_min, p_cox2.hbd_max, p_cox2.hba_min, p_cox2.hba_max,
+            p_cox2.tpsa_min, p_cox2.tpsa_max, p_cox2.rot_min, p_cox2.rot_max,
+            p_cox2.arom_min, p_cox2.arom_max, p_cox2.fsp3_min, p_cox2.fsp3_max,
+        ).collect();
+        let q_alk: Vec<_> = crate::pocket_quantize_fastscan(
+            p_alkane.mw_min, p_alkane.mw_max, p_alkane.logp_min, p_alkane.logp_max,
+            p_alkane.hbd_min, p_alkane.hbd_max, p_alkane.hba_min, p_alkane.hba_max,
+            p_alkane.tpsa_min, p_alkane.tpsa_max, p_alkane.rot_min, p_alkane.rot_max,
+            p_alkane.arom_min, p_alkane.arom_max, p_alkane.fsp3_min, p_alkane.fsp3_max,
+        ).collect();
+        let q_ub = crate::pocket_fastscan_iou_ub_raw(q_cox2[0].3, q_cox2[0].4, q_alk[0].3, q_alk[0].4);
+        let raw_iou = crate::pocket_iou_8prop_raw(
+            p_cox2.mw_min, p_cox2.mw_max, p_cox2.logp_min, p_cox2.logp_max,
+            p_cox2.hbd_min, p_cox2.hbd_max, p_cox2.hba_min, p_cox2.hba_max,
+            p_cox2.tpsa_min, p_cox2.tpsa_max, p_cox2.rot_min, p_cox2.rot_max,
+            p_cox2.arom_min, p_cox2.arom_max, p_cox2.fsp3_min, p_cox2.fsp3_max,
+            p_alkane.mw_min, p_alkane.mw_max, p_alkane.logp_min, p_alkane.logp_max,
+            p_alkane.hbd_min, p_alkane.hbd_max, p_alkane.hba_min, p_alkane.hba_max,
+            p_alkane.tpsa_min, p_alkane.tpsa_max, p_alkane.rot_min, p_alkane.rot_max,
+            p_alkane.arom_min, p_alkane.arom_max, p_alkane.fsp3_min, p_alkane.fsp3_max,
+        );
+        assert!((raw_iou - exact_iou).abs() < 1e-12);
+        assert!(q_ub + 1e-12 >= raw_iou, "16B register quantized upper bound {} must >= exact IoU {}", q_ub, raw_iou);
     }
 }
 
