@@ -281,6 +281,11 @@ def ensure_swarm_indexes(cur):
         WHERE status = 'Pending';
     """)
     cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orphan_disc_active_orphan
+        ON orphan_discoveries (orphan_id)
+        WHERE status IN ('Pending', 'Exploring');
+    """)
+    cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_orphan_disc_null_twilight
         ON orphan_discoveries (vector_distance ASC, id ASC)
         WHERE twilight_score IS NULL;
@@ -594,13 +599,15 @@ def expand_3d_pocket_ranges_batch(cur, batch_size: int = 12, min_edge_id: int = 
         SELECT od.id, od.bait_id, od.orphan_id, od.family_name, od.confidence_score, od.vector_distance
         FROM orphan_discoveries od
         WHERE od.id > %s
-          AND od.twilight_score >= 0.68
+          AND od.twilight_score + 0.0 >= 0.68
           AND od.rf_score IS NULL
           AND od.bait_id <> od.orphan_id
         ORDER BY od.id ASC
         LIMIT 2;
     """, (_LAST_3D_BACKFILL_ID,))
     backfill_rows = cur.fetchall()
+    if not backfill_rows and min_edge_id > _LAST_3D_BACKFILL_ID:
+        _LAST_3D_BACKFILL_ID = min_edge_id
     for row_id, b_id, o_id, fam, conf, v_dist in backfill_rows:
         _LAST_3D_BACKFILL_ID = max(_LAST_3D_BACKFILL_ID, int(row_id))
         pockets_added += _ensure_3d_pocket_indexed(cur, b_id)
@@ -634,14 +641,18 @@ def expand_3d_pocket_ranges_batch(cur, batch_size: int = 12, min_edge_id: int = 
 
     # Score newly inserted 3D pairs in orphan_discoveries where both proteins have real 3D pockets
     cur.execute("""
-        WITH targets AS (
+        WITH recent_edges AS MATERIALIZED (
             SELECT od.id, od.bait_id, od.orphan_id, od.family_name, od.confidence_score, od.vector_distance
             FROM orphan_discoveries od
-            JOIN swarm_pocket_ranges pb ON pb.uniprot_id = od.bait_id AND pb.pdb_path IS NOT NULL
-            JOIN swarm_pocket_ranges po ON po.uniprot_id = od.orphan_id AND po.pdb_path IS NOT NULL
             WHERE od.id > %s
               AND od.rf_score IS NULL
               AND od.bait_id <> od.orphan_id
+        ),
+        targets AS (
+            SELECT re.id, re.bait_id, re.orphan_id, re.family_name, re.confidence_score, re.vector_distance
+            FROM recent_edges re
+            JOIN swarm_pocket_ranges pb ON pb.uniprot_id = re.bait_id AND pb.pdb_path IS NOT NULL
+            JOIN swarm_pocket_ranges po ON po.uniprot_id = re.orphan_id AND po.pdb_path IS NOT NULL
             LIMIT %s
         )
         UPDATE orphan_discoveries od
@@ -776,8 +787,10 @@ def claim_dense_frontier_batch(conn, target_nodes: int = 48) -> list[tuple]:
             classified AS (
                 SELECT
                     wp.*,
-                    (
-                        (SELECT COUNT(*) FROM orphan_discoveries b WHERE b.bait_id = wp.orphan_id) > %s
+                    EXISTS (
+                        SELECT 1 FROM orphan_discoveries b
+                        WHERE b.bait_id = wp.orphan_id
+                        OFFSET %s LIMIT 1
                     ) AS already_expanded
                 FROM window_pending wp
             ),
@@ -808,12 +821,12 @@ def claim_dense_frontier_batch(conn, target_nodes: int = 48) -> list[tuple]:
                 SET status = 'Exploring'
                 FROM fresh_candidates fc
                 WHERE od.orphan_id = fc.orphan_id
-                  AND od.status = 'Pending'
+                  AND od.status IN ('Pending', 'Exploring')
                 RETURNING od.orphan_id
             )
             SELECT orphan_id, family_name, orphan_organism, min_dist, in_degree_window
             FROM fresh_candidates;
-        """, (max(target_nodes * 12, 450), _MAX_OUT_DEGREE, target_nodes))
+        """, (max(target_nodes * 3, 64), _MAX_OUT_DEGREE, target_nodes))
         rows = cur.fetchall()
         conn.commit()
         return rows
@@ -830,11 +843,11 @@ def expand_dense_node(conn, node_tuple: tuple, neighbor_limit: int = 12, ef_sear
     """
     t0 = time.perf_counter()
     current_node, family_name, cached_parent_org, _min_dist, _in_deg = node_tuple
-    hnsw_candidate_window = max(60, (_PASS_RING + 1) * 16)
+    hnsw_candidate_window = max(72, (_PASS_RING + 1) * 12)
     eff_ef = max(int(ef_search), hnsw_candidate_window + 16)
     with conn.cursor() as cur:
         try:
-            cur.execute("SET LOCAL prism.nprobe = 40;")
+            cur.execute("SET LOCAL prism.nprobe = 12;")
             cur.execute(f"SET LOCAL hnsw.ef_search = {eff_ef};")
             cur.execute("SET LOCAL synchronous_commit = off;")
             cur.execute("""
@@ -866,10 +879,7 @@ def expand_dense_node(conn, node_tuple: tuple, neighbor_limit: int = 12, ef_sear
                         COALESCE(NULLIF(split_part(split_part(p.name, 'OS=', 2), ' OX=', 1), ''), 'Archaea sp.') AS o_org,
                         p.sequence AS o_seq,
                         p.embedding AS o_emb,
-                        (p.embedding <=> pp.embedding) AS dist,
-                        (
-                            (SELECT COUNT(*) FROM orphan_discoveries b WHERE b.bait_id = p.uniprot_id) > %s
-                        ) AS target_already_expanded
+                        (p.embedding <=> pp.embedding) AS dist
                     FROM parent_p pp
                     JOIN LATERAL (
                         SELECT p2.uniprot_id, p2.name, p2.sequence, p2.embedding
@@ -890,6 +900,11 @@ def expand_dense_node(conn, node_tuple: tuple, neighbor_limit: int = 12, ef_sear
                 scored AS (
                     SELECT
                         rn.*,
+                        EXISTS (
+                            SELECT 1 FROM orphan_discoveries b
+                            WHERE b.bait_id = rn.o_id
+                            OFFSET %s LIMIT 1
+                        ) AS target_already_expanded,
                         interface_complementarity(rn.o_emb::vector::real[], rn.b_emb::vector::real[]) AS icomp,
                         LEAST(GREATEST(
                             smith_waterman_score(LEFT(rn.b_seq, 500), LEFT(rn.o_seq, 500), 2, -1, -2)::double precision
@@ -926,7 +941,7 @@ def expand_dense_node(conn, node_tuple: tuple, neighbor_limit: int = 12, ef_sear
                     ELSE 0.0 END,
                     sc.lineage_id
                 FROM scored sc;
-            """, (cached_parent_org, current_node, current_node, _MAX_OUT_DEGREE, hnsw_candidate_window, neighbor_limit, family_name))
+            """, (cached_parent_org, current_node, current_node, hnsw_candidate_window, neighbor_limit, _MAX_OUT_DEGREE, family_name))
             inserted = cur.rowcount
 
             cur.execute("""
