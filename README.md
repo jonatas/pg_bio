@@ -52,17 +52,20 @@ When engineering synthetic genes (e.g., bio-ceramics or CRISPR therapies), you m
     );
   ```
 
-### Layer 2: Proteomics & Epigenomics (3D Spatial Curves)
-Once transcribed, linear sequences fold into 3D atomic structures. Finding which atoms are within a 4.0 Ångstrom radius of a binding pocket usually requires extracting millions of coordinates into Python for brute-force Pythagorean math.
+### Layer 2: Proteomics & Epigenomics (3D Spatial Curves & Layered Morton Octrees)
+Once transcribed, linear sequences fold into 3D atomic structures. Finding which atoms are within a 4.0–10.0 Ångstrom radius of a binding pocket usually requires extracting millions of coordinates into Python for brute-force Pythagorean math—and a naive single-interval 1D Z-Order range (`z_index BETWEEN min_z AND max_z`) sweeps across thousands of false-positive atoms whenever the sphere crosses an octree boundary.
 
-* **The Engine:** `pg_bio` contains a native Rust function `z_order_encode(x, y, z)`. This uses **Morton Coding (Z-Order curves)** to mathematically interleave 3D Cartesian coordinates into a single 1-Dimensional integer.
-* **The Advantage:** Standard, ultra-fast 1D PostgreSQL B-Tree indexes now act as 3D bounding boxes. Extract exact 3D binding pockets or detect cross-protein molecular clashes across millions of atoms instantly—with zero setup time.
+* **The Engine:** `pg_bio` pairs `z_order_encode(x, y, z)` (64-bit **Morton Coding / Z-Order curves** interleaving 21-bit 3D coordinates) with `z_order_layered_sphere_ranges(cx, cy, cz, r, max_ranges)`—a **21-level 3D Octree Centroid Router** that prunes disjoint octants ($d_{\min}^2 > R^2$), flags interior cubes ($d_{\max}^2 \le R^2$) to skip `sqrt()` rechecks, and coalesces the remaining leaf intervals into $\le 64$ tight B-tree Z-ranges.
+* **The Advantage:** Across 200,000 atoms, `z_order_layered_sphere_ranges` scans **74.05× fewer B-tree candidate rows** (`407.6` vs. `30,181` atoms) and runs **10.25× faster (`0.96 ms` vs. `9.89 ms`)** with **100.0% exact mathematical recall**.
+* **Reference Documentation & Benchmark:** [`docs/17_layered_centroids_multi_index_experiments.md`](docs/17_layered_centroids_multi_index_experiments.md) | [`scripts/benchmark_layered_centroids_multi_index.py`](scripts/benchmark_layered_centroids_multi_index.py)
 * **SQL Example:**
   ```sql
-  -- Extracting a 3D Binding Pocket in milliseconds
-  SELECT atom_id, residue_name FROM teaflon_atoms
-  WHERE z_curve_index BETWEEN z_order_encode(5.0, -5.0, 20.0) AND z_order_encode(15.0, 5.0, 30.0)
-    AND x BETWEEN 5.0 AND 15.0 AND y BETWEEN -5.0 AND 5.0 AND z BETWEEN 20.0 AND 30.0;
+  -- Extracting a 10.0 Å 3D Binding Pocket in 0.96 ms (74.05x fewer atoms scanned, 100% exact recall)
+  SELECT a.atom_id, (a.coord).name
+  FROM z_order_layered_sphere_ranges(10.0, 0.0, 25.0, 5.0, 64) r
+  JOIN teaflon_atoms a ON a.z_curve_index BETWEEN r.min_z AND r.max_z
+  WHERE r.fully_inside
+     OR ((a.coord).x - 10.0)^2 + ((a.coord).y - 0.0)^2 + ((a.coord).z - 25.0)^2 <= 25.0;
   ```
 
 ### Layer 3: Transcriptomics (Single-Cell CSR Arrays)
@@ -290,13 +293,15 @@ Supporting [**RosettaCommons Chaperone**](https://rosettacommons.org/2026/10/19/
 
 `pg_bio` isn't just mathematically clever; it is heavily optimized for multi-million scale deployment on commercial hardware.
 
-### 1. Vector Compression (`halfvec`)
-High-dimensional vectors require massive amounts of RAM. `pg_bio` natively supports casting embedding columns to `halfvec` (16-bit floating-point). This cuts RAM and SSD footprint in half with zero loss in structural accuracy, allowing graphs of 2.5 million proteins to build natively in-memory on standard laptops.
+### 1. Inline Float16 Vector Compression (`halfvec(1280) STORAGE PLAIN`)
+High-dimensional 1280-D ESM-2 vectors (`2,568 bytes`) exceed PostgreSQL's 2 KB TOAST threshold by default, spawning 6.11 GB of out-of-line TOAST chunks across 2.34 million proteins. `pg_bio` pairs `halfvec(1280)` (16-bit floating-point) with `STORAGE PLAIN` to eliminate external TOAST tables and random chunk lookups.
 
-### 2. Intelligent Graph Indexing (HNSW vs IVFFlat)
-Vector indexing is fully tunable to hardware profiles. 
-* Use **`HNSW` (Hierarchical Navigable Small World)** for the highest recall accuracy, utilizing optimized `maintenance_work_mem` ceilings to build massive interconnected graphs. 
-* Use **`IVFFlat` (K-Means Clustering)** to bypass severe RAM limitations, dropping index build times from days to minutes on localized machines by sorting tuples into hyper-clusters (lists=1500).
+### 2. Tiered Vector & Multi-Index Routing (`pg_vectorsearch` PRISM + Layered Centroids + Register Fastscan)
+* **`pg_vectorsearch` (`USING prism` — Primary 1M+ Proteome Engine):** Uses 1-bit RaBitQ quantization with theoretical error bounds, SOAR spill-orthogonal secondary cluster assignment, and hierarchical centroid routing. Across **2,340,766** proteins, PRISM shrinks the vector index by **9.72× (`8,772 MB` $\rightarrow$ `902 MB`)**, builds in **3.08 minutes** (vs. 27 hours for HNSW), and accelerates homology queries by **7.5×–11.3×** (`1.22 ms` to `26 ms`).
+* **100% Lossless Layered Centroids & Register-Direct Fastscan (`PR #14`):** Ports `pg_vectorsearch`'s hierarchical centroid routing, SOAR boundary assignment, and register-direct Fastscan upper bounds to `pg_bio`'s other three biological index families:
+  * **3D Morton Octree (`z_order_layered_sphere_ranges`):** `74.05×` fewer atoms scanned, **`10.25×` faster (`0.96 ms`)**, `100.0%` exact recall.
+  * **1024-Bit ECFP4 Tanimoto (`ecfp4_fastscan_ub_raw`):** Prunes **`99.89%`** of molecules in 64-bit CPU registers, **`31.19×` faster (`16.98 ms`)** at `100.0%` exact recall (or **`158.15×` faster at `3.35 ms`** with SOAR dual-centroid routing).
+  * **9D RangeFinder Active-Site Pockets (`pocket_quantize_fastscan` & `pocket_fastscan_iou_ub_raw`):** Compresses 350-byte pockets by **22× into two 64-bit CPU registers (`16 bytes`)**, running **`13.24×` faster (`7.79 ms`)** at `100.0%` exact Recall@10 (or **`20.42×` faster at `5.05 ms`** with 37 balanced Level-2 centroid envelopes + SOAR).
 
 ---
 
