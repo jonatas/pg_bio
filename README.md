@@ -4,6 +4,11 @@
 
 It is engineered for a single purpose: to completely eradicate the data bottlenecks in modern biology by pushing complex multiomics mathematics *directly into the database engine*. By unifying Genomics, Proteomics, and Transcriptomics into a shared computational space, `pg_bio` allows scientists to execute entire drug discovery pipelines and synthetic biology designs in milliseconds natively in SQL.
 
+> 🔗 **The `pg_bio` Synthetic Biology & Multiomics Ecosystem:**
+> - **Core Database Engine (Rust `pgrx` + PostgreSQL 18):** [**`jonatas/pg_bio`**](https://github.com/jonatas/pg_bio) *(this repository — 3D Morton Octrees, PRISM + Inline `BioVecInt8G128` Vector Homology, RangeFinder 10 Å Pocket GiST, Cheminformatics, and RK4 Solvers)*
+> - **Declarative Bioprocess Compiler, Autonomous Protein Correlation Swarm & Unified Web UI:** [**`jonatas/bio-pipelines`**](https://github.com/jonatas/bio-pipelines) — Multi-feedstock 4-Module ($M_1 \rightarrow M_2 \rightarrow M_3 \rightarrow M_4$) bioprocess compiler, autonomous dark-proteome discovery swarm ([`base/swarm_discovery.py`](https://github.com/jonatas/bio-pipelines/blob/main/base/swarm_discovery.py)), and live 3D Kabsch / RangeFinder / CETSA-TPP Explorer UI ([`base/swarm_web.py`](https://github.com/jonatas/bio-pipelines/blob/main/base/swarm_web.py))
+> - **Original PTFE $\rightarrow$ Fluorapatite Case Study:** [**`jonatas/teaflon`**](https://github.com/jonatas/teaflon) ([`ideia.me/teaflon-intro`](https://ideia.me/teaflon-intro))
+
 > **🎬 Interactive Video Series & 3D Studio: "Hello World, `pg_bio`!"**
 > New to computational biology or multiomics in PostgreSQL? Explore our narrated 1080p video series paired with interactive **3Dmol.js** structures and **Systems Engineer $\leftrightarrow$ Structural Biologist** Rosetta Stone lenses:
 > * 🌐 **Live 3D Video Library on `ideia.me`:** [https://ideia.me/pg-bio-videos/](https://ideia.me/pg-bio-videos/)
@@ -329,7 +334,7 @@ print(f"Strongest regulatory match: {dna_matches[0].locus}")
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-org/pg_bio.git
+git clone https://github.com/jonatas/pg_bio.git
 cd pg_bio
 
 # 2. Spin up the Rust-optimized Postgres Engine
@@ -337,6 +342,12 @@ docker-compose up -d
 
 # 3. Compile the Database and Interactive Notebooks
 uv run jupyter nbconvert --execute https://github.com/jonatas/teaflon/blob/main/pg_bio_multiomics_pipeline/teaflon_multiomics_tutorial.ipynb
+
+# 4. Run the Declarative Multi-Feedstock Bioprocess Compiler & Autonomous Swarm UI (jonatas/bio-pipelines)
+git clone https://github.com/jonatas/bio-pipelines.git ../bio-pipelines
+cd ../bio-pipelines && uv sync
+uv run python base/compiler.py
+uv run python base/swarm_web.py
 ```
 
 *(For an extended deep-dive into the architectural theory, read [`docs/MULTIOMICS_ARCHITECTURE.md`](docs/MULTIOMICS_ARCHITECTURE.md))*
