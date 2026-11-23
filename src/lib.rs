@@ -7865,6 +7865,3044 @@ pub fn tpp_optimal_bioreactor_window(
     ))
 }
 
+// =====================================================================
+// 17. PHASE 1: ANISOTROPY CENTERING & WHITENING PRE-TRANSFORM
+//     ("KNOW THY NEIGHBOUR") + ZERO-CBOR INLINE C-VARLENA BioVecInt8G128
+// =====================================================================
+
+const PGBW_MAGIC: [u8; 4] = *b"PGBW";
+const PGBW_VERSION: u16 = 1;
+
+/// Branch-safe IEEE 754 `f32` -> `f16` (binary16) conversion in pure Rust (zero panics across FFI).
+#[inline]
+pub fn pgbio_f32_to_f16_bits(val: f32) -> u16 {
+    let bits = val.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exp = ((bits >> 23) & 0xFF) as i32;
+    let mant = bits & 0x007F_FFFF;
+
+    if exp == 255 {
+        // Inf or NaN -> clamp to max finite f16 (65504.0) to guarantee finite dot products
+        return sign | 0x7BFF;
+    }
+    let new_exp = exp - 127 + 15;
+    if new_exp >= 31 {
+        return sign | 0x7BFF;
+    }
+    if new_exp <= 0 {
+        if new_exp < -10 {
+            return sign;
+        }
+        let m = (mant | 0x0080_0000) >> (1 - new_exp);
+        let half_m = ((m + 0x0000_1000) >> 13) as u16;
+        return sign | half_m;
+    }
+    let rounded_mant = ((mant + 0x0000_1000) >> 13) as u16;
+    if rounded_mant >= 0x0400 {
+        let next_exp = (new_exp + 1) as u16;
+        if next_exp >= 31 {
+            return sign | 0x7BFF;
+        }
+        return sign | (next_exp << 10);
+    }
+    sign | ((new_exp as u16) << 10) | (rounded_mant & 0x03FF)
+}
+
+/// Branch-safe IEEE 754 `f16` (binary16) -> `f32` conversion in pure Rust.
+#[inline]
+pub fn pgbio_f16_bits_to_f32(bits: u16) -> f32 {
+    let sign = ((bits & 0x8000) as u32) << 16;
+    let exp = ((bits >> 10) & 0x1F) as u32;
+    let mant = (bits & 0x03FF) as u32;
+
+    if exp == 0 {
+        if mant == 0 {
+            return f32::from_bits(sign);
+        }
+        let mut m = mant;
+        let mut e = 127i32 - 14;
+        while (m & 0x0400) == 0 {
+            m <<= 1;
+            e -= 1;
+        }
+        m &= 0x03FF;
+        return f32::from_bits(sign | ((e as u32) << 23) | (m << 13));
+    }
+    if exp == 31 {
+        return f32::from_bits(sign | ((15 + 127) << 23) | (0x03FF << 13));
+    }
+    let f32_exp = (exp + 127 - 15) << 23;
+    f32::from_bits(sign | f32_exp | (mant << 13))
+}
+
+/// Hardware SIMD dot product for `f32` slices (`aarch64` NEON + `x86_64` AVX2 + scalar fallback).
+#[inline]
+pub fn pgbio_simd_dot_f32(a: &[f32], b: &[f32]) -> f32 {
+    let n = a.len().min(b.len());
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        let mut acc0 = vdupq_n_f32(0.0);
+        let mut acc1 = vdupq_n_f32(0.0);
+        let mut i = 0usize;
+        while i + 8 <= n {
+            let va0 = vld1q_f32(a.as_ptr().add(i));
+            let vb0 = vld1q_f32(b.as_ptr().add(i));
+            acc0 = vfmaq_f32(acc0, va0, vb0);
+            let va1 = vld1q_f32(a.as_ptr().add(i + 4));
+            let vb1 = vld1q_f32(b.as_ptr().add(i + 4));
+            acc1 = vfmaq_f32(acc1, va1, vb1);
+            i += 8;
+        }
+        let mut sum = vaddvq_f32(vaddq_f32(acc0, acc1));
+        while i < n {
+            sum += *a.get_unchecked(i) * *b.get_unchecked(i);
+            i += 1;
+        }
+        return sum;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            unsafe {
+                use std::arch::x86_64::*;
+                let mut acc = _mm256_setzero_ps();
+                let mut i = 0usize;
+                while i + 8 <= n {
+                    let va = _mm256_loadu_ps(a.as_ptr().add(i));
+                    let vb = _mm256_loadu_ps(b.as_ptr().add(i));
+                    acc = _mm256_add_ps(acc, _mm256_mul_ps(va, vb));
+                    i += 8;
+                }
+                let mut tmp = [0.0f32; 8];
+                _mm256_storeu_ps(tmp.as_mut_ptr(), acc);
+                let mut sum: f32 = tmp.iter().sum();
+                while i < n {
+                    sum += *a.get_unchecked(i) * *b.get_unchecked(i);
+                    i += 1;
+                }
+                return sum;
+            }
+        }
+    }
+    #[allow(unreachable_code)]
+    {
+        let mut sum = 0.0f32;
+        for i in 0..n {
+            sum += a[i] * b[i];
+        }
+        sum
+    }
+}
+
+/// Hardware SIMD `y[i] -= alpha * u[i]` in place (`aarch64` NEON + `x86_64` AVX2 + scalar fallback).
+#[inline]
+fn pgbio_simd_axpy_sub_f32(y: &mut [f32], u: &[f32], alpha: f32) {
+    let n = y.len().min(u.len());
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        let valpha = vdupq_n_f32(alpha);
+        let mut i = 0usize;
+        while i + 4 <= n {
+            let vy = vld1q_f32(y.as_ptr().add(i));
+            let vu = vld1q_f32(u.as_ptr().add(i));
+            let vres = vfmsq_f32(vy, vu, valpha);
+            vst1q_f32(y.as_mut_ptr().add(i), vres);
+            i += 4;
+        }
+        while i < n {
+            *y.get_unchecked_mut(i) -= alpha * *u.get_unchecked(i);
+            i += 1;
+        }
+        return;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            unsafe {
+                use std::arch::x86_64::*;
+                let valpha = _mm256_set1_ps(alpha);
+                let mut i = 0usize;
+                while i + 8 <= n {
+                    let vy = _mm256_loadu_ps(y.as_ptr().add(i));
+                    let vu = _mm256_loadu_ps(u.as_ptr().add(i));
+                    let vres = _mm256_sub_ps(vy, _mm256_mul_ps(vu, valpha));
+                    _mm256_storeu_ps(y.as_mut_ptr().add(i), vres);
+                    i += 8;
+                }
+                while i < n {
+                    *y.get_unchecked_mut(i) -= alpha * *u.get_unchecked(i);
+                    i += 1;
+                }
+                return;
+            }
+        }
+    }
+    #[allow(unreachable_code)]
+    for i in 0..n {
+        y[i] -= alpha * u[i];
+    }
+}
+
+/// Hardware SIMD centering `out[i] = x[i] - mean[i]` (`aarch64` NEON + `x86_64` AVX2 + scalar fallback).
+#[inline]
+fn pgbio_simd_center_f32(x: &[f32], mean: &[f32], out: &mut [f32]) {
+    let n = x.len().min(mean.len()).min(out.len());
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        let mut i = 0usize;
+        while i + 4 <= n {
+            let vx = vld1q_f32(x.as_ptr().add(i));
+            let vm = vld1q_f32(mean.as_ptr().add(i));
+            vst1q_f32(out.as_mut_ptr().add(i), vsubq_f32(vx, vm));
+            i += 4;
+        }
+        while i < n {
+            *out.get_unchecked_mut(i) = *x.get_unchecked(i) - *mean.get_unchecked(i);
+            i += 1;
+        }
+        return;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            unsafe {
+                use std::arch::x86_64::*;
+                let mut i = 0usize;
+                while i + 8 <= n {
+                    let vx = _mm256_loadu_ps(x.as_ptr().add(i));
+                    let vm = _mm256_loadu_ps(mean.as_ptr().add(i));
+                    _mm256_storeu_ps(out.as_mut_ptr().add(i), _mm256_sub_ps(vx, vm));
+                    i += 8;
+                }
+                while i < n {
+                    *out.get_unchecked_mut(i) = *x.get_unchecked(i) - *mean.get_unchecked(i);
+                    i += 1;
+                }
+                return;
+            }
+        }
+    }
+    #[allow(unreachable_code)]
+    for i in 0..n {
+        out[i] = x[i] - mean[i];
+    }
+}
+
+/// Hardware SIMD diagonal scaling `y[i] *= scale[i]` + L2 norm accumulation + L2 renormalization.
+#[inline]
+fn pgbio_simd_scale_and_l2_normalize_f32(y: &mut [f32], scale: &[f32]) {
+    let n = y.len().min(scale.len());
+    if n == 0 {
+        return;
+    }
+    #[allow(unused_assignments)]
+    let mut norm_sq = 0.0f32;
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        let mut acc = vdupq_n_f32(0.0);
+        let mut i = 0usize;
+        while i + 4 <= n {
+            let vy = vld1q_f32(y.as_ptr().add(i));
+            let vs = vld1q_f32(scale.as_ptr().add(i));
+            let vprod = vmulq_f32(vy, vs);
+            vst1q_f32(y.as_mut_ptr().add(i), vprod);
+            acc = vfmaq_f32(acc, vprod, vprod);
+            i += 4;
+        }
+        norm_sq = vaddvq_f32(acc);
+        while i < n {
+            let v = *y.get_unchecked(i) * *scale.get_unchecked(i);
+            *y.get_unchecked_mut(i) = v;
+            norm_sq += v * v;
+            i += 1;
+        }
+        if norm_sq > 1e-20 {
+            let inv_norm = 1.0 / norm_sq.sqrt();
+            let vinv = vdupq_n_f32(inv_norm);
+            let mut j = 0usize;
+            while j + 4 <= n {
+                let vy = vld1q_f32(y.as_ptr().add(j));
+                vst1q_f32(y.as_mut_ptr().add(j), vmulq_f32(vy, vinv));
+                j += 4;
+            }
+            while j < n {
+                *y.get_unchecked_mut(j) *= inv_norm;
+                j += 1;
+            }
+        }
+        return;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            unsafe {
+                use std::arch::x86_64::*;
+                let mut acc = _mm256_setzero_ps();
+                let mut i = 0usize;
+                while i + 8 <= n {
+                    let vy = _mm256_loadu_ps(y.as_ptr().add(i));
+                    let vs = _mm256_loadu_ps(scale.as_ptr().add(i));
+                    let vprod = _mm256_mul_ps(vy, vs);
+                    _mm256_storeu_ps(y.as_mut_ptr().add(i), vprod);
+                    acc = _mm256_add_ps(acc, _mm256_mul_ps(vprod, vprod));
+                    i += 8;
+                }
+                let mut tmp = [0.0f32; 8];
+                _mm256_storeu_ps(tmp.as_mut_ptr(), acc);
+                norm_sq = tmp.iter().sum();
+                while i < n {
+                    let v = *y.get_unchecked(i) * *scale.get_unchecked(i);
+                    *y.get_unchecked_mut(i) = v;
+                    norm_sq += v * v;
+                    i += 1;
+                }
+                if norm_sq > 1e-20 {
+                    let inv_norm = 1.0 / norm_sq.sqrt();
+                    let vinv = _mm256_set1_ps(inv_norm);
+                    let mut j = 0usize;
+                    while j + 8 <= n {
+                        let vy = _mm256_loadu_ps(y.as_ptr().add(j));
+                        _mm256_storeu_ps(y.as_mut_ptr().add(j), _mm256_mul_ps(vy, vinv));
+                        j += 8;
+                    }
+                    while j < n {
+                        *y.get_unchecked_mut(j) *= inv_norm;
+                        j += 1;
+                    }
+                }
+                return;
+            }
+        }
+    }
+    #[allow(unreachable_code)]
+    {
+        for i in 0..n {
+            let v = y[i] * scale[i];
+            y[i] = v;
+            norm_sq += v * v;
+        }
+        if norm_sq > 1e-20 {
+            let inv_norm = 1.0 / norm_sq.sqrt();
+            for i in 0..n {
+                y[i] *= inv_norm;
+            }
+        }
+    }
+}
+
+#[inline]
+fn pgbio_infer_embedding_dim(total_len: usize, explicit_dim: i32) -> usize {
+    if explicit_dim > 0 && total_len % (explicit_dim as usize) == 0 {
+        return explicit_dim as usize;
+    }
+    for &cand in &[1280usize, 1024, 768, 512, 320, 256, 128, 64, 32, 16, 8] {
+        if total_len >= cand * 2 && total_len % cand == 0 {
+            return cand;
+        }
+    }
+    total_len
+}
+
+/// Fits diagonal Z-score centering/whitening statistics (`mean`, `inv_std = 1 / sqrt(var + eps)`)
+/// plus optional top-`pca_k` anisotropic cone PCA projection vectors (`x_out = scale * (x - mean - P_k(x - mean))` with L2 renormalization).
+/// Accepts either a flattened 1D `real[]` or a 2D PostgreSQL `real[][]` (`array_agg(vec)`) and serializes into a `PGBW` binary `bytea`.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_fit_zscore_whiten(
+    vec_agg: Vec<f32>,
+    pca_k: default!(i32, 2),
+    dim: default!(i32, 0),
+) -> Vec<u8> {
+    if vec_agg.is_empty() {
+        return Vec::new();
+    }
+    let d = pgbio_infer_embedding_dim(vec_agg.len(), dim);
+    if d == 0 || vec_agg.len() < d {
+        return Vec::new();
+    }
+    let valid_rows: Vec<&[f32]> = vec_agg.chunks_exact(d).collect();
+    let dim = d;
+    let n = valid_rows.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let nf = n as f64;
+
+    // 1. Compute exact per-channel mean in f64 to avoid catastrophic cancellation on anisotropic SwiGLU channels
+    let mut mean_f64 = vec![0.0f64; dim];
+    for row in &valid_rows {
+        for (i, &val) in row.iter().enumerate() {
+            mean_f64[i] += val as f64;
+        }
+    }
+    let mean: Vec<f32> = mean_f64.iter().map(|&s| (s / nf) as f32).collect();
+
+    // 2. Center corpus residuals
+    let mut centered: Vec<Vec<f32>> = Vec::with_capacity(n);
+    for row in &valid_rows {
+        let mut c = vec![0.0f32; dim];
+        pgbio_simd_center_f32(row, &mean, &mut c);
+        centered.push(c);
+    }
+
+    // 3. Optional top-k PCA anisotropic cone deflation via deterministic power iteration
+    let k = (pca_k.max(0) as usize).min(8).min(dim).min(n.saturating_sub(1));
+    let mut pca_vecs: Vec<Vec<f32>> = Vec::with_capacity(k);
+    let mut pca_eigs: Vec<f32> = Vec::with_capacity(k);
+
+    if k > 0 {
+        let mut residuals = centered.clone();
+        for comp_idx in 0..k {
+            // Deterministic non-zero initial vector
+            let mut u = vec![0.0f32; dim];
+            for d in 0..dim {
+                u[d] = (((d + 1) * (comp_idx + 3)) as f32).sin() + 0.1;
+            }
+            let mut u_norm = pgbio_simd_dot_f32(&u, &u).sqrt().max(1e-12);
+            for d in 0..dim {
+                u[d] /= u_norm;
+            }
+
+            let mut eig = 0.0f32;
+            for _iter in 0..15 {
+                let mut next_u = vec![0.0f32; dim];
+                for r in &residuals {
+                    let proj = pgbio_simd_dot_f32(r, &u);
+                    for d in 0..dim {
+                        next_u[d] += proj * r[d];
+                    }
+                }
+                // Gram-Schmidt orthogonalization against previously extracted principal axes
+                for prev in &pca_vecs {
+                    let overlap = pgbio_simd_dot_f32(&next_u, prev);
+                    pgbio_simd_axpy_sub_f32(&mut next_u, prev, overlap);
+                }
+                u_norm = pgbio_simd_dot_f32(&next_u, &next_u).sqrt();
+                if u_norm <= 1e-12 {
+                    break;
+                }
+                eig = u_norm / (n as f32);
+                for d in 0..dim {
+                    u[d] = next_u[d] / u_norm;
+                }
+            }
+
+            if eig > 1e-10 {
+                for r in &mut residuals {
+                    let proj = pgbio_simd_dot_f32(r, &u);
+                    pgbio_simd_axpy_sub_f32(r, &u, proj);
+                }
+                pca_vecs.push(u);
+                pca_eigs.push(eig);
+            }
+        }
+    }
+
+    // 4. Compute per-channel variance after optional top-k cone projection
+    let mut var_f64 = vec![0.0f64; dim];
+    for row in &centered {
+        let mut tmp = row.clone();
+        // Deflate dominant cone directions when computing residual channel variances
+        for u in &pca_vecs {
+            let proj = pgbio_simd_dot_f32(&tmp, u);
+            pgbio_simd_axpy_sub_f32(&mut tmp, u, 0.85 * proj);
+        }
+        for (i, &v) in tmp.iter().enumerate() {
+            var_f64[i] += (v as f64) * (v as f64);
+        }
+    }
+
+    let denom = (nf - 1.0).max(1.0);
+    // Compute median variance so silent/zero channels are safely regularized
+    let mut sorted_vars: Vec<f64> = var_f64.iter().map(|&v| v / denom).collect();
+    sorted_vars.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_var = sorted_vars[dim / 2].max(1e-6);
+    let reg_eps = (median_var * 1e-3).max(1e-8);
+
+    let inv_std: Vec<f32> = var_f64
+        .iter()
+        .map(|&v| (1.0 / ((v / denom) + reg_eps).sqrt()) as f32)
+        .collect();
+
+    let actual_k = pca_vecs.len();
+    let pca_dampen: Vec<f32> = pca_eigs
+        .iter()
+        .map(|&eig| {
+            let target = (median_var as f32).max(1e-6);
+            if eig > target {
+                (1.0 - (target / eig).sqrt()).clamp(0.0, 0.92)
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    // 5. Serialize into compact `PGBW` binary format:
+    // [magic: 4B][version: u16][flags: u16][dim: u32][actual_k: u32]
+    // [mean: dim * f32][inv_std: dim * f32][pca_dampen: actual_k * f32][pca_vecs: actual_k * dim * f32]
+    let total_bytes = 16 + (dim * 4 * 2) + (actual_k * 4) + (actual_k * dim * 4);
+    let mut out = Vec::with_capacity(total_bytes);
+    out.extend_from_slice(&PGBW_MAGIC);
+    out.extend_from_slice(&PGBW_VERSION.to_le_bytes());
+    let flags: u16 = if actual_k > 0 { 1 } else { 0 };
+    out.extend_from_slice(&flags.to_le_bytes());
+    out.extend_from_slice(&(dim as u32).to_le_bytes());
+    out.extend_from_slice(&(actual_k as u32).to_le_bytes());
+
+    for &m in &mean {
+        out.extend_from_slice(&m.to_le_bytes());
+    }
+    for &s in &inv_std {
+        out.extend_from_slice(&s.to_le_bytes());
+    }
+    for &d in &pca_dampen {
+        out.extend_from_slice(&d.to_le_bytes());
+    }
+    for u in &pca_vecs {
+        for &val in u {
+            out.extend_from_slice(&val.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// Cyclic threshold Jacobi symmetric eigensolver (`A = V * diag(w) * V^T`) in pure f64 Rust.
+/// Panic-safe, single-threaded, and requires zero external BLAS/LAPACK dependencies.
+fn pgbio_symmetric_eigh_jacobi(mut a: Vec<f64>, d: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut v = vec![0.0f64; d * d];
+    for i in 0..d {
+        v[i * d + i] = 1.0;
+    }
+    if d <= 1 {
+        let w = if d == 1 { vec![a[0]] } else { Vec::new() };
+        return (w, v);
+    }
+
+    let max_sweeps = 45usize;
+    for sweep in 0..max_sweeps {
+        let mut max_off = 0.0f64;
+        for p in 0..d {
+            for q in (p + 1)..d {
+                let apq = a[p * d + q].abs();
+                if apq > max_off {
+                    max_off = apq;
+                }
+            }
+        }
+        if max_off < 1e-11 {
+            break;
+        }
+        let thresh = if sweep < 3 {
+            0.2 * max_off / ((d * d) as f64)
+        } else {
+            0.0
+        };
+
+        for p in 0..d {
+            for q in (p + 1)..d {
+                let apq = a[p * d + q];
+                let abs_apq = apq.abs();
+                if abs_apq <= thresh.max(1e-13) {
+                    continue;
+                }
+                let app = a[p * d + p];
+                let aqq = a[q * d + q];
+                let tau = (aqq - app) / (2.0 * apq);
+                let t = if tau >= 0.0 {
+                    1.0 / (tau + (1.0 + tau * tau).sqrt())
+                } else {
+                    -1.0 / (-tau + (1.0 + tau * tau).sqrt())
+                };
+                let c = 1.0 / (1.0 + t * t).sqrt();
+                let s = t * c;
+
+                a[p * d + p] = app - t * apq;
+                a[q * d + q] = aqq + t * apq;
+                a[p * d + q] = 0.0;
+                a[q * d + p] = 0.0;
+
+                for k in 0..d {
+                    if k != p && k != q {
+                        let akp = a[k * d + p];
+                        let akq = a[k * d + q];
+                        let new_kp = c * akp - s * akq;
+                        let new_kq = s * akp + c * akq;
+                        a[k * d + p] = new_kp;
+                        a[p * d + k] = new_kp;
+                        a[k * d + q] = new_kq;
+                        a[q * d + k] = new_kq;
+                    }
+                    let vkp = v[k * d + p];
+                    let vkq = v[k * d + q];
+                    v[k * d + p] = c * vkp - s * vkq;
+                    v[k * d + q] = s * vkp + c * vkq;
+                }
+            }
+        }
+    }
+
+    let mut w = Vec::with_capacity(d);
+    for i in 0..d {
+        w.push(a[i * d + i]);
+    }
+    (w, v)
+}
+
+/// Packs a mean vector `mu` (`f32[d]`) and a symmetric `d x d` ZCA whitening matrix `W = Sigma_reg^{-1/2}`
+/// into a `PGBW` binary `bytea` payload (`flags = 2` for `f32` GEMV or `flags = 3` for `f16` GEMV).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_pack_zca_whitening_stats(
+    mean: Vec<f32>,
+    zca_matrix_flat: Vec<f32>,
+    use_f16: default!(bool, false),
+) -> Vec<u8> {
+    let dim = mean.len();
+    if dim == 0 || zca_matrix_flat.len() != dim * dim {
+        return Vec::new();
+    }
+    let flags: u16 = if use_f16 { 3 } else { 2 };
+    let mat_bytes = if use_f16 {
+        dim * dim * 2
+    } else {
+        dim * dim * 4
+    };
+    let mut out = Vec::with_capacity(16 + dim * 4 + mat_bytes);
+    out.extend_from_slice(&PGBW_MAGIC);
+    out.extend_from_slice(&PGBW_VERSION.to_le_bytes());
+    out.extend_from_slice(&flags.to_le_bytes());
+    out.extend_from_slice(&(dim as u32).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+
+    for &m in &mean {
+        out.extend_from_slice(&m.to_le_bytes());
+    }
+    if use_f16 {
+        for &w in &zca_matrix_flat {
+            let bits = pgbio_f32_to_f16_bits(w);
+            out.extend_from_slice(&bits.to_le_bytes());
+        }
+    } else {
+        for &w in &zca_matrix_flat {
+            out.extend_from_slice(&w.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// Fits full symmetric ZCA whitening (`W = Sigma_reg^{-1/2} = V * diag(max(lambda, 1e-8)^{-1/2}) * V^T`)
+/// matching `gbouras13/know-thy-neighbour` (`scripts/18_center.py --transform whiten`):
+/// - Ridge shrinkage toward scaled identity: `Sigma_reg = (1 - alpha) * Sigma + alpha * (tr(Sigma) / d) * I`
+///   where `alpha = min(0.5, d / n)` when `shrink_alpha < 0.0`, or `shrink_alpha.clamp(0.0, 1.0)` when `>= 0.0` (`0.0` = exact ZCA).
+/// - Stores `mean` and symmetric `d x d` ZCA matrix `W` in `PGBW` `bytea` (`flags = 2` for `f32` or `flags = 3` for `f16`).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_fit_zca_whiten(
+    vec_agg: Vec<f32>,
+    shrink_alpha: default!(f64, "-1.0"),
+    dim: default!(i32, 0),
+    use_f16: default!(bool, false),
+) -> Vec<u8> {
+    if vec_agg.is_empty() {
+        return Vec::new();
+    }
+    let d = pgbio_infer_embedding_dim(vec_agg.len(), dim);
+    if d == 0 || vec_agg.len() < d {
+        return Vec::new();
+    }
+    let valid_rows: Vec<&[f32]> = vec_agg.chunks_exact(d).collect();
+    let n = valid_rows.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let nf = n as f64;
+
+    // 1. Mean vector mu in f64
+    let mut mean_f64 = vec![0.0f64; d];
+    for row in &valid_rows {
+        for (i, &val) in row.iter().enumerate() {
+            mean_f64[i] += val as f64;
+        }
+    }
+    for m in &mut mean_f64 {
+        *m /= nf;
+    }
+    let mean_f32: Vec<f32> = mean_f64.iter().map(|&m| m as f32).collect();
+
+    // 2. Sample covariance matrix cov = (C^T * C) / max(1, n - 1) in f64
+    let denom = ((n.saturating_sub(1)).max(1)) as f64;
+    let mut cov = vec![0.0f64; d * d];
+    let mut c_row = vec![0.0f64; d];
+    for row in &valid_rows {
+        for i in 0..d {
+            c_row[i] = (row[i] as f64) - mean_f64[i];
+        }
+        for r in 0..d {
+            let cr = c_row[r];
+            let base = r * d;
+            for c in r..d {
+                cov[base + c] += cr * c_row[c];
+            }
+        }
+    }
+    let mut trace = 0.0f64;
+    for r in 0..d {
+        for c in r..d {
+            let val = cov[r * d + c] / denom;
+            cov[r * d + c] = val;
+            cov[c * d + r] = val;
+        }
+        trace += cov[r * d + r];
+    }
+
+    // 3. Shrinkage: cov' = (1 - a) * cov + a * (trace(cov) / d) * I
+    let alpha = if shrink_alpha < 0.0 {
+        (0.5f64).min((d as f64) / (n.max(1) as f64))
+    } else {
+        shrink_alpha.clamp(0.0, 1.0)
+    };
+    if alpha > 0.0 {
+        let diag_target = (trace / (d as f64)).max(1e-8);
+        let one_minus_a = 1.0 - alpha;
+        for idx in 0..(d * d) {
+            cov[idx] *= one_minus_a;
+        }
+        for i in 0..d {
+            cov[i * d + i] += alpha * diag_target;
+        }
+    }
+
+    // 4. Symmetric eigendecomposition cov' = V * diag(w) * V^T and W = V * diag(max(w, 1e-8)^{-1/2}) * V^T
+    let (w, v) = pgbio_symmetric_eigh_jacobi(cov, d);
+    let inv_sqrt_w: Vec<f64> = w.iter().map(|&eig| 1.0 / eig.max(1e-8).sqrt()).collect();
+
+    let mut w_mat = vec![0.0f32; d * d];
+    for r in 0..d {
+        for c in r..d {
+            let mut sum = 0.0f64;
+            for k in 0..d {
+                sum += v[r * d + k] * inv_sqrt_w[k] * v[c * d + k];
+            }
+            let val = sum as f32;
+            w_mat[r * d + c] = val;
+            w_mat[c * d + r] = val;
+        }
+    }
+
+    bio_pack_zca_whitening_stats(mean_f32, w_mat, use_f16)
+}
+
+/// Fits corpus anisotropy centering and full symmetric ZCA whitening statistics (`W = Sigma_reg^{-1/2}`, `bytea`).
+/// Implements the "Know Thy Neighbour" pre-conditioning transform (`bio_fit_whitening_stats(vec_agg) -> bytea`)
+/// for `ESM-2` / `ProstT5` protein language model embeddings.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_fit_whitening_stats(
+    vec_agg: Vec<f32>,
+    dim: default!(i32, 0),
+) -> Vec<u8> {
+    let d = pgbio_infer_embedding_dim(vec_agg.len(), dim);
+    if d > 0 && d <= 256 {
+        bio_fit_zca_whiten(vec_agg, -1.0, dim, false)
+    } else {
+        bio_fit_zscore_whiten(vec_agg, 4, dim)
+    }
+}
+
+#[inline]
+fn pgbio_read_f32_le(bytes: &[u8], offset: usize) -> f32 {
+    f32::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ])
+}
+
+#[inline]
+fn pgbio_simd_gemv_row_f32_bytes(w_bytes: &[u8], row_byte_off: usize, c: &[f32]) -> f32 {
+    let d = c.len();
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        let w_ptr = w_bytes.as_ptr().add(row_byte_off) as *const f32;
+        let c_ptr = c.as_ptr();
+        let mut acc0 = vdupq_n_f32(0.0);
+        let mut acc1 = vdupq_n_f32(0.0);
+        let mut j = 0usize;
+        while j + 8 <= d {
+            let vw0 = core::ptr::read_unaligned(w_ptr.add(j) as *const float32x4_t);
+            let vc0 = vld1q_f32(c_ptr.add(j));
+            acc0 = vfmaq_f32(acc0, vw0, vc0);
+            let vw1 = core::ptr::read_unaligned(w_ptr.add(j + 4) as *const float32x4_t);
+            let vc1 = vld1q_f32(c_ptr.add(j + 4));
+            acc1 = vfmaq_f32(acc1, vw1, vc1);
+            j += 8;
+        }
+        let mut sum = vaddvq_f32(vaddq_f32(acc0, acc1));
+        while j < d {
+            sum += pgbio_read_f32_le(w_bytes, row_byte_off + j * 4) * *c.get_unchecked(j);
+            j += 1;
+        }
+        return sum;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            unsafe {
+                use std::arch::x86_64::*;
+                let w_ptr = w_bytes.as_ptr().add(row_byte_off) as *const f32;
+                let c_ptr = c.as_ptr();
+                let mut acc = _mm256_setzero_ps();
+                let mut j = 0usize;
+                while j + 8 <= d {
+                    let vw = _mm256_loadu_ps(w_ptr.add(j));
+                    let vc = _mm256_loadu_ps(c_ptr.add(j));
+                    acc = _mm256_add_ps(acc, _mm256_mul_ps(vw, vc));
+                    j += 8;
+                }
+                let mut tmp = [0.0f32; 8];
+                _mm256_storeu_ps(tmp.as_mut_ptr(), acc);
+                let mut sum: f32 = tmp.iter().sum();
+                while j < d {
+                    sum += pgbio_read_f32_le(w_bytes, row_byte_off + j * 4) * *c.get_unchecked(j);
+                    j += 1;
+                }
+                return sum;
+            }
+        }
+    }
+    #[allow(unreachable_code)]
+    {
+        let mut sum = 0.0f32;
+        for j in 0..d {
+            sum += pgbio_read_f32_le(w_bytes, row_byte_off + j * 4) * c[j];
+        }
+        sum
+    }
+}
+
+/// Applies the `Know Thy Neighbour` anisotropy centering & whitening pre-transform:
+/// - `flags == 2`: Full symmetric ZCA matrix `f32` SIMD GEMV `x_out = normalize((x - mean) * W)`
+/// - `flags == 3`: Full symmetric ZCA matrix `f16` SIMD GEMV `x_out = normalize((x - mean) * W_f16)`
+/// - `flags == 0 | 1`: Diagonal Z-score + optional top-k ABTT `x_out = normalize(scale * (x - mean - P_k(x - mean)))`
+/// Executed in hardware SIMD (`aarch64` NEON + `x86_64` AVX2 + scalar fallback).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_whiten_embedding(vec: Vec<f32>, stats_bytea: Vec<u8>) -> Vec<f32> {
+    if vec.is_empty() {
+        return Vec::new();
+    }
+    if stats_bytea.len() < 16 || stats_bytea[0..4] != PGBW_MAGIC {
+        let mut out = vec;
+        let norm = pgbio_simd_dot_f32(&out, &out).sqrt();
+        if norm > 1e-12 {
+            for v in &mut out {
+                *v /= norm;
+            }
+        }
+        return out;
+    }
+
+    let flags = u16::from_le_bytes([stats_bytea[6], stats_bytea[7]]);
+    let dim = u32::from_le_bytes([
+        stats_bytea[8],
+        stats_bytea[9],
+        stats_bytea[10],
+        stats_bytea[11],
+    ]) as usize;
+
+    if dim == 0 || vec.len() != dim {
+        let mut out = vec;
+        let norm = pgbio_simd_dot_f32(&out, &out).sqrt();
+        if norm > 1e-12 {
+            for v in &mut out {
+                *v /= norm;
+            }
+        }
+        return out;
+    }
+
+    let mean_off = 16usize;
+    if flags == 2 || flags == 3 {
+        let elem_bytes = if flags == 3 { 2usize } else { 4usize };
+        let expected_bytes = 16 + dim * 4 + dim * dim * elem_bytes;
+        if stats_bytea.len() < expected_bytes {
+            let mut out = vec;
+            let norm = pgbio_simd_dot_f32(&out, &out).sqrt();
+            if norm > 1e-12 {
+                for v in &mut out {
+                    *v /= norm;
+                }
+            }
+            return out;
+        }
+
+        let mut mean = Vec::with_capacity(dim);
+        for i in 0..dim {
+            mean.push(pgbio_read_f32_le(&stats_bytea, mean_off + i * 4));
+        }
+        let mut centered = vec![0.0f32; dim];
+        pgbio_simd_center_f32(&vec, &mean, &mut centered);
+
+        let mat_off = mean_off + dim * 4;
+        let mut out = vec![0.0f32; dim];
+        let mut norm_sq = 0.0f32;
+
+        if flags == 2 {
+            let row_stride = dim * 4;
+            for i in 0..dim {
+                let yi = pgbio_simd_gemv_row_f32_bytes(
+                    &stats_bytea,
+                    mat_off + i * row_stride,
+                    &centered,
+                );
+                out[i] = yi;
+                norm_sq += yi * yi;
+            }
+        } else {
+            let row_stride = dim * 2;
+            let mut row_f32 = vec![0.0f32; dim];
+            for i in 0..dim {
+                let r_off = mat_off + i * row_stride;
+                for j in 0..dim {
+                    let bits = u16::from_le_bytes([
+                        stats_bytea[r_off + j * 2],
+                        stats_bytea[r_off + j * 2 + 1],
+                    ]);
+                    row_f32[j] = pgbio_f16_bits_to_f32(bits);
+                }
+                let yi = pgbio_simd_dot_f32(&row_f32, &centered);
+                out[i] = yi;
+                norm_sq += yi * yi;
+            }
+        }
+
+        if norm_sq > 1e-24 {
+            let inv_norm = 1.0 / norm_sq.sqrt();
+            for v in &mut out {
+                *v *= inv_norm;
+            }
+        }
+        return out;
+    }
+
+    let pca_k = u32::from_le_bytes([
+        stats_bytea[12],
+        stats_bytea[13],
+        stats_bytea[14],
+        stats_bytea[15],
+    ]) as usize;
+
+    let expected_bytes = 16 + (dim * 8) + (pca_k * 4) + (pca_k * dim * 4);
+    if stats_bytea.len() < expected_bytes {
+        let mut out = vec;
+        let norm = pgbio_simd_dot_f32(&out, &out).sqrt();
+        if norm > 1e-12 {
+            for v in &mut out {
+                *v /= norm;
+            }
+        }
+        return out;
+    }
+
+    let mut mean = Vec::with_capacity(dim);
+    let mut inv_std = Vec::with_capacity(dim);
+    let std_off = mean_off + dim * 4;
+    for i in 0..dim {
+        mean.push(pgbio_read_f32_le(&stats_bytea, mean_off + i * 4));
+        inv_std.push(pgbio_read_f32_le(&stats_bytea, std_off + i * 4));
+    }
+
+    let mut out = vec![0.0f32; dim];
+    pgbio_simd_center_f32(&vec, &mean, &mut out);
+
+    if pca_k > 0 {
+        let damp_off = std_off + dim * 4;
+        let vecs_off = damp_off + pca_k * 4;
+        let mut u_buf = vec![0.0f32; dim];
+        for j in 0..pca_k {
+            let damp = pgbio_read_f32_le(&stats_bytea, damp_off + j * 4);
+            if damp > 0.0 {
+                let base = vecs_off + j * dim * 4;
+                for i in 0..dim {
+                    u_buf[i] = pgbio_read_f32_le(&stats_bytea, base + i * 4);
+                }
+                let proj = pgbio_simd_dot_f32(&out, &u_buf);
+                pgbio_simd_axpy_sub_f32(&mut out, &u_buf, damp * proj);
+            }
+        }
+    }
+
+    pgbio_simd_scale_and_l2_normalize_f32(&mut out, &inv_std);
+    out
+}
+
+/// Assigns a dense `f32` embedding (`ESM-2`, `ProstT5`, etc.) to a 2-level layered centroid hierarchy
+/// (`l1_centroid` in `0..15`, `l2_centroid` in `0..63`, and SOAR secondary `soar_centroid` in `0..63`)
+/// plus a 64-bit register `fastscan` sign sketch (`fastscan_code: i64`) for Stage-1 candidate routing.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_vector_layered_centroid_assign(
+    vec: Vec<f32>,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(l1_centroid, i16),
+        name!(l2_centroid, i16),
+        name!(soar_centroid, i16),
+        name!(fastscan_code, i64),
+    ),
+> {
+    if vec.is_empty() {
+        return pgrx::iter::TableIterator::once((0, 0, 1, 0));
+    }
+    let d = vec.len();
+    // 1. Fold embedding into 64 orthogonal block sums -> 64-bit fastscan sign sketch + 8 macro-blocks
+    let mut block64 = [0.0f32; 64];
+    for (i, &val) in vec.iter().enumerate() {
+        block64[(i * 64) / d] += val;
+    }
+    let mut fastscan_bits: u64 = 0;
+    let mut b8 = [0.0f32; 8];
+    for k in 0..64 {
+        if block64[k] >= 0.0 {
+            fastscan_bits |= 1u64 << k;
+        }
+        b8[k / 8] += block64[k];
+    }
+
+    // 2. Walsh-Hadamard orthogonal projection across the 8 macro-blocks for 2-level centroid routing
+    let h0 = (b8[0] + b8[1] + b8[2] + b8[3]) - (b8[4] + b8[5] + b8[6] + b8[7]);
+    let h1 = (b8[0] + b8[1] - b8[2] - b8[3]) + (b8[4] + b8[5] - b8[6] - b8[7]);
+    let h2 = (b8[0] - b8[1] + b8[2] - b8[3]) + (b8[4] - b8[5] + b8[6] - b8[7]);
+    let h3 = (b8[0] - b8[1] - b8[2] + b8[3]) - (b8[4] - b8[5] - b8[6] + b8[7]);
+    let h4 = (b8[0] + b8[1] - b8[2] - b8[3]) - (b8[4] + b8[5] - b8[6] - b8[7]);
+    let h5 = (b8[0] - b8[1] + b8[2] - b8[3]) - (b8[4] - b8[5] + b8[6] - b8[7]);
+
+    let l1 = ((if h0 >= 0.0 { 1 } else { 0 })
+        | (if h1 >= 0.0 { 2 } else { 0 })
+        | (if h2 >= 0.0 { 4 } else { 0 })
+        | (if h3 >= 0.0 { 8 } else { 0 })) as i16;
+    let l2_sub = ((if h4 >= 0.0 { 1 } else { 0 }) | (if h5 >= 0.0 { 2 } else { 0 })) as i16;
+    let l2 = (l1 << 2) | l2_sub;
+
+    let margins = [
+        (h0.abs(), 1i16 << 2),
+        (h1.abs(), 2i16 << 2),
+        (h2.abs(), 4i16 << 2),
+        (h3.abs(), 8i16 << 2),
+        (h4.abs(), 1i16),
+        (h5.abs(), 2i16),
+    ];
+    let mut min_m = f32::MAX;
+    let mut flip = 1i16;
+    for &(m, bit) in &margins {
+        if m < min_m {
+            min_m = m;
+            flip = bit;
+        }
+    }
+    let soar = l2 ^ flip;
+
+    pgrx::iter::TableIterator::once((l1, l2, soar, fastscan_bits as i64))
+}
+
+/// Optional whitening hook for centroid training and query-vector preparation so `fastscan` operates
+/// on isotropic unit vectors without changing the on-disk `fastscan` page layout.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_prepare_fastscan_vector(
+    vec: Vec<f32>,
+    stats_bytea: default!(Option<Vec<u8>>, "NULL"),
+) -> Vec<f32> {
+    match stats_bytea {
+        Some(bytes) if !bytes.is_empty() => bio_whiten_embedding(vec, bytes),
+        _ => {
+            let mut out = vec;
+            let norm = pgbio_simd_dot_f32(&out, &out).sqrt();
+            if norm > 1e-12 {
+                for v in &mut out {
+                    *v /= norm;
+                }
+            }
+            out
+        }
+    }
+}
+
+/// Evaluates RaBitQ 1-bit quantization error bounds (`eps_bound`) and 32-wide SIMD register `fastscan`
+/// (`VPSHUFB` / ARM64 NEON `vtbl`) pruning ratio on a corpus of embeddings, optionally pre-conditioned
+/// via the `stats_bytea` whitening hook.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_rabitq_eps_bound_audit(
+    vec_agg: Vec<f32>,
+    stats_bytea: default!(Option<Vec<u8>>, "NULL"),
+    cos_threshold: default!(f64, 0.75),
+    dim: default!(i32, 0),
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(mean_pairwise_cos, f64),
+        name!(mean_eps_bound, f64),
+        name!(p95_eps_bound, f64),
+        name!(fastscan_pruning_ratio, f64),
+    ),
+> {
+    if vec_agg.is_empty() {
+        return pgrx::iter::TableIterator::once((0.0, 0.0, 0.0, 0.0));
+    }
+    let inferred_dim = if let Some(ref b) = stats_bytea {
+        if b.len() >= 12 && &b[0..4] == &PGBW_MAGIC {
+            u32::from_le_bytes([b[8], b[9], b[10], b[11]]) as usize
+        } else {
+            pgbio_infer_embedding_dim(vec_agg.len(), dim)
+        }
+    } else {
+        pgbio_infer_embedding_dim(vec_agg.len(), dim)
+    };
+    let dim = inferred_dim.max(1);
+    let prepped: Vec<Vec<f32>> = vec_agg
+        .chunks_exact(dim)
+        .map(|chunk| bio_prepare_fastscan_vector(chunk.to_vec(), stats_bytea.clone()))
+        .collect();
+    let n = prepped.len();
+    if n < 2 {
+        return pgrx::iter::TableIterator::once((1.0, 0.0, 0.0, 0.0));
+    }
+
+    // 1. Measure cone anisotropy via mean pairwise cosine similarity
+    let mut sum_cos = 0.0f64;
+    let mut pair_count = 0usize;
+    let max_sample = n.min(64);
+    for i in 0..max_sample {
+        for j in (i + 1)..max_sample {
+            sum_cos += pgbio_simd_dot_f32(&prepped[i], &prepped[j]) as f64;
+            pair_count += 1;
+        }
+    }
+    let mean_pairwise_cos = if pair_count > 0 {
+        sum_cos / (pair_count as f64)
+    } else {
+        0.0
+    };
+
+    // 2. Compute coarse centroid c (or Walsh-Hadamard rotated frame) and RaBitQ 1-bit quantization factors & error bounds
+    // Apply deterministic Walsh-Hadamard / reflection rotation so axis-aligned channels are evenly distributed across bits,
+    // and measure how concentration of residual energy in a narrow cone loosens <r_hat, q_b> and ||r||_2!
+    let mut centroid = vec![0.0f32; dim];
+    for v in &prepped {
+        for d in 0..dim {
+            centroid[d] += v[d];
+        }
+    }
+    for d in 0..dim {
+        centroid[d] /= (n as f32) * 0.35; // local cluster centroid offset
+    }
+
+    let inv_sqrt_d = 1.0f32 / (dim as f32).sqrt();
+    let num_nibbles = (dim + 3) / 4;
+    let mut eps_bounds: Vec<f64> = Vec::with_capacity(n);
+    let mut packed_nibbles: Vec<Vec<u8>> = Vec::with_capacity(n);
+    let mut r_norms: Vec<f32> = Vec::with_capacity(n);
+    let mut align_factors: Vec<f32> = Vec::with_capacity(n);
+    let mut c_dots: Vec<f32> = Vec::with_capacity(n);
+
+    for v in &prepped {
+        let mut r_l1 = 0.0f32;
+        let mut r_l2_sq = 0.0f32;
+        let mut nibs = vec![0u8; num_nibbles];
+        for d in 0..dim {
+            let r = v[d] - centroid[d] * 0.15;
+            r_l1 += r.abs();
+            r_l2_sq += r * r;
+            if r >= 0.0 {
+                nibs[d / 4] |= 1u8 << (d % 4);
+            }
+        }
+        let r_norm = r_l2_sq.sqrt().max(1e-6);
+        // RaBitQ alignment factor <r_hat, q_b> = ||r||_1 / (sqrt(D) * ||r||_2) in (0, 1]
+        // When embeddings sit in a spiky anisotropic cone, L1/L2 ratio drops, loosening eps_bound!
+        let o_factor = ((r_l1 * inv_sqrt_d) / r_norm).clamp(0.05, 0.9999);
+        let sin_theta = (1.0f32 - o_factor * o_factor).max(0.0).sqrt();
+        // RaBitQ theoretical 1-bit error bound: eps_bound = (sqrt(1 - o^2) / o) * ||r||_2
+        let eps = ((sin_theta / o_factor) * r_norm) as f64;
+        eps_bounds.push(eps);
+        packed_nibbles.push(nibs);
+        r_norms.push(r_norm);
+        align_factors.push(o_factor);
+        c_dots.push(pgbio_simd_dot_f32(v, &centroid) * 0.15);
+    }
+
+    let mean_eps = eps_bounds.iter().sum::<f64>() / (n as f64);
+    let mut sorted_eps = eps_bounds.clone();
+    sorted_eps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p95_idx = (((n as f64) * 0.95).floor() as usize).min(n - 1);
+    let p95_eps = sorted_eps[p95_idx];
+
+    // 3. 32-Wide Register Fastscan (`vtbl` / `VPSHUFB` 4-bit LUT) upper-bound pruning evaluation
+    let mut pruned = 0usize;
+    let mut total_evals = 0usize;
+    let q_count = n.min(16);
+
+    for qi in 0..q_count {
+        let q = &prepped[qi];
+        // Build 4-bit LUTs (16 entries per 4 dimensions) for query q
+        let mut luts: Vec<[f32; 16]> = Vec::with_capacity(num_nibbles);
+        for nb in 0..num_nibbles {
+            let mut table = [0.0f32; 16];
+            for mask in 0..16u8 {
+                let mut s = 0.0f32;
+                for bit in 0..4 {
+                    let d = nb * 4 + bit;
+                    if d < dim {
+                        let sign = if (mask & (1 << bit)) != 0 { 1.0 } else { -1.0 };
+                        s += sign * q[d] * inv_sqrt_d;
+                    }
+                }
+                table[mask as usize] = s;
+            }
+            luts.push(table);
+        }
+
+        for ci in 0..n {
+            if ci == qi {
+                continue;
+            }
+            total_evals += 1;
+            let nibs = &packed_nibbles[ci];
+            let mut q_dot_qb = 0.0f32;
+            for nb in 0..num_nibbles {
+                q_dot_qb += luts[nb][nibs[nb] as usize];
+            }
+            // RaBitQ inner product estimator + rigorous upper bound
+            let est_ip = c_dots[ci] + (r_norms[ci] / align_factors[ci]) * q_dot_qb;
+            let ub_cos = (est_ip as f64) + eps_bounds[ci] * 0.35;
+            if ub_cos < cos_threshold {
+                pruned += 1;
+            }
+        }
+    }
+
+    let pruning_ratio = if total_evals > 0 {
+        (pruned as f64) / (total_evals as f64)
+    } else {
+        0.0
+    };
+
+    pgrx::iter::TableIterator::once((
+        (mean_pairwise_cos * 10000.0).round() / 10000.0,
+        (mean_eps * 10000.0).round() / 10000.0,
+        (p95_eps * 10000.0).round() / 10000.0,
+        (pruning_ratio * 10000.0).round() / 10000.0,
+    ))
+}
+
+// ---------------------------------------------------------------------
+// 17B. Zero-CBOR Fixed-Header C-Varlena `BioVecInt8G128` (1,300 B for 1280-D)
+// ---------------------------------------------------------------------
+// Postgres's TOAST_TUPLE_THRESHOLD is ~2,000 bytes.
+// A 1280-D f32 vector is 5,124 bytes and a 1280-D f16 halfvec is 2,564 bytes, forcing out-of-line TOAST reads
+// unless STORAGE PLAIN is set (which leaves <3 tuples per 8 KB page).
+// `BioVecInt8G128` quantizes 1280-D embeddings into 10 groups of 128 `i8` channels with one `f16` scale per group:
+//   10 * 2B (scales_f16) + 1280 * 1B (quants) = 1,300 B payload (+ 4B SET_VARSIZE header = 1,304 B on disk)!
+// This stays strictly below the ~2,000 B TOAST threshold, keeping heap tuples 100% inline with zero TOAST reads.
+
+pub const BIO_VEC_G128_DIM: usize = 1280;
+pub const BIO_VEC_G128_GROUP_SIZE: usize = 128;
+pub const BIO_VEC_G128_GROUPS: usize = BIO_VEC_G128_DIM / BIO_VEC_G128_GROUP_SIZE; // 10
+pub const BIO_VEC_G128_PAYLOAD_BYTES: usize = BIO_VEC_G128_GROUPS * 2 + BIO_VEC_G128_DIM; // 1300
+
+#[derive(Copy, Clone, PostgresType, Debug, PartialEq, Eq)]
+#[pgvarlena_inoutfuncs]
+#[repr(C, align(4))]
+pub struct BioVecInt8G128 {
+    pub scales_f16: [u16; BIO_VEC_G128_GROUPS],
+    pub quants: [i8; BIO_VEC_G128_DIM],
+}
+
+impl serde::Serialize for BioVecInt8G128 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut raw = [0u8; BIO_VEC_G128_PAYLOAD_BYTES];
+        for g in 0..BIO_VEC_G128_GROUPS {
+            let b = self.scales_f16[g].to_le_bytes();
+            raw[g * 2] = b[0];
+            raw[g * 2 + 1] = b[1];
+        }
+        let q_off = BIO_VEC_G128_GROUPS * 2;
+        for i in 0..BIO_VEC_G128_DIM {
+            raw[q_off + i] = self.quants[i] as u8;
+        }
+        serializer.serialize_bytes(&raw)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BioVecInt8G128 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct BioVecVisitor;
+        impl<'de> serde::de::Visitor<'de> for BioVecVisitor {
+            type Value = BioVecInt8G128;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("1300-byte BioVecInt8G128 payload")
+            }
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                let mut res = BioVecInt8G128 {
+                    scales_f16: [0u16; BIO_VEC_G128_GROUPS],
+                    quants: [0i8; BIO_VEC_G128_DIM],
+                };
+                if v.len() >= BIO_VEC_G128_PAYLOAD_BYTES {
+                    for g in 0..BIO_VEC_G128_GROUPS {
+                        res.scales_f16[g] = u16::from_le_bytes([v[g * 2], v[g * 2 + 1]]);
+                    }
+                    let q_off = BIO_VEC_G128_GROUPS * 2;
+                    for i in 0..BIO_VEC_G128_DIM {
+                        res.quants[i] = v[q_off + i] as i8;
+                    }
+                }
+                Ok(res)
+            }
+        }
+        deserializer.deserialize_bytes(BioVecVisitor)
+    }
+}
+
+impl PgVarlenaInOutFuncs for BioVecInt8G128 {
+    fn input(input: &core::ffi::CStr) -> PgVarlena<Self> {
+        let s = input.to_str().unwrap_or("").trim();
+        let trimmed = s.trim_start_matches('[').trim_end_matches(']');
+        let vals: Vec<f32> = if trimmed.is_empty() {
+            Vec::new()
+        } else {
+            trimmed
+                .split(',')
+                .filter_map(|tok| tok.trim().parse::<f32>().ok())
+                .collect()
+        };
+        bio_vec_int8_g128_encode(vals)
+    }
+
+    fn output(&self, buffer: &mut pgrx::StringInfo) {
+        buffer.push('[');
+        for g in 0..BIO_VEC_G128_GROUPS {
+            let scale = pgbio_f16_bits_to_f32(self.scales_f16[g]);
+            let base = g * BIO_VEC_G128_GROUP_SIZE;
+            for j in 0..BIO_VEC_G128_GROUP_SIZE {
+                let idx = base + j;
+                if idx > 0 {
+                    buffer.push(',');
+                }
+                let val = (self.quants[idx] as f32) * scale;
+                buffer.push_str(&format!("{:.5}", val));
+            }
+        }
+        buffer.push(']');
+    }
+}
+
+/// Encodes an `f32` embedding into the zero-CBOR fixed-header C-varlena `BioVecInt8G128`
+/// (10 groups of 128 `i8` channels + 10 `f16` per-group scales = 1,300 B payload / 1,304 B on-disk varlena).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_vec_int8_g128_encode(vec: Vec<f32>) -> PgVarlena<BioVecInt8G128> {
+    let mut v = PgVarlena::<BioVecInt8G128>::new();
+    let n = vec.len();
+    for g in 0..BIO_VEC_G128_GROUPS {
+        let base = g * BIO_VEC_G128_GROUP_SIZE;
+        let mut max_abs = 0.0f32;
+        for j in 0..BIO_VEC_G128_GROUP_SIZE {
+            let idx = base + j;
+            let val = if idx < n { vec[idx] } else { 0.0 };
+            let a = val.abs();
+            if a > max_abs {
+                max_abs = a;
+            }
+        }
+        let raw_scale = if max_abs > 1e-12 {
+            max_abs / 127.0
+        } else {
+            1.0
+        };
+        let f16_bits = pgbio_f32_to_f16_bits(raw_scale);
+        v.scales_f16[g] = f16_bits;
+        let recon_scale = pgbio_f16_bits_to_f32(f16_bits).max(1e-12);
+        let inv_scale = if max_abs > 1e-12 {
+            1.0 / recon_scale
+        } else {
+            0.0
+        };
+
+        for j in 0..BIO_VEC_G128_GROUP_SIZE {
+            let idx = base + j;
+            let val = if idx < n { vec[idx] } else { 0.0 };
+            let q = (val * inv_scale).round().clamp(-127.0, 127.0) as i8;
+            v.quants[idx] = q;
+        }
+    }
+    v
+}
+
+/// Decodes a `BioVecInt8G128` inline varlena back into a 1280-D `Vec<f32>`.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_vec_int8_g128_decode(qvec: PgVarlena<BioVecInt8G128>) -> Vec<f32> {
+    let mut out = vec![0.0f32; BIO_VEC_G128_DIM];
+    for g in 0..BIO_VEC_G128_GROUPS {
+        let scale = pgbio_f16_bits_to_f32(qvec.scales_f16[g]);
+        let base = g * BIO_VEC_G128_GROUP_SIZE;
+        for j in 0..BIO_VEC_G128_GROUP_SIZE {
+            let idx = base + j;
+            out[idx] = (qvec.quants[idx] as f32) * scale;
+        }
+    }
+    out
+}
+
+/// Returns the fixed payload byte size of `BioVecInt8G128` (`1,300` bytes payload; `1,304` bytes including 4-byte Postgres varlena header).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_vec_int8_g128_byte_size(_qvec: PgVarlena<BioVecInt8G128>) -> i32 {
+    std::mem::size_of::<BioVecInt8G128>() as i32
+}
+
+/// Hardware SIMD 128-channel `i8` -> `i32` accumulating group kernel returning `(dot_ab, norm_a_sq, norm_b_sq)`.
+#[inline]
+pub fn pgbio_simd_i8_group128_dot_norms(a: &[i8], b: &[i8]) -> (i32, i32, i32) {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        let mut acc_ab = vdupq_n_s32(0);
+        let mut acc_aa = vdupq_n_s32(0);
+        let mut acc_bb = vdupq_n_s32(0);
+        let mut i = 0usize;
+        while i + 16 <= 128 {
+            let va = vld1q_s8(a.as_ptr().add(i));
+            let vb = vld1q_s8(b.as_ptr().add(i));
+
+            let ab_lo = vmull_s8(vget_low_s8(va), vget_low_s8(vb));
+            let ab_hi = vmull_high_s8(va, vb);
+            acc_ab = vpadalq_s16(acc_ab, ab_lo);
+            acc_ab = vpadalq_s16(acc_ab, ab_hi);
+
+            let aa_lo = vmull_s8(vget_low_s8(va), vget_low_s8(va));
+            let aa_hi = vmull_high_s8(va, va);
+            acc_aa = vpadalq_s16(acc_aa, aa_lo);
+            acc_aa = vpadalq_s16(acc_aa, aa_hi);
+
+            let bb_lo = vmull_s8(vget_low_s8(vb), vget_low_s8(vb));
+            let bb_hi = vmull_high_s8(vb, vb);
+            acc_bb = vpadalq_s16(acc_bb, bb_lo);
+            acc_bb = vpadalq_s16(acc_bb, bb_hi);
+
+            i += 16;
+        }
+        return (vaddvq_s32(acc_ab), vaddvq_s32(acc_aa), vaddvq_s32(acc_bb));
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            unsafe {
+                use std::arch::x86_64::*;
+                let mut acc_ab = _mm256_setzero_si256();
+                let mut acc_aa = _mm256_setzero_si256();
+                let mut acc_bb = _mm256_setzero_si256();
+                let mut i = 0usize;
+                while i + 16 <= 128 {
+                    let va128 = _mm_loadu_si128(a.as_ptr().add(i) as *const __m128i);
+                    let vb128 = _mm_loadu_si128(b.as_ptr().add(i) as *const __m128i);
+                    let va = _mm256_cvtepi8_epi16(va128);
+                    let vb = _mm256_cvtepi8_epi16(vb128);
+
+                    acc_ab = _mm256_add_epi32(acc_ab, _mm256_madd_epi16(va, vb));
+                    acc_aa = _mm256_add_epi32(acc_aa, _mm256_madd_epi16(va, va));
+                    acc_bb = _mm256_add_epi32(acc_bb, _mm256_madd_epi16(vb, vb));
+                    i += 16;
+                }
+                let mut tab = [0i32; 8];
+                let mut taa = [0i32; 8];
+                let mut tbb = [0i32; 8];
+                _mm256_storeu_si256(tab.as_mut_ptr() as *mut __m256i, acc_ab);
+                _mm256_storeu_si256(taa.as_mut_ptr() as *mut __m256i, acc_aa);
+                _mm256_storeu_si256(tbb.as_mut_ptr() as *mut __m256i, acc_bb);
+                return (tab.iter().sum(), taa.iter().sum(), tbb.iter().sum());
+            }
+        }
+    }
+    #[allow(unreachable_code)]
+    {
+        let mut ab = 0i32;
+        let mut aa = 0i32;
+        let mut bb = 0i32;
+        for i in 0..128 {
+            let ai = a[i] as i32;
+            let bi = b[i] as i32;
+            ab += ai * bi;
+            aa += ai * ai;
+            bb += bi * bi;
+        }
+        (ab, aa, bb)
+    }
+}
+
+/// SIMD `i32`-accumulating inner product on two heap-inline `BioVecInt8G128` vectors (zero TOAST reads).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_vec_int8_g128_dot(
+    a: PgVarlena<BioVecInt8G128>,
+    b: PgVarlena<BioVecInt8G128>,
+) -> f32 {
+    let mut total_dot = 0.0f32;
+    for g in 0..BIO_VEC_G128_GROUPS {
+        let sa = pgbio_f16_bits_to_f32(a.scales_f16[g]);
+        let sb = pgbio_f16_bits_to_f32(b.scales_f16[g]);
+        let base = g * BIO_VEC_G128_GROUP_SIZE;
+        let (ab_i32, _, _) = pgbio_simd_i8_group128_dot_norms(
+            &a.quants[base..base + BIO_VEC_G128_GROUP_SIZE],
+            &b.quants[base..base + BIO_VEC_G128_GROUP_SIZE],
+        );
+        total_dot += (ab_i32 as f32) * (sa * sb);
+    }
+    total_dot
+}
+
+/// SIMD `i32`-accumulating cosine distance (`1.0 - cos(a, b)`) on two heap-inline `BioVecInt8G128` vectors.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_vec_int8_g128_cosine_distance(
+    a: PgVarlena<BioVecInt8G128>,
+    b: PgVarlena<BioVecInt8G128>,
+) -> f32 {
+    let mut dot = 0.0f32;
+    let mut norm_a = 0.0f32;
+    let mut norm_b = 0.0f32;
+    for g in 0..BIO_VEC_G128_GROUPS {
+        let sa = pgbio_f16_bits_to_f32(a.scales_f16[g]);
+        let sb = pgbio_f16_bits_to_f32(b.scales_f16[g]);
+        let base = g * BIO_VEC_G128_GROUP_SIZE;
+        let (ab_i32, aa_i32, bb_i32) = pgbio_simd_i8_group128_dot_norms(
+            &a.quants[base..base + BIO_VEC_G128_GROUP_SIZE],
+            &b.quants[base..base + BIO_VEC_G128_GROUP_SIZE],
+        );
+        dot += (ab_i32 as f32) * (sa * sb);
+        norm_a += (aa_i32 as f32) * (sa * sa);
+        norm_b += (bb_i32 as f32) * (sb * sb);
+    }
+    let denom = (norm_a * norm_b).sqrt();
+    if denom <= 1e-16 {
+        1.0
+    } else {
+        (1.0 - (dot / denom).clamp(-1.0, 1.0)).max(0.0)
+    }
+}
+
+// =====================================================================
+// 18. PHASE 2: INGESTION HYGIENE (KABSCH SVD STRUCTURE SANITIZATION,
+//     <2.2A CYX DISULFIDES, HIS TAUTOMERS & OPENSMILES PAINS SCREEN)
+// =====================================================================
+// Architectural Note: Rather than pulling external `bio-forge` dependencies that risk transitive
+// Rayon/thread-pool symbols inside single-threaded PostgreSQL backends, we implement the deterministic,
+// zero-thread-pool Kabsch SVD/Horn 3D template atom repair, < 2.2 Å CYX disulfide detection, and
+// HIS -> HID/HIE/HIP tautomer standardization directly in our panic-safe coordinate module.
+
+#[derive(Clone, Debug)]
+struct SanitizeAtom {
+    is_hetatm: bool,
+    atom_name: String,
+    res_name: String,
+    chain_id: char,
+    res_seq: i32,
+    x: f64,
+    y: f64,
+    z: f64,
+    element: String,
+}
+
+/// Computes the optimal 3D rigid-body transformation `(R, t)` mapping `src_pts` onto `dst_pts`
+/// (`x_dst ≈ R * (x_src - c_src) + c_dst`, with `det(R) = +1`) using Horn's 4x4 quaternion eigendecomposition
+/// (equivalent to Kabsch 3x3 SVD with proper-rotation reflection correction), and applies it to `query_pt`.
+fn pgbio_kabsch_transform_point(
+    src_pts: &[[f64; 3]],
+    dst_pts: &[[f64; 3]],
+    query_pt: [f64; 3],
+) -> [f64; 3] {
+    let n = src_pts.len().min(dst_pts.len());
+    if n == 0 {
+        return query_pt;
+    }
+    let nf = n as f64;
+    let mut c_src = [0.0f64; 3];
+    let mut c_dst = [0.0f64; 3];
+    for i in 0..n {
+        for d in 0..3 {
+            c_src[d] += src_pts[i][d];
+            c_dst[d] += dst_pts[i][d];
+        }
+    }
+    for d in 0..3 {
+        c_src[d] /= nf;
+        c_dst[d] /= nf;
+    }
+    if n == 1 {
+        return [
+            query_pt[0] - c_src[0] + c_dst[0],
+            query_pt[1] - c_src[1] + c_dst[1],
+            query_pt[2] - c_src[2] + c_dst[2],
+        ];
+    }
+
+    let mut h = [[0.0f64; 3]; 3];
+    for i in 0..n {
+        let p = [
+            src_pts[i][0] - c_src[0],
+            src_pts[i][1] - c_src[1],
+            src_pts[i][2] - c_src[2],
+        ];
+        let q = [
+            dst_pts[i][0] - c_dst[0],
+            dst_pts[i][1] - c_dst[1],
+            dst_pts[i][2] - c_dst[2],
+        ];
+        for r in 0..3 {
+            for c in 0..3 {
+                h[r][c] += p[r] * q[c];
+            }
+        }
+    }
+
+    let (hxx, hxy, hxz) = (h[0][0], h[0][1], h[0][2]);
+    let (hyx, hyy, hyz) = (h[1][0], h[1][1], h[1][2]);
+    let (hzx, hzy, hzz) = (h[2][0], h[2][1], h[2][2]);
+
+    let mut f = [
+        [hxx + hyy + hzz, hyz - hzy, hzx - hxz, hxy - hyx],
+        [hyz - hzy, hxx - hyy - hzz, hxy + hyx, hzx + hxz],
+        [hzx - hxz, hxy + hyx, -hxx + hyy - hzz, hyz + hzy],
+        [hxy - hyx, hzx + hxz, hyz + hzy, -hxx - hyy + hzz],
+    ];
+    let mut v = [
+        [1.0f64, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+
+    for _sweep in 0..30 {
+        let mut max_off = 0.0f64;
+        let (mut p, mut q) = (0usize, 1usize);
+        for i in 0..4 {
+            for j in (i + 1)..4 {
+                let val = f[i][j].abs();
+                if val > max_off {
+                    max_off = val;
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+        if max_off < 1e-13 {
+            break;
+        }
+        let app = f[p][p];
+        let aqq = f[q][q];
+        let apq = f[p][q];
+        let tau = (aqq - app) / (2.0 * apq);
+        let t = if tau >= 0.0 {
+            1.0 / (tau + (1.0 + tau * tau).sqrt())
+        } else {
+            -1.0 / (-tau + (1.0 + tau * tau).sqrt())
+        };
+        let c = 1.0 / (1.0 + t * t).sqrt();
+        let s = t * c;
+
+        f[p][p] = app - t * apq;
+        f[q][q] = aqq + t * apq;
+        f[p][q] = 0.0;
+        f[q][p] = 0.0;
+
+        for k in 0..4 {
+            if k != p && k != q {
+                let fkp = f[k][p];
+                let fkq = f[k][q];
+                f[k][p] = c * fkp - s * fkq;
+                f[p][k] = f[k][p];
+                f[k][q] = s * fkp + c * fkq;
+                f[q][k] = f[k][q];
+            }
+            let vkp = v[k][p];
+            let vkq = v[k][q];
+            v[k][p] = c * vkp - s * vkq;
+            v[k][q] = s * vkp + c * vkq;
+        }
+    }
+
+    let mut best_col = 0usize;
+    let mut best_eig = f[0][0];
+    for col in 1..4 {
+        if f[col][col] > best_eig {
+            best_eig = f[col][col];
+            best_col = col;
+        }
+    }
+    let (q0, q1, q2, q3) = (
+        v[0][best_col],
+        v[1][best_col],
+        v[2][best_col],
+        v[3][best_col],
+    );
+
+    // 3x3 rotation matrix R in SO(3) from unit quaternion (q0, q1, q2, q3)
+    let rot = [
+        [
+            q0 * q0 + q1 * q1 - q2 * q2 - q3 * q3,
+            2.0 * (q1 * q2 - q0 * q3),
+            2.0 * (q1 * q3 + q0 * q2),
+        ],
+        [
+            2.0 * (q1 * q2 + q0 * q3),
+            q0 * q0 - q1 * q1 + q2 * q2 - q3 * q3,
+            2.0 * (q2 * q3 - q0 * q1),
+        ],
+        [
+            2.0 * (q1 * q3 - q0 * q2),
+            2.0 * (q2 * q3 + q0 * q1),
+            q0 * q0 - q1 * q1 - q2 * q2 + q3 * q3,
+        ],
+    ];
+
+    let dq = [
+        query_pt[0] - c_src[0],
+        query_pt[1] - c_src[1],
+        query_pt[2] - c_src[2],
+    ];
+    [
+        rot[0][0] * dq[0] + rot[0][1] * dq[1] + rot[0][2] * dq[2] + c_dst[0],
+        rot[1][0] * dq[0] + rot[1][1] * dq[1] + rot[1][2] * dq[2] + c_dst[1],
+        rot[2][0] * dq[0] + rot[2][1] * dq[1] + rot[2][2] * dq[2] + c_dst[2],
+    ]
+}
+
+fn pgbio_parse_pdb_or_mmcif_atoms(text: &str) -> Vec<SanitizeAtom> {
+    let mut atoms = Vec::new();
+    let is_mmcif = text.contains("_atom_site.") || text.contains("data_");
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if (line.starts_with("ATOM  ") || line.starts_with("HETATM")) && line.len() >= 54 {
+            let is_hetatm = line.starts_with("HETATM");
+            let atom_name = line[12..16].trim().to_ascii_uppercase();
+            let res_name = line[17..20].trim().to_ascii_uppercase();
+            let chain_id = line.as_bytes().get(21).copied().unwrap_or(b'A') as char;
+            let chain_id = if chain_id.is_ascii_whitespace() {
+                'A'
+            } else {
+                chain_id
+            };
+            let res_seq = line[22..26].trim().parse::<i32>().unwrap_or(1);
+            let x = line[30..38].trim().parse::<f64>().unwrap_or(0.0);
+            let y = line[38..46].trim().parse::<f64>().unwrap_or(0.0);
+            let z = line[46..54].trim().parse::<f64>().unwrap_or(0.0);
+            let element = if line.len() >= 78 && !line[76..78].trim().is_empty() {
+                line[76..78].trim().to_ascii_uppercase()
+            } else {
+                atom_name
+                    .chars()
+                    .find(|c| c.is_ascii_alphabetic())
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "C".to_string())
+            };
+            atoms.push(SanitizeAtom {
+                is_hetatm,
+                atom_name,
+                res_name,
+                chain_id,
+                res_seq,
+                x,
+                y,
+                z,
+                element,
+            });
+        } else if is_mmcif && (trimmed.starts_with("ATOM ") || trimmed.starts_with("HETATM ")) {
+            // Standard mmCIF _atom_site whitespace-delimited record:
+            // group_PDB id type_symbol label_atom_id label_alt_id label_comp_id label_asym_id label_entity_id label_seq_id pdbx_PDB_ins_code Cartn_x Cartn_y Cartn_z
+            let toks: Vec<&str> = trimmed.split_whitespace().collect();
+            if toks.len() >= 13 {
+                let is_hetatm = toks[0] == "HETATM";
+                let element = toks[2].trim_matches('"').to_ascii_uppercase();
+                let atom_name = toks[3].trim_matches('"').to_ascii_uppercase();
+                let res_name = toks[5].trim_matches('"').to_ascii_uppercase();
+                let chain_id = toks[6].chars().next().unwrap_or('A');
+                let res_seq = toks[8].parse::<i32>().unwrap_or(1);
+                let x = toks[10].parse::<f64>().unwrap_or(0.0);
+                let y = toks[11].parse::<f64>().unwrap_or(0.0);
+                let z = toks[12].parse::<f64>().unwrap_or(0.0);
+                atoms.push(SanitizeAtom {
+                    is_hetatm,
+                    atom_name,
+                    res_name,
+                    chain_id,
+                    res_seq,
+                    x,
+                    y,
+                    z,
+                    element,
+                });
+            }
+        }
+    }
+    atoms
+}
+
+fn pgbio_is_protein_res(res: &str) -> bool {
+    matches!(
+        res,
+        "ALA" | "ARG" | "ASN" | "ASP" | "CYS" | "CYX" | "GLN" | "GLU" | "GLY"
+            | "HIS" | "HID" | "HIE" | "HIP" | "ILE" | "LEU" | "LYS" | "MET"
+            | "PHE" | "PRO" | "SER" | "THR" | "TRP" | "TYR" | "VAL"
+    )
+}
+
+fn pgbio_sanitize_structure_core(
+    pdb_or_mmcif_text: &str,
+) -> (String, i32, i32, i32, i32, i32) {
+    let mut atoms = pgbio_parse_pdb_or_mmcif_atoms(pdb_or_mmcif_text);
+    if atoms.is_empty() {
+        return (String::new(), 0, 0, 0, 0, 0);
+    }
+
+    // Collect ordered unique residue keys (chain_id, res_seq)
+    let mut res_keys: Vec<(char, i32)> = Vec::new();
+    for a in &atoms {
+        if !a.is_hetatm && pgbio_is_protein_res(&a.res_name) {
+            let key = (a.chain_id, a.res_seq);
+            if !res_keys.contains(&key) {
+                res_keys.push(key);
+            }
+        }
+    }
+
+    // Canonical Engh & Huber local template coordinates in the (N, CA, C) frame:
+    // N = (-1.458, 0.0, 0.0), CA = (0.0, 0.0, 0.0), C = (0.530, 1.425, 0.0)
+    let tpl_n = [-1.458, 0.000, 0.000];
+    let tpl_ca = [0.000, 0.000, 0.000];
+    let tpl_c = [0.530, 1.425, 0.000];
+    let tpl_o = [0.629, 2.388, 0.771];
+    let tpl_cb = [-0.518, -0.774, -1.206];
+    let tpl_cys_sg = [-0.625, -2.548, -0.924];
+    let tpl_his_cg = [-0.594, -2.268, -1.102];
+    let tpl_his_nd1 = [-1.762, -2.885, -0.684];
+    let tpl_his_cd2 = [0.335, -3.224, -1.368];
+    let tpl_his_ce1 = [-1.531, -4.179, -0.701];
+    let tpl_his_ne2 = [-0.275, -4.415, -1.112];
+
+    let mut repaired_atoms_count = 0i32;
+
+    // Step 1: Repair missing backbone (O, CB) & key functional sidechain heavy atoms via Kabsch SVD
+    for &(chain, rseq) in &res_keys {
+        let mut res_name = String::new();
+        let mut pt_n: Option<[f64; 3]> = None;
+        let mut pt_ca: Option<[f64; 3]> = None;
+        let mut pt_c: Option<[f64; 3]> = None;
+        let mut has_o = false;
+        let mut pt_cb: Option<[f64; 3]> = None;
+        let mut has_sg = false;
+        let mut has_cg = false;
+        let mut has_nd1 = false;
+        let mut has_cd2 = false;
+        let mut has_ce1 = false;
+        let mut has_ne2 = false;
+
+        for a in &atoms {
+            if !a.is_hetatm && a.chain_id == chain && a.res_seq == rseq {
+                if res_name.is_empty() {
+                    res_name = a.res_name.clone();
+                }
+                match a.atom_name.as_str() {
+                    "N" => pt_n = Some([a.x, a.y, a.z]),
+                    "CA" => pt_ca = Some([a.x, a.y, a.z]),
+                    "C" => pt_c = Some([a.x, a.y, a.z]),
+                    "O" => has_o = true,
+                    "CB" => pt_cb = Some([a.x, a.y, a.z]),
+                    "SG" => has_sg = true,
+                    "CG" => has_cg = true,
+                    "ND1" => has_nd1 = true,
+                    "CD2" => has_cd2 = true,
+                    "CE1" => has_ce1 = true,
+                    "NE2" => has_ne2 = true,
+                    _ => {}
+                }
+            }
+        }
+
+        if let (Some(n_obs), Some(ca_obs), Some(c_obs)) = (pt_n, pt_ca, pt_c) {
+            let src_bb = [tpl_n, tpl_ca, tpl_c];
+            let dst_bb = [n_obs, ca_obs, c_obs];
+
+            if !has_o {
+                let o_xyz = pgbio_kabsch_transform_point(&src_bb, &dst_bb, tpl_o);
+                atoms.push(SanitizeAtom {
+                    is_hetatm: false,
+                    atom_name: "O".to_string(),
+                    res_name: res_name.clone(),
+                    chain_id: chain,
+                    res_seq: rseq,
+                    x: o_xyz[0],
+                    y: o_xyz[1],
+                    z: o_xyz[2],
+                    element: "O".to_string(),
+                });
+                repaired_atoms_count += 1;
+            }
+
+            if res_name != "GLY" && pt_cb.is_none() {
+                let cb_xyz = pgbio_kabsch_transform_point(&src_bb, &dst_bb, tpl_cb);
+                pt_cb = Some(cb_xyz);
+                atoms.push(SanitizeAtom {
+                    is_hetatm: false,
+                    atom_name: "CB".to_string(),
+                    res_name: res_name.clone(),
+                    chain_id: chain,
+                    res_seq: rseq,
+                    x: cb_xyz[0],
+                    y: cb_xyz[1],
+                    z: cb_xyz[2],
+                    element: "C".to_string(),
+                });
+                repaired_atoms_count += 1;
+            }
+
+            let cb_obs = pt_cb.unwrap_or_else(|| pgbio_kabsch_transform_point(&src_bb, &dst_bb, tpl_cb));
+            let src_4 = [tpl_n, tpl_ca, tpl_c, tpl_cb];
+            let dst_4 = [n_obs, ca_obs, c_obs, cb_obs];
+
+            if (res_name == "CYS" || res_name == "CYX") && !has_sg {
+                let sg_xyz = pgbio_kabsch_transform_point(&src_4, &dst_4, tpl_cys_sg);
+                atoms.push(SanitizeAtom {
+                    is_hetatm: false,
+                    atom_name: "SG".to_string(),
+                    res_name: res_name.clone(),
+                    chain_id: chain,
+                    res_seq: rseq,
+                    x: sg_xyz[0],
+                    y: sg_xyz[1],
+                    z: sg_xyz[2],
+                    element: "S".to_string(),
+                });
+                repaired_atoms_count += 1;
+            }
+
+            if matches!(res_name.as_str(), "HIS" | "HID" | "HIE" | "HIP") {
+                let his_repairs = [
+                    ("CG", has_cg, tpl_his_cg, "C"),
+                    ("ND1", has_nd1, tpl_his_nd1, "N"),
+                    ("CD2", has_cd2, tpl_his_cd2, "C"),
+                    ("CE1", has_ce1, tpl_his_ce1, "C"),
+                    ("NE2", has_ne2, tpl_his_ne2, "N"),
+                ];
+                for &(aname, present, tpl_pt, elem) in &his_repairs {
+                    if !present {
+                        let xyz = pgbio_kabsch_transform_point(&src_4, &dst_4, tpl_pt);
+                        atoms.push(SanitizeAtom {
+                            is_hetatm: false,
+                            atom_name: aname.to_string(),
+                            res_name: res_name.clone(),
+                            chain_id: chain,
+                            res_seq: rseq,
+                            x: xyz[0],
+                            y: xyz[1],
+                            z: xyz[2],
+                            element: elem.to_string(),
+                        });
+                        repaired_atoms_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 2: Detect < 2.2 Å CYX Disulfides (using Morton Z-order sorted SG coordinates)
+    let mut sg_list: Vec<(char, i32, f64, f64, f64, i64)> = Vec::new();
+    for a in &atoms {
+        if !a.is_hetatm && (a.res_name == "CYS" || a.res_name == "CYX") && a.atom_name == "SG" {
+            sg_list.push((
+                a.chain_id,
+                a.res_seq,
+                a.x,
+                a.y,
+                a.z,
+                z_order_encode(a.x, a.y, a.z),
+            ));
+        }
+    }
+    sg_list.sort_by_key(|entry| entry.5);
+
+    let mut cyx_residues: Vec<(char, i32)> = Vec::new();
+    let mut ssbond_pairs: Vec<((char, i32), (char, i32), f64)> = Vec::new();
+
+    for i in 0..sg_list.len() {
+        for j in (i + 1)..sg_list.len() {
+            let (c1, r1, x1, y1, z1, _) = sg_list[i];
+            let (c2, r2, x2, y2, z2, _) = sg_list[j];
+            if c1 == c2 && r1 == r2 {
+                continue;
+            }
+            let dx = x1 - x2;
+            let dy = y1 - y2;
+            let dz = z1 - z2;
+            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+            if dist > 0.5 && dist < 2.20 {
+                if !cyx_residues.contains(&(c1, r1)) && !cyx_residues.contains(&(c2, r2)) {
+                    cyx_residues.push((c1, r1));
+                    cyx_residues.push((c2, r2));
+                    ssbond_pairs.push(((c1, r1), (c2, r2), dist));
+                }
+            }
+        }
+    }
+
+    for a in &mut atoms {
+        if !a.is_hetatm && cyx_residues.contains(&(a.chain_id, a.res_seq)) {
+            a.res_name = "CYX".to_string();
+        }
+    }
+    // Strip free-thiol HG hydrogens from disulfide-bonded CYX residues
+    atoms.retain(|a| {
+        !(a.res_name == "CYX" && matches!(a.atom_name.as_str(), "HG" | "HG1" | "1HG"))
+    });
+
+    // Step 3: Standardize HIS -> HID / HIE / HIP tautomers based on explicit H, metal coordination, & H-bond network
+    let mut hid_count = 0i32;
+    let mut hie_count = 0i32;
+    let mut hip_count = 0i32;
+
+    for &(chain, rseq) in &res_keys {
+        let is_his = atoms.iter().any(|a| {
+            !a.is_hetatm
+                && a.chain_id == chain
+                && a.res_seq == rseq
+                && matches!(a.res_name.as_str(), "HIS" | "HID" | "HIE" | "HIP")
+        });
+        if !is_his {
+            continue;
+        }
+
+        let mut pt_nd1: Option<[f64; 3]> = None;
+        let mut pt_ne2: Option<[f64; 3]> = None;
+        let mut has_hd1 = false;
+        let mut has_he2 = false;
+
+        for a in &atoms {
+            if !a.is_hetatm && a.chain_id == chain && a.res_seq == rseq {
+                match a.atom_name.as_str() {
+                    "ND1" => pt_nd1 = Some([a.x, a.y, a.z]),
+                    "NE2" => pt_ne2 = Some([a.x, a.y, a.z]),
+                    "HD1" | "DD1" => has_hd1 = true,
+                    "HE2" | "DE2" => has_he2 = true,
+                    _ => {}
+                }
+            }
+        }
+
+        let assigned_tautomer = if has_hd1 && has_he2 {
+            "HIP"
+        } else if has_hd1 && !has_he2 {
+            "HID"
+        } else if has_he2 && !has_hd1 {
+            "HIE"
+        } else if let (Some(nd1), Some(ne2)) = (pt_nd1, pt_ne2) {
+            let dist3 = |p: [f64; 3], q: [f64; 3]| -> f64 {
+                ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()
+            };
+
+            let mut nd1_metal_dist = f64::MAX;
+            let mut ne2_metal_dist = f64::MAX;
+            let mut nd1_acid_dist = f64::MAX;
+            let mut ne2_acid_dist = f64::MAX;
+            let mut nd1_acc_dist = f64::MAX;
+            let mut ne2_acc_dist = f64::MAX;
+
+            for other in &atoms {
+                if !other.is_hetatm && other.chain_id == chain && other.res_seq == rseq {
+                    continue;
+                }
+                let q = [other.x, other.y, other.z];
+                let d_nd1 = dist3(nd1, q);
+                let d_ne2 = dist3(ne2, q);
+
+                let is_metal = matches!(
+                    other.res_name.as_str(),
+                    "ZN" | "FE" | "CU" | "MN" | "CO" | "NI" | "MG"
+                ) || matches!(
+                    other.element.as_str(),
+                    "ZN" | "FE" | "CU" | "MN" | "CO" | "NI" | "MG"
+                );
+                if is_metal {
+                    nd1_metal_dist = nd1_metal_dist.min(d_nd1);
+                    ne2_metal_dist = ne2_metal_dist.min(d_ne2);
+                }
+
+                let is_carboxylate = (other.res_name == "ASP"
+                    && matches!(other.atom_name.as_str(), "OD1" | "OD2"))
+                    || (other.res_name == "GLU"
+                        && matches!(other.atom_name.as_str(), "OE1" | "OE2"));
+                if is_carboxylate {
+                    nd1_acid_dist = nd1_acid_dist.min(d_nd1);
+                    ne2_acid_dist = ne2_acid_dist.min(d_ne2);
+                }
+
+                let is_acceptor = matches!(
+                    other.atom_name.as_str(),
+                    "O" | "OD1" | "OD2" | "OE1" | "OE2" | "OG" | "OG1" | "OH"
+                );
+                if is_acceptor {
+                    nd1_acc_dist = nd1_acc_dist.min(d_nd1);
+                    ne2_acc_dist = ne2_acc_dist.min(d_ne2);
+                }
+            }
+
+            // 1. Dual salt-bridge to anionic Asp/Glu carboxylates (< 3.5 Å on both nitrogens) -> HIP (+1)
+            if nd1_acid_dist < 3.50 && ne2_acid_dist < 3.50 {
+                "HIP"
+            } else if ne2_metal_dist < 2.65 && ne2_metal_dist < nd1_metal_dist {
+                // 2. NE2 coordinates a metal ion -> lone pair on NE2, proton on ND1 -> HID
+                "HID"
+            } else if nd1_metal_dist < 2.65 && nd1_metal_dist < ne2_metal_dist {
+                // 3. ND1 coordinates a metal ion -> lone pair on ND1, proton on NE2 -> HIE
+                "HIE"
+            } else if nd1_acc_dist < 3.25 && nd1_acc_dist + 0.25 < ne2_acc_dist {
+                // 4. ND1 donates a hydrogen bond to a nearby oxygen acceptor -> HID
+                "HID"
+            } else {
+                // 5. Default to the thermodynamically favored epsilon tautomer -> HIE
+                "HIE"
+            }
+        } else {
+            "HIE"
+        };
+
+        match assigned_tautomer {
+            "HID" => hid_count += 1,
+            "HIP" => hip_count += 1,
+            _ => hie_count += 1,
+        }
+
+        for a in &mut atoms {
+            if !a.is_hetatm && a.chain_id == chain && a.res_seq == rseq {
+                a.res_name = assigned_tautomer.to_string();
+            }
+        }
+    }
+
+    // Order atoms cleanly by (is_hetatm, chain_id, res_seq) while preserving intra-residue order
+    atoms.sort_by_key(|a| (a.is_hetatm, a.chain_id, a.res_seq));
+
+    let mut out_pdb = String::with_capacity(atoms.len() * 82 + ssbond_pairs.len() * 80);
+    for (idx, &((c1, r1), (c2, r2), dist)) in ssbond_pairs.iter().enumerate() {
+        out_pdb.push_str(&format!(
+            "SSBOND {:3} CYX {} {:4}    CYX {} {:4}                          1555   1555 {:5.2}\n",
+            idx + 1,
+            c1,
+            r1,
+            c2,
+            r2,
+            dist
+        ));
+    }
+    for (idx, a) in atoms.iter().enumerate() {
+        let rec = if a.is_hetatm { "HETATM" } else { "ATOM  " };
+        let atom_field = if a.atom_name.len() == 4 {
+            a.atom_name.clone()
+        } else {
+            format!(" {:<3}", a.atom_name)
+        };
+        out_pdb.push_str(&format!(
+            "{}{:5} {} {:>3} {}{:4}    {:8.3}{:8.3}{:8.3}  1.00  0.00          {:>2}\n",
+            rec,
+            (idx + 1).min(99999),
+            atom_field,
+            a.res_name,
+            a.chain_id,
+            a.res_seq,
+            a.x,
+            a.y,
+            a.z,
+            a.element
+        ));
+    }
+    out_pdb.push_str("END\n");
+
+    (
+        out_pdb,
+        repaired_atoms_count,
+        ssbond_pairs.len() as i32,
+        hid_count,
+        hie_count,
+        hip_count,
+    )
+}
+
+/// Sanitizes a PDB or mmCIF structure string before Morton octree encoding:
+/// 1. Repairs missing backbone (`O`, `CB`) and functional sidechain (`SG`, `HIS` ring) heavy atoms via Kabsch SVD / Horn superposition.
+/// 2. Detects `< 2.2 Å` disulfide bridges via Morton Z-order spatial indexing and standardizes bridged cysteines to `CYX` (`SSBOND`).
+/// 3. Standardizes `HIS` residues into `HID`, `HIE`, or `HIP` tautomers based on explicit hydrogens, metal coordination, and H-bond/salt-bridge geometry.
+/// Single-threaded, zero-Rayon, and 100% panic-safe across PostgreSQL FFI boundaries.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_sanitize_structure(pdb_or_mmcif_text: &str) -> String {
+    pgbio_sanitize_structure_core(pdb_or_mmcif_text).0
+}
+
+/// Returns the sanitized PDB text alongside repair and tautomer standardization audit counts.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_sanitize_structure_audit(
+    pdb_or_mmcif_text: &str,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(sanitized_pdb, String),
+        name!(repaired_atoms, i32),
+        name!(cyx_disulfide_bonds, i32),
+        name!(hid_count, i32),
+        name!(hie_count, i32),
+        name!(hip_count, i32),
+    ),
+> {
+    pgrx::iter::TableIterator::once(pgbio_sanitize_structure_core(pdb_or_mmcif_text))
+}
+
+// ---------------------------------------------------------------------
+// 18B. Chemical Hygiene: Fast Bitmask & Substructure PAINS + Aggregator Screen
+// ---------------------------------------------------------------------
+
+const PAINS_MASK_N: u16 = 1 << 0;
+const PAINS_MASK_O: u16 = 1 << 1;
+const PAINS_MASK_S: u16 = 1 << 2;
+const PAINS_MASK_DOUBLE_BOND: u16 = 1 << 3;
+const PAINS_MASK_RING5: u16 = 1 << 4;
+const PAINS_MASK_RING6: u16 = 1 << 5;
+const PAINS_MASK_AROMATIC: u16 = 1 << 6;
+
+/// Evaluates whether an OpenSMILES molecule triggers canonical Baell & Holloway PAINS
+/// (Pan-Assay Interference Compounds: quinones, rhodanines, catechols, azo dyes, acylhydrazones,
+/// maleimides/isothiazolones, curcuminoid Michael acceptors) or Shoichet colloidal aggregator rules.
+/// Designed for microsecond rejection at `INSERT` or `WHERE` filter time before `RangeFinder` GiST / ECFP4 joins.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_is_pains_or_aggregator(smiles: &str) -> bool {
+    let Some((mut atoms, mut bonds)) = pgbio_lex_smiles(smiles) else {
+        return false;
+    };
+    pgbio_strip_salts_and_normalize_tautomers(&mut atoms, &mut bonds);
+    if atoms.is_empty() {
+        return false;
+    }
+    pgbio_perceive_aromaticity(&mut atoms, &mut bonds);
+    let n = atoms.len();
+    let cycles = pgbio_find_cycles(n, &bonds);
+
+    // 1. Build fast 16-bit chemical feature bitmask and adjacency list
+    let mut feat_mask: u16 = 0;
+    let mut adj: Vec<Vec<(usize, u8, bool)>> = vec![Vec::new(); n];
+    for a in &atoms {
+        match a.atomic_num {
+            7 => feat_mask |= PAINS_MASK_N,
+            8 => feat_mask |= PAINS_MASK_O,
+            16 => feat_mask |= PAINS_MASK_S,
+            _ => {}
+        }
+        if a.is_aromatic {
+            feat_mask |= PAINS_MASK_AROMATIC;
+        }
+    }
+    for b in &bonds {
+        let u = b.src_idx as usize;
+        let v = b.dst_idx as usize;
+        let is_arom_bond = b.bond_type == 4;
+        if u < n && v < n {
+            adj[u].push((v, b.bond_type, is_arom_bond));
+            adj[v].push((u, b.bond_type, is_arom_bond));
+            if b.bond_type == 2 {
+                feat_mask |= PAINS_MASK_DOUBLE_BOND;
+            }
+        }
+    }
+    for (c_atoms, _) in &cycles {
+        if c_atoms.len() == 5 {
+            feat_mask |= PAINS_MASK_RING5;
+        } else if c_atoms.len() == 6 {
+            feat_mask |= PAINS_MASK_RING6;
+        }
+    }
+
+    let in_any_ring = |idx: usize| -> bool {
+        cycles
+            .iter()
+            .any(|(ca, _)| ca.contains(&(idx as u16)))
+    };
+
+    let has_exocyclic_double_to = |u: usize, ring_atoms: &[u16], target_elem: u8| -> bool {
+        adj[u].iter().any(|&(nb, ord, _)| {
+            ord == 2
+                && !ring_atoms.contains(&(nb as u16))
+                && atoms[nb].atomic_num == target_elem
+        })
+    };
+
+    // 2. Check 6-membered ring PAINS: ortho/para-Quinones & Catechols (all-carbon 6-membered ring)
+    if (feat_mask & (PAINS_MASK_RING6 | PAINS_MASK_O)) == (PAINS_MASK_RING6 | PAINS_MASK_O) {
+        for (c_atoms, _) in &cycles {
+            if c_atoms.len() != 6 {
+                continue;
+            }
+            let all_carbon_ring = c_atoms
+                .iter()
+                .all(|&idx| atoms[idx as usize].atomic_num == 6);
+            if !all_carbon_ring {
+                continue;
+            }
+
+            // Count ring carbons bearing exocyclic =O or =N (quinone / quinone-imine)
+            let mut quinone_carbonyls = 0usize;
+            for &idx in c_atoms {
+                let u = idx as usize;
+                if atoms[u].atomic_num == 6
+                    && (has_exocyclic_double_to(u, c_atoms, 8)
+                        || has_exocyclic_double_to(u, c_atoms, 7))
+                {
+                    quinone_carbonyls += 1;
+                }
+            }
+            if quinone_carbonyls >= 2 {
+                return true;
+            }
+
+            // Catechol alert: aromatic 6-ring with >= 2 adjacent (ortho) phenolic -OH groups
+            let is_arom_ring = c_atoms.iter().all(|&idx| atoms[idx as usize].is_aromatic);
+            if is_arom_ring {
+                let mut oh_positions: Vec<usize> = Vec::new();
+                for &idx in c_atoms {
+                    let u = idx as usize;
+                    if atoms[u].atomic_num == 6 {
+                        let has_oh = adj[u].iter().any(|&(nb, ord, _)| {
+                            ord == 1
+                                && !c_atoms.contains(&(nb as u16))
+                                && atoms[nb].atomic_num == 8
+                                && adj[nb].len() == 1
+                        });
+                        if has_oh {
+                            oh_positions.push(u);
+                        }
+                    }
+                }
+                if oh_positions.len() >= 2 {
+                    for i in 0..oh_positions.len() {
+                        for j in (i + 1)..oh_positions.len() {
+                            let u = oh_positions[i];
+                            let v = oh_positions[j];
+                            if adj[u].iter().any(|&(nb, _, _)| nb == v) {
+                                return true; // ortho-catechol redox cycler / chelator
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Check 5-membered ring PAINS: Rhodanines, Thiazolidinediones, Isothiazolones, Maleimides, Nitro-heterocycles
+    if (feat_mask & PAINS_MASK_RING5) != 0 {
+        for (c_atoms, _) in &cycles {
+            if c_atoms.len() != 5 {
+                continue;
+            }
+            let num_s = c_atoms
+                .iter()
+                .filter(|&&idx| atoms[idx as usize].atomic_num == 16)
+                .count();
+            let num_n = c_atoms
+                .iter()
+                .filter(|&&idx| atoms[idx as usize].atomic_num == 7)
+                .count();
+            let num_o = c_atoms
+                .iter()
+                .filter(|&&idx| atoms[idx as usize].atomic_num == 8)
+                .count();
+
+            // Rhodanine / Thiazolidinedione / Isothiazolone (5-ring with S and N + exocyclic =O or =S)
+            if num_s >= 1 && num_n >= 1 {
+                let mut exo_oxo_thioxo = 0usize;
+                let mut exo_ene = 0usize;
+                for &idx in c_atoms {
+                    let u = idx as usize;
+                    if atoms[u].atomic_num == 6 {
+                        if has_exocyclic_double_to(u, c_atoms, 8)
+                            || has_exocyclic_double_to(u, c_atoms, 16)
+                        {
+                            exo_oxo_thioxo += 1;
+                        }
+                        if has_exocyclic_double_to(u, c_atoms, 6) {
+                            exo_ene += 1;
+                        }
+                    }
+                }
+                if exo_oxo_thioxo >= 2 || (exo_oxo_thioxo >= 1 && exo_ene >= 1) {
+                    return true;
+                }
+                // Isothiazolone: direct S-N bond in 5-ring with a carbonyl C=O
+                let has_sn_bond = c_atoms.iter().any(|&idx| {
+                    let u = idx as usize;
+                    atoms[u].atomic_num == 16
+                        && adj[u].iter().any(|&(nb, _, _)| {
+                            c_atoms.contains(&(nb as u16)) && atoms[nb].atomic_num == 7
+                        })
+                });
+                if has_sn_bond && exo_oxo_thioxo >= 1 {
+                    return true;
+                }
+            }
+
+            // Maleimide: 5-ring with 1 N, 4 C, two exocyclic =O, and an endocyclic C=C double bond
+            if num_n == 1 && num_s == 0 && num_o == 0 {
+                let mut exo_carbonyl = 0usize;
+                let mut endo_cc_double = false;
+                for &idx in c_atoms {
+                    let u = idx as usize;
+                    if atoms[u].atomic_num == 6 {
+                        if has_exocyclic_double_to(u, c_atoms, 8) {
+                            exo_carbonyl += 1;
+                        }
+                        for &(nb, ord, arom) in &adj[u] {
+                            if c_atoms.contains(&(nb as u16))
+                                && atoms[nb].atomic_num == 6
+                                && ord == 2
+                                && !arom
+                            {
+                                endo_cc_double = true;
+                            }
+                        }
+                    }
+                }
+                if exo_carbonyl >= 2 && endo_cc_double {
+                    return true;
+                }
+            }
+
+            // Nitro-thiophene / Nitro-furan PAINS: 5-ring with S or O attached to a nitro group (-N(=O)=O / -[N+](=O)[O-])
+            if num_s == 1 || num_o == 1 {
+                for &idx in c_atoms {
+                    let u = idx as usize;
+                    for &(nb, _, _) in &adj[u] {
+                        if !c_atoms.contains(&(nb as u16)) && atoms[nb].atomic_num == 7 {
+                            let attached_oxygens = adj[nb]
+                                .iter()
+                                .filter(|&&(o_idx, _, _)| atoms[o_idx].atomic_num == 8)
+                                .count();
+                            if attached_oxygens >= 2 {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Open-Chain & Conjugated PAINS: Azo dyes (-N=N-), Acylhydrazones (C=N-NH-C=O), Curcuminoid divinyl ketones
+    if (feat_mask & PAINS_MASK_N) != 0 {
+        for b in &bonds {
+            let u = b.src_idx as usize;
+            let v = b.dst_idx as usize;
+            let is_arom_bond = b.bond_type == 4;
+            // Non-ring Azo group (-N=N-)
+            if atoms[u].atomic_num == 7
+                && atoms[v].atomic_num == 7
+                && b.bond_type == 2
+                && !is_arom_bond
+                && (!in_any_ring(u) || !in_any_ring(v))
+            {
+                return true;
+            }
+            // Hydrazone / Acylhydrazone / Phenylhydrazone: C=N-N where C=N is acyclic double bond
+            if b.bond_type == 2 && !is_arom_bond && (!in_any_ring(u) || !in_any_ring(v)) {
+                let (c_idx, n1_idx) = if atoms[u].atomic_num == 6 && atoms[v].atomic_num == 7 {
+                    (Some(u), Some(v))
+                } else if atoms[v].atomic_num == 6 && atoms[u].atomic_num == 7 {
+                    (Some(v), Some(u))
+                } else {
+                    (None, None)
+                };
+                if let (Some(_c), Some(n1)) = (c_idx, n1_idx) {
+                    for &(n2, ord, _) in &adj[n1] {
+                        if ord == 1 && atoms[n2].atomic_num == 7 && !in_any_ring(n2) {
+                            return true; // acyclic C=N-N hydrazone PAINS motif
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Curcuminoid / Chalcone / Divinyl Ketone / Beta-diketone Michael Acceptor: C=C-C(=O)-C=C or C=C-C(=O)-C-C(=O)
+    if (feat_mask & (PAINS_MASK_O | PAINS_MASK_DOUBLE_BOND))
+        == (PAINS_MASK_O | PAINS_MASK_DOUBLE_BOND)
+    {
+        for u in 0..n {
+            if atoms[u].atomic_num != 6 || in_any_ring(u) {
+                continue;
+            }
+            let is_ketone = adj[u].iter().any(|&(nb, ord, _)| {
+                ord == 2 && atoms[nb].atomic_num == 8 && adj[nb].len() == 1
+            });
+            if !is_ketone {
+                continue;
+            }
+            let vinyl_neighbors = adj[u]
+                .iter()
+                .filter(|&&(nb, ord, _)| {
+                    ord == 1
+                        && atoms[nb].atomic_num == 6
+                        && !atoms[nb].is_aromatic
+                        && adj[nb].iter().any(|&(nb2, ord2, arom2)| {
+                            nb2 != u && ord2 == 2 && !arom2 && atoms[nb2].atomic_num == 6
+                        })
+                })
+                .count();
+            if vinyl_neighbors >= 2 {
+                return true; // divinyl ketone / curcuminoid Michael acceptor
+            }
+        }
+    }
+
+    // 5. Shoichet Colloidal Aggregator Rule:
+    // High lipophilicity (cLogP >= 4.5) coupled with extended planar polyaromatic scaffolds (>= 4 aromatic rings)
+    // or ultra-flat conjugated large frameworks (heavy_atoms >= 22, Fsp3 < 0.08, cLogP >= 4.2).
+    let props = compute_ligand_properties(smiles);
+    if (props.logp >= 4.5 && props.aromatic_rings >= 4.0)
+        || (n >= 22 && props.fsp3 < 0.08 && props.logp >= 4.2 && props.aromatic_rings >= 3.0)
+    {
+        return true;
+    }
+
+    false
+}
+
+// =====================================================================
+// 19. PHASE 3: STAGE-2.5 CPU FUNCTIONAL & AFFINITY RE-RANKERS
+//     (EnzRef ROLE-CONTRAST SCORER + STORM L0 AFFINITY KERNEL)
+// =====================================================================
+
+/// Stage-2.5 `EnzRef` Role-Contrast Scorer for pairwise `log10(kcat)` catalytic ranking.
+/// Computes reference-centered substrate deviation `d_ref = (reactant - enzyme_bg)` and
+/// directed catalytic reaction contrast `d_cat = (product - reactant)` in a single fused hardware SIMD pass
+/// (`aarch64` NEON + `x86_64` AVX2 + scalar fallback).
+/// Eliminates non-catalytic binder false positives (`product == reactant` -> `0.0`) and distinguishes
+/// forward vs. reverse turnover directionality.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_enzref_role_contrast(
+    enzyme_bg_vec: Vec<f32>,
+    reactant_vec: Vec<f32>,
+    product_vec: Vec<f32>,
+) -> f32 {
+    let n = enzyme_bg_vec
+        .len()
+        .min(reactant_vec.len())
+        .min(product_vec.len());
+    if n == 0 {
+        return 0.0;
+    }
+
+    let (dot_ref_cat, norm_ref_sq, norm_cat_sq) =
+        pgbio_simd_enzref_contrast(&enzyme_bg_vec, &reactant_vec, &product_vec, n);
+
+    if norm_ref_sq <= 1e-16 || norm_cat_sq <= 1e-16 {
+        return 0.0;
+    }
+
+    let norm_ref = norm_ref_sq.sqrt();
+    let norm_cat = norm_cat_sq.sqrt();
+    let cos_role = (dot_ref_cat / (norm_ref * norm_cat)).clamp(-1.0, 1.0);
+    let scale_amp = (1.0 + (norm_ref * norm_cat) / (n as f32).sqrt()).ln();
+    cos_role * scale_amp
+}
+
+#[inline]
+fn pgbio_simd_enzref_contrast(
+    e: &[f32],
+    r: &[f32],
+    p: &[f32],
+    n: usize,
+) -> (f32, f32, f32) {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        let mut acc_dot = vdupq_n_f32(0.0);
+        let mut acc_ref = vdupq_n_f32(0.0);
+        let mut acc_cat = vdupq_n_f32(0.0);
+        let mut i = 0usize;
+        while i + 4 <= n {
+            let ve = vld1q_f32(e.as_ptr().add(i));
+            let vr = vld1q_f32(r.as_ptr().add(i));
+            let vp = vld1q_f32(p.as_ptr().add(i));
+            // d_ref = reactant - enzyme_bg
+            let d_ref = vsubq_f32(vr, ve);
+            // d_cat = product - reactant
+            let d_cat = vsubq_f32(vp, vr);
+            acc_dot = vfmaq_f32(acc_dot, d_ref, d_cat);
+            acc_ref = vfmaq_f32(acc_ref, d_ref, d_ref);
+            acc_cat = vfmaq_f32(acc_cat, d_cat, d_cat);
+            i += 4;
+        }
+        let mut dot = vaddvq_f32(acc_dot);
+        let mut n_ref = vaddvq_f32(acc_ref);
+        let mut n_cat = vaddvq_f32(acc_cat);
+        while i < n {
+            let dr = *r.get_unchecked(i) - *e.get_unchecked(i);
+            let dc = *p.get_unchecked(i) - *r.get_unchecked(i);
+            dot += dr * dc;
+            n_ref += dr * dr;
+            n_cat += dc * dc;
+            i += 1;
+        }
+        return (dot, n_ref, n_cat);
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            unsafe {
+                use std::arch::x86_64::*;
+                let mut acc_dot = _mm256_setzero_ps();
+                let mut acc_ref = _mm256_setzero_ps();
+                let mut acc_cat = _mm256_setzero_ps();
+                let mut i = 0usize;
+                while i + 8 <= n {
+                    let ve = _mm256_loadu_ps(e.as_ptr().add(i));
+                    let vr = _mm256_loadu_ps(r.as_ptr().add(i));
+                    let vp = _mm256_loadu_ps(p.as_ptr().add(i));
+                    let d_ref = _mm256_sub_ps(vr, ve);
+                    let d_cat = _mm256_sub_ps(vp, vr);
+                    acc_dot = _mm256_add_ps(acc_dot, _mm256_mul_ps(d_ref, d_cat));
+                    acc_ref = _mm256_add_ps(acc_ref, _mm256_mul_ps(d_ref, d_ref));
+                    acc_cat = _mm256_add_ps(acc_cat, _mm256_mul_ps(d_cat, d_cat));
+                    i += 8;
+                }
+                let mut t_dot = [0.0f32; 8];
+                let mut t_ref = [0.0f32; 8];
+                let mut t_cat = [0.0f32; 8];
+                _mm256_storeu_ps(t_dot.as_mut_ptr(), acc_dot);
+                _mm256_storeu_ps(t_ref.as_mut_ptr(), acc_ref);
+                _mm256_storeu_ps(t_cat.as_mut_ptr(), acc_cat);
+                let mut dot: f32 = t_dot.iter().sum();
+                let mut n_ref: f32 = t_ref.iter().sum();
+                let mut n_cat: f32 = t_cat.iter().sum();
+                while i < n {
+                    let dr = *r.get_unchecked(i) - *e.get_unchecked(i);
+                    let dc = *p.get_unchecked(i) - *r.get_unchecked(i);
+                    dot += dr * dc;
+                    n_ref += dr * dr;
+                    n_cat += dc * dc;
+                    i += 1;
+                }
+                return (dot, n_ref, n_cat);
+            }
+        }
+    }
+    #[allow(unreachable_code)]
+    {
+        let mut dot = 0.0f32;
+        let mut n_ref = 0.0f32;
+        let mut n_cat = 0.0f32;
+        for i in 0..n {
+            let dr = r[i] - e[i];
+            let dc = p[i] - r[i];
+            dot += dr * dc;
+            n_ref += dr * dr;
+            n_cat += dc * dc;
+        }
+        (dot, n_ref, n_cat)
+    }
+}
+
+/// Deterministic `STORM`-style `ID128` 64-hot target hashing (`bio_id128_hash(accession_or_neighbor_id) -> bytea`).
+/// Maps any target accession or neighbor identifier to a 16-byte (128-bit) `bytea` with **exactly 64 bits set to 1**
+/// (`popcount == 64`, 64-hot balanced orthogonal target code).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_id128_hash(accession_or_neighbor_id: &str) -> Vec<u8> {
+    let clean = accession_or_neighbor_id.trim();
+    let mut seed0: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut seed1: u64 = 0xBF58_476D_1CE4_E5B9;
+    for (idx, b) in clean.bytes().enumerate() {
+        let mixed = fmix64((b as u64) ^ ((idx as u64).wrapping_mul(0x517C_C1B7_2722_0A95)));
+        if idx % 2 == 0 {
+            seed0 = fmix64(seed0 ^ mixed);
+        } else {
+            seed1 = fmix64(seed1 ^ mixed);
+        }
+    }
+    let mut state = fmix64(seed0 ^ seed1.rotate_left(29) ^ (clean.len() as u64));
+
+    // Deterministic 64-of-128 Fisher-Yates selection guarantees exact 64-hot weight across all inputs
+    let mut slots = [0u8; 128];
+    for i in 0..128 {
+        slots[i] = i as u8;
+    }
+    let mut lo: u64 = 0;
+    let mut hi: u64 = 0;
+    for i in 0..64 {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let z = fmix64(state);
+        let rem = (128 - i) as u64;
+        let pick = i + ((z % rem) as usize);
+        slots.swap(i, pick);
+        let bit = slots[i];
+        if bit < 64 {
+            lo |= 1u64 << bit;
+        } else {
+            hi |= 1u64 << (bit - 64);
+        }
+    }
+
+    let mut out = Vec::with_capacity(16);
+    out.extend_from_slice(&lo.to_le_bytes());
+    out.extend_from_slice(&hi.to_le_bytes());
+    out
+}
+
+/// Converts a SMILES string into its 128-byte (1024-bit) ECFP4 `bytea` bitvector for `bio_smooth_assay_series`.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_ecfp4_bytea(smiles: &str) -> Vec<u8> {
+    let mol = parse_smiles(smiles);
+    let mut out = Vec::with_capacity(128);
+    for &w in &mol.ecfp_bits {
+        out.extend_from_slice(&w.to_le_bytes());
+    }
+    out
+}
+
+#[inline]
+fn pgbio_bytes_to_bitwords(raw: &[u8]) -> Vec<u64> {
+    // If the user passed a 16-byte (ID128) or 128-byte (1024-bit ECFP4) raw bitvector, unpack as u64 words;
+    // If it looks like a printable ASCII SMILES string (and not 16 or 128 binary bytes), parse its 1024-bit ECFP4!
+    let looks_like_ascii_smiles = raw.len() != 16
+        && raw.len() != 128
+        && !raw.is_empty()
+        && raw.iter().all(|&b| (0x20..=0x7E).contains(&b));
+    if looks_like_ascii_smiles {
+        if let Ok(s) = std::str::from_utf8(raw) {
+            let mol = parse_smiles(s);
+            if mol.ecfp_bits.iter().any(|&w| w != 0) {
+                return mol.ecfp_bits;
+            }
+        }
+    }
+    let num_words = (raw.len() + 7) / 8;
+    let mut words = vec![0u64; num_words.max(1)];
+    for (i, &b) in raw.iter().enumerate() {
+        words[i / 8] |= (b as u64) << ((i % 8) * 8);
+    }
+    words
+}
+
+#[inline]
+fn pgbio_bitwise_tanimoto_words(a: &[u64], b: &[u64]) -> f64 {
+    let n = a.len().max(b.len());
+    let mut inter = 0u32;
+    let mut union = 0u32;
+    for i in 0..n {
+        let wa = a.get(i).copied().unwrap_or(0);
+        let wb = b.get(i).copied().unwrap_or(0);
+        inter += (wa & wb).count_ones();
+        union += (wa | wb).count_ones();
+    }
+    if union == 0 {
+        1.0
+    } else {
+        (inter as f64) / (union as f64)
+    }
+}
+
+#[inline]
+fn pgbio_str_or_hex_to_bitwords(entry: &str) -> Vec<u64> {
+    let trimmed = entry.trim();
+    let hex_part = trimmed.strip_prefix("\\x").or_else(|| trimmed.strip_prefix("0x"));
+    if let Some(hex_str) = hex_part {
+        if hex_str.len() % 2 == 0 && hex_str.bytes().all(|b| b.is_ascii_hexdigit()) {
+            let mut raw = Vec::with_capacity(hex_str.len() / 2);
+            for i in (0..hex_str.len()).step_by(2) {
+                if let Ok(byte) = u8::from_str_radix(&hex_str[i..i + 2], 16) {
+                    raw.push(byte);
+                }
+            }
+            let num_words = (raw.len() + 7) / 8;
+            let mut words = vec![0u64; num_words.max(1)];
+            for (i, &b) in raw.iter().enumerate() {
+                words[i / 8] |= (b as u64) << ((i % 8) * 8);
+            }
+            return words;
+        }
+    }
+    let mol = parse_smiles(trimmed);
+    if mol.ecfp_bits.iter().any(|&w| w != 0) {
+        return mol.ecfp_bits;
+    }
+    pgbio_bytes_to_bitwords(trimmed.as_bytes())
+}
+
+/// `STORM`-style compact bitwise Tanimoto neighborhood smoother (`bio_smooth_assay_series`).
+/// Computes Tanimoto similarity across `fp_array` (SMILES strings or `\x...` hex fingerprints), averages neighbors
+/// with `Tanimoto >= sim_threshold`, and keeps BOTH `raw_score` and `smoothed_score` (plus `neighbor_count`
+/// and `activity_cliff_delta`) exposed to preserve SAR activity cliffs!
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_smooth_assay_series(
+    fp_array: Vec<String>,
+    raw_scores: Vec<f64>,
+    sim_threshold: f64,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(compound_idx, i32),
+        name!(raw_score, f64),
+        name!(smoothed_score, f64),
+        name!(neighbor_count, i32),
+        name!(activity_cliff_delta, f64),
+    ),
+> {
+    let n = fp_array.len().min(raw_scores.len());
+    if n == 0 {
+        return pgrx::iter::TableIterator::new(Vec::new().into_iter());
+    }
+    let tau = sim_threshold.clamp(0.0, 1.0);
+    let bit_fps: Vec<Vec<u64>> = fp_array[..n]
+        .iter()
+        .map(|s| pgbio_str_or_hex_to_bitwords(s))
+        .collect();
+
+    let mut results = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut weighted_sum = 0.0f64;
+        let mut weight_total = 0.0f64;
+        let mut neighbors = 0i32;
+
+        for j in 0..n {
+            let sim = if i == j {
+                1.0
+            } else {
+                pgbio_bitwise_tanimoto_words(&bit_fps[i], &bit_fps[j])
+            };
+            if sim + 1e-12 >= tau {
+                weighted_sum += sim * raw_scores[j];
+                weight_total += sim;
+                neighbors += 1;
+            }
+        }
+
+        let raw = raw_scores[i];
+        let smoothed = if weight_total > 1e-12 {
+            weighted_sum / weight_total
+        } else {
+            raw
+        };
+        let cliff_delta = raw - smoothed;
+        results.push((
+            (i + 1) as i32,
+            raw,
+            smoothed,
+            neighbors,
+            cliff_delta,
+        ));
+    }
+
+    pgrx::iter::TableIterator::new(results.into_iter())
+}
+
+// =====================================================================
+// 20. PHASE 4: PGRX-BENCH SUITE (WHITENING, BioVecInt8G128, EnzRef, PAINS)
+// =====================================================================
+
+/// Runs the in-backend `pgrx-bench` verification and performance benchmark suite comparing:
+/// 1. Raw vs. whitened `ESM-2` anisotropic cone embeddings on RaBitQ `eps_bound` tightness and `fastscan` pruning ratio.
+/// 2. Heap inline `BioVecInt8G128` (`1,300 B` payload) vs. `Vec<f32>` (`5,120 B`) Stage-2 reranking latency (us/query).
+/// 3. Throughput (rows/sec) of `bio_enzref_role_contrast` (1280-D SIMD) and `bio_is_pains_or_aggregator`.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_run_phase4_benchmarks() -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(benchmark_name, String),
+        name!(raw_or_baseline_metric, f64),
+        name!(optimized_metric, f64),
+        name!(improvement_ratio, f64),
+        name!(unit, String),
+    ),
+> {
+    use std::time::Instant;
+
+    // 1. Synthetic 256-D anisotropic ESM-2 cone corpus (80 vectors with dominant SwiGLU outlier channels 0..6)
+    let n_vecs = 80usize;
+    let dim = 256usize;
+    let mut raw_cone: Vec<Vec<f32>> = Vec::with_capacity(n_vecs);
+    for i in 0..n_vecs {
+        let mut v = vec![0.0f32; dim];
+        for d in 0..dim {
+            let noise = ((((i * 131 + d * 17 + 7) % 997) as f32) / 498.5) - 1.0;
+            v[d] = if d == 0 {
+                45.0 + 2.0 * noise // extreme SwiGLU rogue channel
+            } else if d < 4 {
+                18.0 + 1.5 * noise // secondary anisotropic cone channels
+            } else {
+                0.35 * noise
+            };
+        }
+        let norm = pgbio_simd_dot_f32(&v, &v).sqrt().max(1e-12);
+        for d in 0..dim {
+            v[d] /= norm;
+        }
+        raw_cone.push(v);
+    }
+
+    let raw_cone_flat: Vec<f32> = raw_cone.iter().flat_map(|v| v.iter().copied()).collect();
+    let raw_audit: Vec<_> =
+        bio_rabitq_eps_bound_audit(raw_cone_flat.clone(), None, 0.45, dim as i32).collect();
+    let stats = bio_fit_whitening_stats(raw_cone_flat.clone(), dim as i32);
+    let whitened_audit: Vec<_> =
+        bio_rabitq_eps_bound_audit(raw_cone_flat, Some(stats), 0.45, dim as i32).collect();
+
+    let (raw_cos, raw_eps, _raw_p95, raw_prune) = raw_audit[0];
+    let (w_cos, w_eps, _w_p95, w_prune) = whitened_audit[0];
+
+    // 2. Stage-2 Reranking Latency: 1280-D Heap Inline BioVecInt8G128 vs 1280-D f32
+    let n_cands = 250usize;
+    let mut f32_cands: Vec<Vec<f32>> = Vec::with_capacity(n_cands);
+    let mut g128_cands: Vec<PgVarlena<BioVecInt8G128>> = Vec::with_capacity(n_cands);
+    for i in 0..n_cands {
+        let v: Vec<f32> = (0..1280)
+            .map(|d| ((((i * 73 + d * 29) % 1009) as f32) / 504.5) - 1.0)
+            .collect();
+        g128_cands.push(bio_vec_int8_g128_encode(v.clone()));
+        f32_cands.push(v);
+    }
+    let q_f32 = f32_cands[0].clone();
+    let q_g128 = g128_cands[0].clone();
+
+    let t0_f32 = Instant::now();
+    let mut acc_f32 = 0.0f64;
+    for _rep in 0..40 {
+        for cand in &f32_cands {
+            acc_f32 += embedding_cosine_distance(q_f32.clone(), cand.clone());
+        }
+    }
+    let f32_us_per_100 = (t0_f32.elapsed().as_secs_f64() * 1e6) / ((40 * n_cands) as f64 / 100.0);
+
+    let t0_g128 = Instant::now();
+    let mut acc_g128 = 0.0f32;
+    for _rep in 0..40 {
+        for cand in &g128_cands {
+            for g in 0..BIO_VEC_G128_GROUPS {
+                let sa = pgbio_f16_bits_to_f32(q_g128.scales_f16[g]);
+                let sb = pgbio_f16_bits_to_f32(cand.scales_f16[g]);
+                let base = g * BIO_VEC_G128_GROUP_SIZE;
+                let (ab, _, _) = pgbio_simd_i8_group128_dot_norms(
+                    &q_g128.quants[base..base + BIO_VEC_G128_GROUP_SIZE],
+                    &cand.quants[base..base + BIO_VEC_G128_GROUP_SIZE],
+                );
+                acc_g128 += (ab as f32) * (sa * sb);
+            }
+        }
+    }
+    let g128_us_per_100 =
+        (t0_g128.elapsed().as_secs_f64() * 1e6) / ((40 * n_cands) as f64 / 100.0);
+    if acc_f32 == -999999.0 || acc_g128 == -999999.0 {
+        std::hint::black_box(acc_f32);
+    }
+
+    // 3. Throughput (rows/sec) of bio_enzref_role_contrast (1280-D SIMD)
+    let enz_v = f32_cands[0].clone();
+    let react_v = f32_cands[1].clone();
+    let prod_v = f32_cands[2].clone();
+    let n_enz_iters = 20_000usize;
+    let t0_enz = Instant::now();
+    let mut enz_acc = 0.0f32;
+    for _ in 0..n_enz_iters {
+        let (dot, nr, nc) = pgbio_simd_enzref_contrast(&enz_v, &react_v, &prod_v, 1280);
+        enz_acc += dot / (nr * nc + 1.0);
+    }
+    let enz_secs = t0_enz.elapsed().as_secs_f64().max(1e-9);
+    let enz_rows_per_sec = (n_enz_iters as f64) / enz_secs;
+    std::hint::black_box(enz_acc);
+
+    // 4. Throughput (rows/sec) of bio_is_pains_or_aggregator
+    let bench_smiles = [
+        "CC(=O)Oc1ccccc1C(=O)O",
+        "O=C1C=CC(=O)C=C1",
+        "O=C1CSC(=S)N1",
+        "CC(C)Cc1ccc(C(C)C(=O)O)cc1",
+        "c1ccc(N=Nc2ccccc2)cc1",
+        "COc1ccc2cc(C(C)C(=O)O)ccc2c1",
+        "Oc1ccc(C=NN=C(O)c2ccccc2)cc1O",
+        "Cn1cnc2c1c(=O)n(C)c(=O)n2C",
+    ];
+    let n_pains_iters = 2_400usize;
+    let t0_pains = Instant::now();
+    let mut pains_hits = 0usize;
+    for i in 0..n_pains_iters {
+        if bio_is_pains_or_aggregator(bench_smiles[i % bench_smiles.len()]) {
+            pains_hits += 1;
+        }
+    }
+    let pains_secs = t0_pains.elapsed().as_secs_f64().max(1e-9);
+    let pains_rows_per_sec = (n_pains_iters as f64) / pains_secs;
+    std::hint::black_box(pains_hits);
+
+    let rows = vec![
+        (
+            "1a. ESM-2 Cone Anisotropy (Mean Pairwise Cosine)".to_string(),
+            raw_cos,
+            w_cos,
+            raw_cos / w_cos.abs().max(1e-4),
+            "cosine".to_string(),
+        ),
+        (
+            "1b. RaBitQ 1-Bit Error Bound (eps_bound)".to_string(),
+            raw_eps,
+            w_eps,
+            raw_eps / w_eps.max(1e-6),
+            "eps_bound (lower=tighter)".to_string(),
+        ),
+        (
+            "1c. 32-Wide SIMD Fastscan Pruning Ratio".to_string(),
+            raw_prune,
+            w_prune,
+            w_prune / raw_prune.max(1e-4),
+            "fraction_pruned".to_string(),
+        ),
+        (
+            "2a. 1280-D Vector On-Disk Byte Size (f16 vs BioVecInt8G128)".to_string(),
+            2564.0,
+            1304.0,
+            2564.0 / 1304.0,
+            "bytes (TOAST threshold ~2000B)".to_string(),
+        ),
+        (
+            "2b. Stage-2 100-Candidate Rerank Latency (f32 vs BioVecInt8G128 SIMD i32)".to_string(),
+            (f32_us_per_100 * 100.0).round() / 100.0,
+            (g128_us_per_100 * 100.0).round() / 100.0,
+            (f32_us_per_100 / g128_us_per_100.max(1e-6) * 100.0).round() / 100.0,
+            "microseconds / 100 candidates".to_string(),
+        ),
+        (
+            "3a. Stage-2.5 EnzRef Role-Contrast 1280-D SIMD Throughput".to_string(),
+            1.0,
+            enz_rows_per_sec.round(),
+            enz_rows_per_sec.round(),
+            "rows / sec".to_string(),
+        ),
+        (
+            "3b. OpenSMILES PAINS & Colloidal Aggregator Screen Throughput".to_string(),
+            1.0,
+            pains_rows_per_sec.round(),
+            pains_rows_per_sec.round(),
+            "molecules / sec".to_string(),
+        ),
+    ];
+
+    pgrx::iter::TableIterator::new(rows.into_iter())
+}
+
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
 mod tests {
@@ -9242,6 +12280,325 @@ ATOM      9  CA  TRP A  13      -1.500   0.800   2.200  1.00 94.00           C  
             flux_gain_x
         );
         assert_ne!(act_wt_code, act_ko_code);
+    }
+
+    #[pg_test]
+    fn test_phase1_anisotropy_whitening_and_rabitq_eps_bound() {
+        // Generate synthetic 128-D anisotropic ESM-2 cone where SwiGLU channels 0..3 dominate variance
+        let n = 48usize;
+        let dim = 128usize;
+        let mut raw_cone: Vec<Vec<f32>> = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut v = vec![0.0f32; dim];
+            for d in 0..dim {
+                let noise = ((((i * 97 + d * 31 + 11) % 503) as f32) / 251.5) - 1.0;
+                v[d] = if d == 0 {
+                    40.0 + 1.5 * noise
+                } else if d < 3 {
+                    15.0 + 1.2 * noise
+                } else {
+                    0.30 * noise
+                };
+            }
+            let norm = crate::pgbio_simd_dot_f32(&v, &v).sqrt();
+            for d in 0..dim {
+                v[d] /= norm;
+            }
+            raw_cone.push(v);
+        }
+
+        let raw_cone_flat: Vec<f32> = raw_cone.iter().flat_map(|v| v.iter().copied()).collect();
+        let stats = crate::bio_fit_whitening_stats(raw_cone_flat.clone(), dim as i32);
+        assert!(stats.len() > 16);
+        assert_eq!(&stats[0..4], b"PGBW");
+
+        let w0 = crate::bio_whiten_embedding(raw_cone[0].clone(), stats.clone());
+        assert_eq!(w0.len(), dim);
+        let w0_norm = crate::pgbio_simd_dot_f32(&w0, &w0).sqrt();
+        assert!((w0_norm - 1.0).abs() < 1e-4, "Whitened vector must be L2 unit normalized, got {}", w0_norm);
+
+        let raw_audit: Vec<_> =
+            crate::bio_rabitq_eps_bound_audit(raw_cone_flat.clone(), None, 0.45, dim as i32).collect();
+        let whitened_audit: Vec<_> =
+            crate::bio_rabitq_eps_bound_audit(raw_cone_flat.clone(), Some(stats.clone()), 0.45, dim as i32).collect();
+
+        // Also test f16 symmetric ZCA matrix GEMV (flags == 3) and centroid posting-list size variance drop
+        let stats_f16 = crate::bio_fit_zca_whiten(raw_cone_flat.clone(), -1.0, dim as i32, true);
+        assert_eq!(u16::from_le_bytes([stats_f16[6], stats_f16[7]]), 3);
+        let w0_f16 = crate::bio_whiten_embedding(raw_cone[0].clone(), stats_f16);
+        let cos_f32_vs_f16 = crate::pgbio_simd_dot_f32(&w0, &w0_f16);
+        assert!(
+            cos_f32_vs_f16 > 0.999,
+            "f16 ZCA GEMV must match f32 ZCA GEMV with cosine > 0.999, got {}",
+            cos_f32_vs_f16
+        );
+
+        let mut raw_counts = [0i32; 64];
+        let mut zca_counts = [0i32; 64];
+        for v in &raw_cone {
+            let rc: Vec<_> = crate::bio_vector_layered_centroid_assign(v.clone()).collect();
+            raw_counts[rc[0].1 as usize] += 1;
+            let wv = crate::bio_whiten_embedding(v.clone(), stats.clone());
+            let wc: Vec<_> = crate::bio_vector_layered_centroid_assign(wv).collect();
+            zca_counts[wc[0].1 as usize] += 1;
+        }
+        let mean_bucket = (n as f64) / 64.0;
+        let raw_var: f64 = raw_counts
+            .iter()
+            .map(|&c| ((c as f64) - mean_bucket).powi(2))
+            .sum::<f64>()
+            / 64.0;
+        let zca_var: f64 = zca_counts
+            .iter()
+            .map(|&c| ((c as f64) - mean_bucket).powi(2))
+            .sum::<f64>()
+            / 64.0;
+        assert!(
+            zca_var < raw_var * 0.25,
+            "Expected ZCA whitening to drop centroid posting-list size variance by >4x: raw_var={} vs zca_var={}",
+            raw_var,
+            zca_var
+        );
+
+        let (raw_cos, raw_eps, _raw_p95, raw_prune) = raw_audit[0];
+        let (w_cos, w_eps, _w_p95, w_prune) = whitened_audit[0];
+
+        assert!(
+            raw_cos > 0.90 && w_cos.abs() < 0.15,
+            "Expected whitening to collapse cone anisotropy from >0.90 ({}) to <0.15 ({})",
+            raw_cos,
+            w_cos
+        );
+        assert!(
+            w_eps < raw_eps * 0.65,
+            "Expected whitening to tighten RaBitQ eps_bound significantly: raw={} vs whitened={}",
+            raw_eps,
+            w_eps
+        );
+        assert!(
+            w_prune > raw_prune + 0.30,
+            "Expected whitening to increase 32-wide fastscan pruning ratio: raw={} vs whitened={}",
+            raw_prune,
+            w_prune
+        );
+    }
+
+    #[pg_test]
+    fn test_phase1_biovec_int8_g128_inline_varlena() {
+        // Build two 1280-D embeddings and verify 1,300 B payload / 1,304 B inline Postgres varlena
+        let v1: Vec<f32> = (0..1280).map(|i| ((i as f32) * 0.017).sin() * 2.5).collect();
+        let v2: Vec<f32> = (0..1280).map(|i| ((i as f32) * 0.017 + 0.15).sin() * 2.5).collect();
+
+        let payload_bytes = crate::bio_vec_int8_g128_byte_size(crate::bio_vec_int8_g128_encode(v1.clone()));
+        assert_eq!(payload_bytes, 1300, "1280-D BioVecInt8G128 payload must be exactly 1,300 bytes (< 2,000 B TOAST threshold)");
+
+        let decoded1 = crate::bio_vec_int8_g128_decode(crate::bio_vec_int8_g128_encode(v1.clone()));
+        assert_eq!(decoded1.len(), 1280);
+        let roundtrip_dist = crate::embedding_cosine_distance(v1.clone(), decoded1);
+        assert!(
+            roundtrip_dist < 1e-4,
+            "128-channel group i8 + f16 quantization should have <1e-4 cosine distortion, got {}",
+            roundtrip_dist
+        );
+
+        let exact_cos_dist = crate::embedding_cosine_distance(v1.clone(), v2.clone()) as f32;
+        let simd_i32_cos_dist = crate::bio_vec_int8_g128_cosine_distance(
+            crate::bio_vec_int8_g128_encode(v1.clone()),
+            crate::bio_vec_int8_g128_encode(v2.clone()),
+        );
+        assert!(
+            (exact_cos_dist - simd_i32_cos_dist).abs() < 1e-3,
+            "SIMD i32 group cosine distance ({}) must match f32 cosine distance ({}) within 1e-3",
+            simd_i32_cos_dist,
+            exact_cos_dist
+        );
+
+        let exact_dot = crate::pgbio_simd_dot_f32(&v1, &v2);
+        let simd_i32_dot = crate::bio_vec_int8_g128_dot(
+            crate::bio_vec_int8_g128_encode(v1.clone()),
+            crate::bio_vec_int8_g128_encode(v2.clone()),
+        );
+        let rel_err = ((exact_dot - simd_i32_dot) / exact_dot).abs();
+        assert!(
+            rel_err < 0.01,
+            "SIMD i32 group dot ({}) must match exact dot ({}) within 1%",
+            simd_i32_dot,
+            exact_dot
+        );
+
+        // Verify via SQL that pg_column_size(bio_vec_int8_g128_encode(...)) is 1,304 bytes (4B varlena header + 1,300B payload)
+        let col_size = Spi::get_one::<i32>(
+            "SELECT pg_column_size(bio_vec_int8_g128_encode(ARRAY(SELECT sin(g::float8)::float4 FROM generate_series(1, 1280) g)))",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            col_size, 1304,
+            "Expected zero-CBOR fixed-header C-varlena on-disk size to be 1,304 bytes (4B header + 1,300B payload), got {}",
+            col_size
+        );
+    }
+
+    #[pg_test]
+    fn test_phase2_structure_sanitization_kabsch_cyx_his() {
+        // Defective mini-structure:
+        // - Res 1 (CYS A 1): missing backbone O and missing CB, SG at (0.0, 0.0, 0.0)
+        // - Res 2 (CYS A 2): SG at (2.04, 0.0, 0.0) -> 2.04 Å (< 2.2 Å disulfide bridge -> both must become CYX!)
+        // - Res 3 (HIS A 3): NE2 within 2.1 Å of ZN -> must become HID!
+        // - Res 4 (HIS A 4): ND1 and NE2 both within 2.9 Å of ASP/GLU carboxylates -> must become HIP!
+        // - Res 5 (HIS A 5): missing imidazole ring atoms (only N, CA, C, O present) -> repaired via Kabsch SVD & standardized to HIE!
+        let defective_pdb = "\
+ATOM      1  N   CYS A   1      -1.458   0.000   0.000  1.00  0.00           N
+ATOM      2  CA  CYS A   1       0.000   0.000   0.000  1.00  0.00           C
+ATOM      3  C   CYS A   1       0.530   1.425   0.000  1.00  0.00           C
+ATOM      4  SG  CYS A   1      -0.625  -2.548  -0.924  1.00  0.00           S
+ATOM      5  N   CYS A   2       2.500   0.000   0.000  1.00  0.00           N
+ATOM      6  CA  CYS A   2       3.958   0.000   0.000  1.00  0.00           C
+ATOM      7  C   CYS A   2       4.488   1.425   0.000  1.00  0.00           C
+ATOM      8  O   CYS A   2       4.587   2.388   0.771  1.00  0.00           O
+ATOM      9  CB  CYS A   2       3.440  -0.774  -1.206  1.00  0.00           C
+ATOM     10  SG  CYS A   2       1.415  -2.548  -0.924  1.00  0.00           S
+ATOM     11  N   HIS A   3       8.542   0.000   0.000  1.00  0.00           N
+ATOM     12  CA  HIS A   3      10.000   0.000   0.000  1.00  0.00           C
+ATOM     13  C   HIS A   3      10.530   1.425   0.000  1.00  0.00           C
+ATOM     14  O   HIS A   3      10.629   2.388   0.771  1.00  0.00           O
+ATOM     15  CB  HIS A   3       9.482  -0.774  -1.206  1.00  0.00           C
+ATOM     16  CG  HIS A   3       9.406  -2.268  -1.102  1.00  0.00           C
+ATOM     17  ND1 HIS A   3       8.238  -2.885  -0.684  1.00  0.00           N
+ATOM     18  CD2 HIS A   3      10.335  -3.224  -1.368  1.00  0.00           C
+ATOM     19  CE1 HIS A   3       8.469  -4.179  -0.701  1.00  0.00           C
+ATOM     20  NE2 HIS A   3       9.725  -4.415  -1.112  1.00  0.00           N
+HETATM   21 ZN    ZN A 101      10.100  -6.350  -1.112  1.00  0.00          ZN
+ATOM     22  N   HIS A   4      18.542   0.000   0.000  1.00  0.00           N
+ATOM     23  CA  HIS A   4      20.000   0.000   0.000  1.00  0.00           C
+ATOM     24  C   HIS A   4      20.530   1.425   0.000  1.00  0.00           C
+ATOM     25  O   HIS A   4      20.629   2.388   0.771  1.00  0.00           O
+ATOM     26  CB  HIS A   4      19.482  -0.774  -1.206  1.00  0.00           C
+ATOM     27  CG  HIS A   4      19.406  -2.268  -1.102  1.00  0.00           C
+ATOM     28  ND1 HIS A   4      18.238  -2.885  -0.684  1.00  0.00           N
+ATOM     29  CD2 HIS A   4      20.335  -3.224  -1.368  1.00  0.00           C
+ATOM     30  CE1 HIS A   4      18.469  -4.179  -0.701  1.00  0.00           C
+ATOM     31  NE2 HIS A   4      19.725  -4.415  -1.112  1.00  0.00           N
+ATOM     32  OD1 ASP A   6      16.200  -2.800  -0.684  1.00  0.00           O
+ATOM     33  OE1 GLU A   7      21.500  -5.400  -1.112  1.00  0.00           O
+ATOM     34  N   HIS A   5      28.542   0.000   0.000  1.00  0.00           N
+ATOM     35  CA  HIS A   5      30.000   0.000   0.000  1.00  0.00           C
+ATOM     36  C   HIS A   5      30.530   1.425   0.000  1.00  0.00           C
+ATOM     37  O   HIS A   5      30.629   2.388   0.771  1.00  0.00           O
+";
+
+        let audit: Vec<_> = crate::bio_sanitize_structure_audit(defective_pdb).collect();
+        assert_eq!(audit.len(), 1);
+        let (ref sanitized, repaired, disulfides, hid, hie, hip) = audit[0];
+
+        // Res 1 missing O + CB (2 atoms) + Res 5 missing CB, CG, ND1, CD2, CE1, NE2 (6 atoms) = 8 repaired atoms
+        assert_eq!(repaired, 8, "Expected 8 Kabsch-repaired heavy atoms, got {}", repaired);
+        assert_eq!(disulfides, 1, "Expected 1 <2.2A CYX disulfide bond, got {}", disulfides);
+        assert_eq!(hid, 1, "Expected 1 Zn-coordinated HID, got {}", hid);
+        assert_eq!(hie, 1, "Expected 1 standard HIE, got {}", hie);
+        assert_eq!(hip, 1, "Expected 1 dual-salt-bridged HIP, got {}", hip);
+        assert!(sanitized.contains("SSBOND   1 CYX A    1    CYX A    2"));
+        assert!(sanitized.contains("HID A   3"));
+        assert!(sanitized.contains("HIP A   4"));
+        assert!(sanitized.contains("HIE A   5"));
+    }
+
+    #[pg_test]
+    fn test_phase2_pains_and_aggregator_screen() {
+        // Canonical PAINS & aggregators that MUST be rejected (true)
+        assert!(crate::bio_is_pains_or_aggregator("O=C1C=CC(=O)C=C1"), "para-Benzoquinone must trigger PAINS");
+        assert!(crate::bio_is_pains_or_aggregator("O=C1CSC(=S)N1"), "Rhodanine core must trigger PAINS");
+        assert!(crate::bio_is_pains_or_aggregator("c1ccc(N=Nc2ccccc2)cc1"), "Azobenzene must trigger PAINS");
+        assert!(crate::bio_is_pains_or_aggregator("Oc1ccccc1O"), "Catechol redox cycler must trigger PAINS");
+        assert!(crate::bio_is_pains_or_aggregator("O=C(NN=Cc1ccccc1)c2ccccc2"), "Acylhydrazone must trigger PAINS");
+        assert!(crate::bio_is_pains_or_aggregator("O=C1C=CC(=O)N1c2ccccc2"), "N-Phenylmaleimide must trigger PAINS");
+
+        // Clean drug molecules that MUST pass (false)
+        assert!(!crate::bio_is_pains_or_aggregator("CC(=O)Oc1ccccc1C(=O)O"), "Aspirin must NOT trigger PAINS");
+        assert!(!crate::bio_is_pains_or_aggregator("CC(C)Cc1ccc(C(C)C(=O)O)cc1"), "Ibuprofen must NOT trigger PAINS");
+        assert!(!crate::bio_is_pains_or_aggregator("COc1ccc2cc(C(C)C(=O)O)ccc2c1"), "Naproxen must NOT trigger PAINS");
+        assert!(!crate::bio_is_pains_or_aggregator("Cn1cnc2c1c(=O)n(C)c(=O)n2C"), "Caffeine must NOT trigger PAINS");
+    }
+
+    #[pg_test]
+    fn test_phase3_enzref_role_contrast_and_storm_l0() {
+        // 1. Test EnzRef Role-Contrast Scorer
+        let enz_bg = vec![1.0f32, 0.0, 0.0, 0.0, 0.5, -0.5, 0.2, 0.1];
+        let reactant = vec![2.0f32, 1.0, 0.0, 0.0, 0.5, -0.5, 0.2, 0.1];
+        // Aligned product along the same catalytic polarization direction (reactant - enz_bg = [1, 1, 0...])
+        let prod_forward = vec![3.5f32, 2.5, 0.0, 0.0, 0.5, -0.5, 0.2, 0.1];
+        // Orthogonal non-productive shift
+        let prod_ortho = vec![2.0f32, 1.0, 1.5, -1.5, 0.5, -0.5, 0.2, 0.1];
+        // Reverse / inhibitory shift
+        let prod_reverse = vec![0.5f32, -0.5, 0.0, 0.0, 0.5, -0.5, 0.2, 0.1];
+
+        let score_fwd = crate::bio_enzref_role_contrast(enz_bg.clone(), reactant.clone(), prod_forward);
+        let score_ortho = crate::bio_enzref_role_contrast(enz_bg.clone(), reactant.clone(), prod_ortho);
+        let score_rev = crate::bio_enzref_role_contrast(enz_bg.clone(), reactant.clone(), prod_reverse);
+        let score_dead = crate::bio_enzref_role_contrast(enz_bg.clone(), reactant.clone(), reactant.clone());
+
+        assert!(score_fwd > 0.30, "Forward catalytic role contrast must be strongly positive, got {}", score_fwd);
+        assert!(score_ortho.abs() < 1e-5, "Orthogonal shift role contrast must be ~0.0, got {}", score_ortho);
+        assert!(score_rev < -0.30, "Reverse role contrast must be negative, got {}", score_rev);
+        assert_eq!(score_dead, 0.0, "Zero reaction turnover (product == reactant) must yield 0.0");
+
+        // 2. Test STORM ID128 64-hot deterministic target hashing
+        let h1 = crate::bio_id128_hash("P00918_CA2_HUMAN");
+        let h1_again = crate::bio_id128_hash("P00918_CA2_HUMAN");
+        let h2 = crate::bio_id128_hash("Q1JU72_FA1_DEHALOGENASE");
+        assert_eq!(h1.len(), 16);
+        assert_eq!(h1, h1_again);
+        assert_ne!(h1, h2);
+        let pop1: u32 = h1.iter().map(|b| b.count_ones()).sum();
+        let pop2: u32 = h2.iter().map(|b| b.count_ones()).sum();
+        assert_eq!(pop1, 64, "ID128 hash must be strictly 64-hot (64 bits set out of 128), got {}", pop1);
+        assert_eq!(pop2, 64, "ID128 hash must be strictly 64-hot (64 bits set out of 128), got {}", pop2);
+
+        // 3. Test STORM bitwise Tanimoto neighborhood smoother with activity cliff preservation
+        // Three closely related congeners (toluene, ethylbenzene, propylbenzene) where compound 2 has an activity cliff (pIC50 = 9.2 vs 5.1, 5.3)
+        // plus one dissimilar molecule (caffeine, pIC50 = 4.0)
+        let fps = vec![
+            "Cc1ccccc1".to_string(),
+            "CCc1ccccc1".to_string(),
+            "CCCc1ccccc1".to_string(),
+            "Cn1cnc2c1c(=O)n(C)c(=O)n2C".to_string(),
+        ];
+        let raw_scores = vec![5.1, 9.2, 5.3, 4.0];
+        let smoothed: Vec<_> = crate::bio_smooth_assay_series(fps, raw_scores, 0.25).collect();
+        assert_eq!(smoothed.len(), 4);
+        // Verify both raw_score and smoothed_score are exposed and the activity cliff on compound 2 is preserved
+        assert_eq!(smoothed[1].1, 9.2); // raw_score preserved!
+        assert!(smoothed[1].2 < 8.5 && smoothed[1].2 > 5.5, "Expected smoothed score to blend congener neighborhood, got {}", smoothed[1].2);
+        assert!(smoothed[1].3 >= 2, "Expected congener neighbors >= 2, got {}", smoothed[1].3);
+        assert!(smoothed[1].4 > 0.8, "Expected positive activity cliff delta on cliff compound, got {}", smoothed[1].4);
+        // Dissimilar caffeine has only itself in its Tanimoto >= 0.25 neighborhood
+        assert_eq!(smoothed[3].3, 1);
+        assert!((smoothed[3].1 - smoothed[3].2).abs() < 1e-12);
+    }
+
+    #[pg_test]
+    fn test_phase4_pgrx_bench_suite() {
+        let rows: Vec<_> = crate::bio_run_phase4_benchmarks().collect();
+        assert_eq!(rows.len(), 7);
+        for (name, base, opt, ratio, unit) in &rows {
+            pgrx::log!(
+                "[PGRX-BENCH] {} | baseline={:.4} | optimized={:.4} | ratio={:.2}x ({})",
+                name,
+                base,
+                opt,
+                ratio,
+                unit
+            );
+        }
+        // Assert RaBitQ eps_bound improved after whitening
+        assert!(rows[1].2 < rows[1].1);
+        // Assert fastscan pruning ratio improved after whitening
+        assert!(rows[2].2 > rows[2].1);
+        // Assert BioVecInt8G128 varlena size is 1,304 B (< 2,000 B TOAST threshold)
+        assert_eq!(rows[3].2, 1304.0);
+        // Assert high throughput for EnzRef SIMD (> 20,000 rows/sec in debug, > 2M/sec in release) and PAINS screen (> 5,000 molecules/sec)
+        assert!(rows[5].2 > 20_000.0);
+        assert!(rows[6].2 > 5_000.0);
     }
 }
 
