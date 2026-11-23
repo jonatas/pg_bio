@@ -1,0 +1,41 @@
+{
+  "dataset": "SCOPe/ASTRAL-40 2.08 (gbouras13/know-thy-neighbour, Zenodo 10.5281/zenodo.24181855)",
+  "model": "esm2_650m (1280-D)",
+  "n_reference": 11107,
+  "n_query_answerable": 3503,
+  "effective_dimensions_participation_ratio": 5.809,
+  "zca_shrinkage_alpha": 0.1152,
+  "simd_zca_gemv_f32_cosine_fidelity": 1.0,
+  "simd_zca_gemv_f16_cosine_fidelity": 1.0,
+  "top1_superfamily_retrieval": {
+    "raw_none_pct": 58.55,
+    "raw_none_hits": 2051,
+    "diag_zscore_pct": 60.75,
+    "diag_zscore_hits": 2128,
+    "full_zca_whiten_pct": 88.32,
+    "full_zca_whiten_hits": 3094,
+    "paper_reference_fig3b_ceiling": {
+      "raw_none_pct": 59.04,
+      "diag_zscore_pct": 64.12,
+      "full_zca_whiten_pct": 88.41
+    }
+  },
+  "centroid_posting_list_distribution_64_l2": {
+    "n_table_rows": 1000,
+    "raw_posting_list_variance": 3046.42,
+    "raw_max_bucket_size": 298,
+    "raw_active_centroids": 34,
+    "zca_posting_list_variance": 16.39,
+    "zca_max_bucket_size": 25,
+    "zca_active_centroids": 64,
+    "variance_reduction_factor_x": 185.86
+  },
+  "heap_inline_storage_audit": {
+    "table_name": "scope40_esm2_650m_ref",
+    "reltoastrelid": 9673707,
+    "pg_relation_size_reltoastrelid_bytes": 0,
+    "heap_relation_size_bytes": 1654784,
+    "biovec_int8_g128_column_size_bytes": 1304
+  },
+  "elapsed_seconds": 19.65
+}

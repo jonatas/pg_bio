@@ -8369,7 +8369,231 @@ pub fn bio_fit_zscore_whiten(
     out
 }
 
-/// Fits corpus anisotropy centering, diagonal variance scaling, and top-2 PCA cone whitening statistics (`bytea`).
+/// Cyclic threshold Jacobi symmetric eigensolver (`A = V * diag(w) * V^T`) in pure f64 Rust.
+/// Panic-safe, single-threaded, and requires zero external BLAS/LAPACK dependencies.
+fn pgbio_symmetric_eigh_jacobi(mut a: Vec<f64>, d: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut v = vec![0.0f64; d * d];
+    for i in 0..d {
+        v[i * d + i] = 1.0;
+    }
+    if d <= 1 {
+        let w = if d == 1 { vec![a[0]] } else { Vec::new() };
+        return (w, v);
+    }
+
+    let max_sweeps = 45usize;
+    for sweep in 0..max_sweeps {
+        let mut max_off = 0.0f64;
+        for p in 0..d {
+            for q in (p + 1)..d {
+                let apq = a[p * d + q].abs();
+                if apq > max_off {
+                    max_off = apq;
+                }
+            }
+        }
+        if max_off < 1e-11 {
+            break;
+        }
+        let thresh = if sweep < 3 {
+            0.2 * max_off / ((d * d) as f64)
+        } else {
+            0.0
+        };
+
+        for p in 0..d {
+            for q in (p + 1)..d {
+                let apq = a[p * d + q];
+                let abs_apq = apq.abs();
+                if abs_apq <= thresh.max(1e-13) {
+                    continue;
+                }
+                let app = a[p * d + p];
+                let aqq = a[q * d + q];
+                let tau = (aqq - app) / (2.0 * apq);
+                let t = if tau >= 0.0 {
+                    1.0 / (tau + (1.0 + tau * tau).sqrt())
+                } else {
+                    -1.0 / (-tau + (1.0 + tau * tau).sqrt())
+                };
+                let c = 1.0 / (1.0 + t * t).sqrt();
+                let s = t * c;
+
+                a[p * d + p] = app - t * apq;
+                a[q * d + q] = aqq + t * apq;
+                a[p * d + q] = 0.0;
+                a[q * d + p] = 0.0;
+
+                for k in 0..d {
+                    if k != p && k != q {
+                        let akp = a[k * d + p];
+                        let akq = a[k * d + q];
+                        let new_kp = c * akp - s * akq;
+                        let new_kq = s * akp + c * akq;
+                        a[k * d + p] = new_kp;
+                        a[p * d + k] = new_kp;
+                        a[k * d + q] = new_kq;
+                        a[q * d + k] = new_kq;
+                    }
+                    let vkp = v[k * d + p];
+                    let vkq = v[k * d + q];
+                    v[k * d + p] = c * vkp - s * vkq;
+                    v[k * d + q] = s * vkp + c * vkq;
+                }
+            }
+        }
+    }
+
+    let mut w = Vec::with_capacity(d);
+    for i in 0..d {
+        w.push(a[i * d + i]);
+    }
+    (w, v)
+}
+
+/// Packs a mean vector `mu` (`f32[d]`) and a symmetric `d x d` ZCA whitening matrix `W = Sigma_reg^{-1/2}`
+/// into a `PGBW` binary `bytea` payload (`flags = 2` for `f32` GEMV or `flags = 3` for `f16` GEMV).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_pack_zca_whitening_stats(
+    mean: Vec<f32>,
+    zca_matrix_flat: Vec<f32>,
+    use_f16: default!(bool, false),
+) -> Vec<u8> {
+    let dim = mean.len();
+    if dim == 0 || zca_matrix_flat.len() != dim * dim {
+        return Vec::new();
+    }
+    let flags: u16 = if use_f16 { 3 } else { 2 };
+    let mat_bytes = if use_f16 {
+        dim * dim * 2
+    } else {
+        dim * dim * 4
+    };
+    let mut out = Vec::with_capacity(16 + dim * 4 + mat_bytes);
+    out.extend_from_slice(&PGBW_MAGIC);
+    out.extend_from_slice(&PGBW_VERSION.to_le_bytes());
+    out.extend_from_slice(&flags.to_le_bytes());
+    out.extend_from_slice(&(dim as u32).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+
+    for &m in &mean {
+        out.extend_from_slice(&m.to_le_bytes());
+    }
+    if use_f16 {
+        for &w in &zca_matrix_flat {
+            let bits = pgbio_f32_to_f16_bits(w);
+            out.extend_from_slice(&bits.to_le_bytes());
+        }
+    } else {
+        for &w in &zca_matrix_flat {
+            out.extend_from_slice(&w.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// Fits full symmetric ZCA whitening (`W = Sigma_reg^{-1/2} = V * diag(max(lambda, 1e-8)^{-1/2}) * V^T`)
+/// matching `gbouras13/know-thy-neighbour` (`scripts/18_center.py --transform whiten`):
+/// - Ridge shrinkage toward scaled identity: `Sigma_reg = (1 - alpha) * Sigma + alpha * (tr(Sigma) / d) * I`
+///   where `alpha = min(0.5, d / n)` when `shrink_alpha < 0.0`, or `shrink_alpha.clamp(0.0, 1.0)` when `>= 0.0` (`0.0` = exact ZCA).
+/// - Stores `mean` and symmetric `d x d` ZCA matrix `W` in `PGBW` `bytea` (`flags = 2` for `f32` or `flags = 3` for `f16`).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_fit_zca_whiten(
+    vec_agg: Vec<f32>,
+    shrink_alpha: default!(f64, "-1.0"),
+    dim: default!(i32, 0),
+    use_f16: default!(bool, false),
+) -> Vec<u8> {
+    if vec_agg.is_empty() {
+        return Vec::new();
+    }
+    let d = pgbio_infer_embedding_dim(vec_agg.len(), dim);
+    if d == 0 || vec_agg.len() < d {
+        return Vec::new();
+    }
+    let valid_rows: Vec<&[f32]> = vec_agg.chunks_exact(d).collect();
+    let n = valid_rows.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let nf = n as f64;
+
+    // 1. Mean vector mu in f64
+    let mut mean_f64 = vec![0.0f64; d];
+    for row in &valid_rows {
+        for (i, &val) in row.iter().enumerate() {
+            mean_f64[i] += val as f64;
+        }
+    }
+    for m in &mut mean_f64 {
+        *m /= nf;
+    }
+    let mean_f32: Vec<f32> = mean_f64.iter().map(|&m| m as f32).collect();
+
+    // 2. Sample covariance matrix cov = (C^T * C) / max(1, n - 1) in f64
+    let denom = ((n.saturating_sub(1)).max(1)) as f64;
+    let mut cov = vec![0.0f64; d * d];
+    let mut c_row = vec![0.0f64; d];
+    for row in &valid_rows {
+        for i in 0..d {
+            c_row[i] = (row[i] as f64) - mean_f64[i];
+        }
+        for r in 0..d {
+            let cr = c_row[r];
+            let base = r * d;
+            for c in r..d {
+                cov[base + c] += cr * c_row[c];
+            }
+        }
+    }
+    let mut trace = 0.0f64;
+    for r in 0..d {
+        for c in r..d {
+            let val = cov[r * d + c] / denom;
+            cov[r * d + c] = val;
+            cov[c * d + r] = val;
+        }
+        trace += cov[r * d + r];
+    }
+
+    // 3. Shrinkage: cov' = (1 - a) * cov + a * (trace(cov) / d) * I
+    let alpha = if shrink_alpha < 0.0 {
+        (0.5f64).min((d as f64) / (n.max(1) as f64))
+    } else {
+        shrink_alpha.clamp(0.0, 1.0)
+    };
+    if alpha > 0.0 {
+        let diag_target = (trace / (d as f64)).max(1e-8);
+        let one_minus_a = 1.0 - alpha;
+        for idx in 0..(d * d) {
+            cov[idx] *= one_minus_a;
+        }
+        for i in 0..d {
+            cov[i * d + i] += alpha * diag_target;
+        }
+    }
+
+    // 4. Symmetric eigendecomposition cov' = V * diag(w) * V^T and W = V * diag(max(w, 1e-8)^{-1/2}) * V^T
+    let (w, v) = pgbio_symmetric_eigh_jacobi(cov, d);
+    let inv_sqrt_w: Vec<f64> = w.iter().map(|&eig| 1.0 / eig.max(1e-8).sqrt()).collect();
+
+    let mut w_mat = vec![0.0f32; d * d];
+    for r in 0..d {
+        for c in r..d {
+            let mut sum = 0.0f64;
+            for k in 0..d {
+                sum += v[r * d + k] * inv_sqrt_w[k] * v[c * d + k];
+            }
+            let val = sum as f32;
+            w_mat[r * d + c] = val;
+            w_mat[c * d + r] = val;
+        }
+    }
+
+    bio_pack_zca_whitening_stats(mean_f32, w_mat, use_f16)
+}
+
+/// Fits corpus anisotropy centering and full symmetric ZCA whitening statistics (`W = Sigma_reg^{-1/2}`, `bytea`).
 /// Implements the "Know Thy Neighbour" pre-conditioning transform (`bio_fit_whitening_stats(vec_agg) -> bytea`)
 /// for `ESM-2` / `ProstT5` protein language model embeddings.
 #[pg_extern(immutable, parallel_safe)]
@@ -8377,7 +8601,12 @@ pub fn bio_fit_whitening_stats(
     vec_agg: Vec<f32>,
     dim: default!(i32, 0),
 ) -> Vec<u8> {
-    bio_fit_zscore_whiten(vec_agg, 2, dim)
+    let d = pgbio_infer_embedding_dim(vec_agg.len(), dim);
+    if d > 0 && d <= 256 {
+        bio_fit_zca_whiten(vec_agg, -1.0, dim, false)
+    } else {
+        bio_fit_zscore_whiten(vec_agg, 4, dim)
+    }
 }
 
 #[inline]
@@ -8390,15 +8619,80 @@ fn pgbio_read_f32_le(bytes: &[u8], offset: usize) -> f32 {
     ])
 }
 
-/// Applies the `Know Thy Neighbour` anisotropy centering & whitening pre-transform
-/// `x_out = normalize(scale * (x - mean - P_k(x - mean)))` using hardware SIMD (`aarch64` NEON + `x86_64` AVX2 + scalar fallback).
+#[inline]
+fn pgbio_simd_gemv_row_f32_bytes(w_bytes: &[u8], row_byte_off: usize, c: &[f32]) -> f32 {
+    let d = c.len();
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        let w_ptr = w_bytes.as_ptr().add(row_byte_off) as *const f32;
+        let c_ptr = c.as_ptr();
+        let mut acc0 = vdupq_n_f32(0.0);
+        let mut acc1 = vdupq_n_f32(0.0);
+        let mut j = 0usize;
+        while j + 8 <= d {
+            let vw0 = core::ptr::read_unaligned(w_ptr.add(j) as *const float32x4_t);
+            let vc0 = vld1q_f32(c_ptr.add(j));
+            acc0 = vfmaq_f32(acc0, vw0, vc0);
+            let vw1 = core::ptr::read_unaligned(w_ptr.add(j + 4) as *const float32x4_t);
+            let vc1 = vld1q_f32(c_ptr.add(j + 4));
+            acc1 = vfmaq_f32(acc1, vw1, vc1);
+            j += 8;
+        }
+        let mut sum = vaddvq_f32(vaddq_f32(acc0, acc1));
+        while j < d {
+            sum += pgbio_read_f32_le(w_bytes, row_byte_off + j * 4) * *c.get_unchecked(j);
+            j += 1;
+        }
+        return sum;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            unsafe {
+                use std::arch::x86_64::*;
+                let w_ptr = w_bytes.as_ptr().add(row_byte_off) as *const f32;
+                let c_ptr = c.as_ptr();
+                let mut acc = _mm256_setzero_ps();
+                let mut j = 0usize;
+                while j + 8 <= d {
+                    let vw = _mm256_loadu_ps(w_ptr.add(j));
+                    let vc = _mm256_loadu_ps(c_ptr.add(j));
+                    acc = _mm256_add_ps(acc, _mm256_mul_ps(vw, vc));
+                    j += 8;
+                }
+                let mut tmp = [0.0f32; 8];
+                _mm256_storeu_ps(tmp.as_mut_ptr(), acc);
+                let mut sum: f32 = tmp.iter().sum();
+                while j < d {
+                    sum += pgbio_read_f32_le(w_bytes, row_byte_off + j * 4) * *c.get_unchecked(j);
+                    j += 1;
+                }
+                return sum;
+            }
+        }
+    }
+    #[allow(unreachable_code)]
+    {
+        let mut sum = 0.0f32;
+        for j in 0..d {
+            sum += pgbio_read_f32_le(w_bytes, row_byte_off + j * 4) * c[j];
+        }
+        sum
+    }
+}
+
+/// Applies the `Know Thy Neighbour` anisotropy centering & whitening pre-transform:
+/// - `flags == 2`: Full symmetric ZCA matrix `f32` SIMD GEMV `x_out = normalize((x - mean) * W)`
+/// - `flags == 3`: Full symmetric ZCA matrix `f16` SIMD GEMV `x_out = normalize((x - mean) * W_f16)`
+/// - `flags == 0 | 1`: Diagonal Z-score + optional top-k ABTT `x_out = normalize(scale * (x - mean - P_k(x - mean)))`
+/// Executed in hardware SIMD (`aarch64` NEON + `x86_64` AVX2 + scalar fallback).
 #[pg_extern(immutable, parallel_safe)]
 pub fn bio_whiten_embedding(vec: Vec<f32>, stats_bytea: Vec<u8>) -> Vec<f32> {
     if vec.is_empty() {
         return Vec::new();
     }
     if stats_bytea.len() < 16 || stats_bytea[0..4] != PGBW_MAGIC {
-        // Safe fallback: L2-normalize the input vector
         let mut out = vec;
         let norm = pgbio_simd_dot_f32(&out, &out).sqrt();
         if norm > 1e-12 {
@@ -8409,12 +8703,89 @@ pub fn bio_whiten_embedding(vec: Vec<f32>, stats_bytea: Vec<u8>) -> Vec<f32> {
         return out;
     }
 
+    let flags = u16::from_le_bytes([stats_bytea[6], stats_bytea[7]]);
     let dim = u32::from_le_bytes([
         stats_bytea[8],
         stats_bytea[9],
         stats_bytea[10],
         stats_bytea[11],
     ]) as usize;
+
+    if dim == 0 || vec.len() != dim {
+        let mut out = vec;
+        let norm = pgbio_simd_dot_f32(&out, &out).sqrt();
+        if norm > 1e-12 {
+            for v in &mut out {
+                *v /= norm;
+            }
+        }
+        return out;
+    }
+
+    let mean_off = 16usize;
+    if flags == 2 || flags == 3 {
+        let elem_bytes = if flags == 3 { 2usize } else { 4usize };
+        let expected_bytes = 16 + dim * 4 + dim * dim * elem_bytes;
+        if stats_bytea.len() < expected_bytes {
+            let mut out = vec;
+            let norm = pgbio_simd_dot_f32(&out, &out).sqrt();
+            if norm > 1e-12 {
+                for v in &mut out {
+                    *v /= norm;
+                }
+            }
+            return out;
+        }
+
+        let mut mean = Vec::with_capacity(dim);
+        for i in 0..dim {
+            mean.push(pgbio_read_f32_le(&stats_bytea, mean_off + i * 4));
+        }
+        let mut centered = vec![0.0f32; dim];
+        pgbio_simd_center_f32(&vec, &mean, &mut centered);
+
+        let mat_off = mean_off + dim * 4;
+        let mut out = vec![0.0f32; dim];
+        let mut norm_sq = 0.0f32;
+
+        if flags == 2 {
+            let row_stride = dim * 4;
+            for i in 0..dim {
+                let yi = pgbio_simd_gemv_row_f32_bytes(
+                    &stats_bytea,
+                    mat_off + i * row_stride,
+                    &centered,
+                );
+                out[i] = yi;
+                norm_sq += yi * yi;
+            }
+        } else {
+            let row_stride = dim * 2;
+            let mut row_f32 = vec![0.0f32; dim];
+            for i in 0..dim {
+                let r_off = mat_off + i * row_stride;
+                for j in 0..dim {
+                    let bits = u16::from_le_bytes([
+                        stats_bytea[r_off + j * 2],
+                        stats_bytea[r_off + j * 2 + 1],
+                    ]);
+                    row_f32[j] = pgbio_f16_bits_to_f32(bits);
+                }
+                let yi = pgbio_simd_dot_f32(&row_f32, &centered);
+                out[i] = yi;
+                norm_sq += yi * yi;
+            }
+        }
+
+        if norm_sq > 1e-24 {
+            let inv_norm = 1.0 / norm_sq.sqrt();
+            for v in &mut out {
+                *v *= inv_norm;
+            }
+        }
+        return out;
+    }
+
     let pca_k = u32::from_le_bytes([
         stats_bytea[12],
         stats_bytea[13],
@@ -8423,7 +8794,7 @@ pub fn bio_whiten_embedding(vec: Vec<f32>, stats_bytea: Vec<u8>) -> Vec<f32> {
     ]) as usize;
 
     let expected_bytes = 16 + (dim * 8) + (pca_k * 4) + (pca_k * dim * 4);
-    if dim == 0 || vec.len() != dim || stats_bytea.len() < expected_bytes {
+    if stats_bytea.len() < expected_bytes {
         let mut out = vec;
         let norm = pgbio_simd_dot_f32(&out, &out).sqrt();
         if norm > 1e-12 {
@@ -8436,7 +8807,6 @@ pub fn bio_whiten_embedding(vec: Vec<f32>, stats_bytea: Vec<u8>) -> Vec<f32> {
 
     let mut mean = Vec::with_capacity(dim);
     let mut inv_std = Vec::with_capacity(dim);
-    let mean_off = 16usize;
     let std_off = mean_off + dim * 4;
     for i in 0..dim {
         mean.push(pgbio_read_f32_le(&stats_bytea, mean_off + i * 4));
@@ -8465,6 +8835,75 @@ pub fn bio_whiten_embedding(vec: Vec<f32>, stats_bytea: Vec<u8>) -> Vec<f32> {
 
     pgbio_simd_scale_and_l2_normalize_f32(&mut out, &inv_std);
     out
+}
+
+/// Assigns a dense `f32` embedding (`ESM-2`, `ProstT5`, etc.) to a 2-level layered centroid hierarchy
+/// (`l1_centroid` in `0..15`, `l2_centroid` in `0..63`, and SOAR secondary `soar_centroid` in `0..63`)
+/// plus a 64-bit register `fastscan` sign sketch (`fastscan_code: i64`) for Stage-1 candidate routing.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_vector_layered_centroid_assign(
+    vec: Vec<f32>,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(l1_centroid, i16),
+        name!(l2_centroid, i16),
+        name!(soar_centroid, i16),
+        name!(fastscan_code, i64),
+    ),
+> {
+    if vec.is_empty() {
+        return pgrx::iter::TableIterator::once((0, 0, 1, 0));
+    }
+    let d = vec.len();
+    // 1. Fold embedding into 64 orthogonal block sums -> 64-bit fastscan sign sketch + 8 macro-blocks
+    let mut block64 = [0.0f32; 64];
+    for (i, &val) in vec.iter().enumerate() {
+        block64[(i * 64) / d] += val;
+    }
+    let mut fastscan_bits: u64 = 0;
+    let mut b8 = [0.0f32; 8];
+    for k in 0..64 {
+        if block64[k] >= 0.0 {
+            fastscan_bits |= 1u64 << k;
+        }
+        b8[k / 8] += block64[k];
+    }
+
+    // 2. Walsh-Hadamard orthogonal projection across the 8 macro-blocks for 2-level centroid routing
+    let h0 = (b8[0] + b8[1] + b8[2] + b8[3]) - (b8[4] + b8[5] + b8[6] + b8[7]);
+    let h1 = (b8[0] + b8[1] - b8[2] - b8[3]) + (b8[4] + b8[5] - b8[6] - b8[7]);
+    let h2 = (b8[0] - b8[1] + b8[2] - b8[3]) + (b8[4] - b8[5] + b8[6] - b8[7]);
+    let h3 = (b8[0] - b8[1] - b8[2] + b8[3]) - (b8[4] - b8[5] - b8[6] + b8[7]);
+    let h4 = (b8[0] + b8[1] - b8[2] - b8[3]) - (b8[4] + b8[5] - b8[6] - b8[7]);
+    let h5 = (b8[0] - b8[1] + b8[2] - b8[3]) - (b8[4] - b8[5] + b8[6] - b8[7]);
+
+    let l1 = ((if h0 >= 0.0 { 1 } else { 0 })
+        | (if h1 >= 0.0 { 2 } else { 0 })
+        | (if h2 >= 0.0 { 4 } else { 0 })
+        | (if h3 >= 0.0 { 8 } else { 0 })) as i16;
+    let l2_sub = ((if h4 >= 0.0 { 1 } else { 0 }) | (if h5 >= 0.0 { 2 } else { 0 })) as i16;
+    let l2 = (l1 << 2) | l2_sub;
+
+    let margins = [
+        (h0.abs(), 1i16 << 2),
+        (h1.abs(), 2i16 << 2),
+        (h2.abs(), 4i16 << 2),
+        (h3.abs(), 8i16 << 2),
+        (h4.abs(), 1i16),
+        (h5.abs(), 2i16),
+    ];
+    let mut min_m = f32::MAX;
+    let mut flip = 1i16;
+    for &(m, bit) in &margins {
+        if m < min_m {
+            min_m = m;
+            flip = bit;
+        }
+    }
+    let soar = l2 ^ flip;
+
+    pgrx::iter::TableIterator::once((l1, l2, soar, fastscan_bits as i64))
 }
 
 /// Optional whitening hook for centroid training and query-vector preparation so `fastscan` operates
@@ -11881,7 +12320,45 @@ ATOM      9  CA  TRP A  13      -1.500   0.800   2.200  1.00 94.00           C  
         let raw_audit: Vec<_> =
             crate::bio_rabitq_eps_bound_audit(raw_cone_flat.clone(), None, 0.45, dim as i32).collect();
         let whitened_audit: Vec<_> =
-            crate::bio_rabitq_eps_bound_audit(raw_cone_flat, Some(stats), 0.45, dim as i32).collect();
+            crate::bio_rabitq_eps_bound_audit(raw_cone_flat.clone(), Some(stats.clone()), 0.45, dim as i32).collect();
+
+        // Also test f16 symmetric ZCA matrix GEMV (flags == 3) and centroid posting-list size variance drop
+        let stats_f16 = crate::bio_fit_zca_whiten(raw_cone_flat.clone(), -1.0, dim as i32, true);
+        assert_eq!(u16::from_le_bytes([stats_f16[6], stats_f16[7]]), 3);
+        let w0_f16 = crate::bio_whiten_embedding(raw_cone[0].clone(), stats_f16);
+        let cos_f32_vs_f16 = crate::pgbio_simd_dot_f32(&w0, &w0_f16);
+        assert!(
+            cos_f32_vs_f16 > 0.999,
+            "f16 ZCA GEMV must match f32 ZCA GEMV with cosine > 0.999, got {}",
+            cos_f32_vs_f16
+        );
+
+        let mut raw_counts = [0i32; 64];
+        let mut zca_counts = [0i32; 64];
+        for v in &raw_cone {
+            let rc: Vec<_> = crate::bio_vector_layered_centroid_assign(v.clone()).collect();
+            raw_counts[rc[0].1 as usize] += 1;
+            let wv = crate::bio_whiten_embedding(v.clone(), stats.clone());
+            let wc: Vec<_> = crate::bio_vector_layered_centroid_assign(wv).collect();
+            zca_counts[wc[0].1 as usize] += 1;
+        }
+        let mean_bucket = (n as f64) / 64.0;
+        let raw_var: f64 = raw_counts
+            .iter()
+            .map(|&c| ((c as f64) - mean_bucket).powi(2))
+            .sum::<f64>()
+            / 64.0;
+        let zca_var: f64 = zca_counts
+            .iter()
+            .map(|&c| ((c as f64) - mean_bucket).powi(2))
+            .sum::<f64>()
+            / 64.0;
+        assert!(
+            zca_var < raw_var * 0.25,
+            "Expected ZCA whitening to drop centroid posting-list size variance by >4x: raw_var={} vs zca_var={}",
+            raw_var,
+            zca_var
+        );
 
         let (raw_cos, raw_eps, _raw_p95, raw_prune) = raw_audit[0];
         let (w_cos, w_eps, _w_p95, w_prune) = whitened_audit[0];

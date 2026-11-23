@@ -14,9 +14,12 @@ $$\varepsilon_{\text{bound}}(r) = \frac{\sqrt{1 - \langle \hat{r}, \hat{q}_b \ra
 Additionally, a raw 1280-D `f32` vector (`5,124 B`) or `f16` `halfvec` (`2,564 B`) exceeds PostgreSQL's `~2,000 B` `TOAST_TUPLE_THRESHOLD`, causing out-of-line TOAST I/O during Stage-2 exact re-ranking.
 
 ### The Native Rust / SIMD Solution
-1. **Whitening Pre-Transform (`bio_fit_whitening_stats`, `bio_fit_zscore_whiten`, `bio_whiten_embedding`, `bio_prepare_fastscan_vector`):**
-   - Computes exact per-channel mean $\mu \in \mathbb{R}^D$, top-$k$ principal cone directions $\{u_j\}_{j=1}^k$ via deterministic power iteration + Gram-Schmidt deflation, and inverse standard deviation scales $s_i = (\sigma_i^2 + \varepsilon)^{-1/2}$, packed into a deterministic `PGBW` binary `bytea`.
-   - Applies $x_{\text{out}} = \text{normalize}\!\left(s \odot \left((x - \mu) - \sum_{j=1}^k \alpha_j \langle x - \mu, u_j \rangle u_j\right)\right)$ using hardware SIMD (`std::arch::aarch64` NEON `vfmaq_f32`/`vfmsq_f32` and `std::arch::x86_64` AVX2 `_mm256_sub_ps`/`_mm256_mul_ps`).
+1. **Full Symmetric ZCA Matrix Whitening (`bio_fit_zca_whiten`, `bio_pack_zca_whitening_stats`, `bio_fit_whitening_stats`, `bio_fit_zscore_whiten`, `bio_whiten_embedding`, `bio_prepare_fastscan_vector`):**
+   - As shown in `gbouras13/know-thy-neighbour` (`scripts/18_center.py` & `scripts/28_spectrum.py`), raw `ESM-2 650M` uses `< 15` effective dimensions (Participation Ratio $\text{PR} = \frac{(\sum \lambda_i)^2}{\sum \lambda_i^2} < 15$ out of $1280$) with strong off-diagonal covariance, so diagonal Z-scoring (`60.75%–64.12%` top-1) is substantially weaker than full symmetric ZCA whitening:
+     $$\Sigma = \frac{1}{n - 1} C^T C, \quad \Sigma_{\text{reg}} = (1 - \alpha)\Sigma + \alpha \frac{\text{Tr}(\Sigma)}{d} I_d \quad \left(\alpha = \min\!\left(0.5, \frac{d}{n}\right)\text{ or } 0.0\right)$$
+     $$\Sigma_{\text{reg}} = V \Lambda V^T, \quad W = V \max(\Lambda, 10^{-8})^{-1/2} V^T \in \mathbb{R}^{d \times d}$$
+   - `PGBW` binary `bytea` supports both **`f32` full symmetric ZCA matrix GEMV (`flags = 2`)** and **`f16` full symmetric ZCA matrix GEMV (`flags = 3`)**, as well as diagonal Z-score + top-$k$ ABTT (`flags = 0 | 1`).
+   - `bio_whiten_embedding(vec, stats_bytea)` evaluates $x_{\text{out}} = \frac{(x - \mu) W}{\|(x - \mu) W\|_2}$ using hardware SIMD (`std::arch::aarch64` NEON `vfmaq_f32` and `std::arch::x86_64` AVX2 `_mm256_mul_ps` + `_mm256_add_ps`).
 2. **Zero-CBOR Fixed-Header C-Varlena `BioVecInt8G128` (`1,300 B` payload / `1,304 B` varlena):**
    - Divides 1280-D vectors into 10 groups of 128 `i8` channels with one IEEE 754 `f16` scale per group (`10 * 2B + 1280 * 1B = 1,300 B` payload + `4 B` `SET_VARSIZE` header = `1,304 B` on disk).
    - Stays strictly below the `~2,000 B` `TOAST_TUPLE_THRESHOLD` (`pg_column_size = 1304`), keeping heap tuples 100% inline with zero TOAST reads and evaluating dot/cosine distance in hardware SIMD `i32` accumulators (`vmull_s8` + `vpadalq_s16` on ARM64 NEON; `_mm256_cvtepi8_epi16` + `_mm256_madd_epi16` on AVX2).
@@ -137,3 +140,21 @@ Reproduce anytime inside PostgreSQL via `SELECT * FROM bio_run_phase4_benchmarks
 | **2b. Stage-2 100-Candidate Rerank Latency (`f32` vs `BioVecInt8G128` SIMD `i32`)** | `1,629.70 µs` | `813.97 µs` | **2.00× faster** | µs / 100 candidates (1280-D) |
 | **3a. Stage-2.5 `bio_enzref_role_contrast` (1280-D SIMD)** | — | **52,970 rows/sec** | **18.8 µs / row** | rows / sec (1280-D triplets) |
 | **3b. OpenSMILES `bio_is_pains_or_aggregator` Screen** | — | **11,995 molecules/sec** | **83.4 µs / molecule** | full SMILES parse + aromaticity + PAINS screen / sec |
+
+---
+
+## 5. `SCOPe/ASTRAL-40 2.08` (`esm2_650m`) Family Hold-Out Superfamily Benchmark
+
+Reproduce via [`scripts/benchmark_know_thy_neighbour_scope40.py`](../scripts/benchmark_know_thy_neighbour_scope40.py) (results persisted in [`scripts/benchmark_know_thy_neighbour_scope40_results.json`](../scripts/benchmark_know_thy_neighbour_scope40_results.json)):
+
+- **Split (`gbouras13/know-thy-neighbour/scripts/11_scope_build.py`, `seed=1`, `25%` held-out families):**
+  - `11,107` reference domains across `1,749` superfamilies
+  - `4,069` held-out family query domains (`3,503` answerable queries whose superfamily survives in the reference via a different family)
+  - Raw effective dimensionality (Participation Ratio): **`5.81 / 1280` (`< 15` effective dimensions)**
+  - In-database 1280×1280 SIMD ZCA GEMV cosine fidelity: **`1.000000` (`f32`, `flags=2`)** and **`1.000000` (`f16`, `flags=3`)**
+
+| Metric / Assertion | Raw `ESM-2 650M` (`none`) | Diagonal Z-Score (`diag`) | Full Symmetric ZCA (`whiten`) | Paper Reference (`fig3b_ceiling.csv`) |
+| :--- | :---: | :---: | :---: | :---: |
+| **Top-1 Superfamily Retrieval (`3,503` queries, `BioVecInt8G128`)** | **58.55%** (`2,051 / 3,503`) | **60.75%** (`2,128 / 3,503`) | **88.32%** (`3,094 / 3,503`) | `59.04%` (raw) $\rightarrow$ `64.12%` (diag) $\rightarrow$ `88.41%` (ZCA) |
+| **64-Bucket L2 Centroid Posting-List Variance (`VAR_POP`)** | `3,046.42` (max bucket `298`, `34/64` active) | — | **`16.39`** (max bucket `25`, `64/64` active) | **185.87× variance reduction** |
+| **Heap Table `pg_relation_size(reltoastrelid)` (`1,000` domains)** | — | — | **`0 B`** (`1,654,784 B` inline heap) | **`pg_column_size(BioVecInt8G128) = 1,304 B`** (`0` TOAST reads) |
