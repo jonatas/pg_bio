@@ -27,7 +27,7 @@ When a software or database engineer asks to learn biotech through `pg_bio`, gui
 ### Module 2.1: Mining the Dark Proteome in the "Twilight Zone"
 * **CS Concept:** `halfvec` 1280-D HNSW cosine distance (`<=>`) short-circuiting into $O(N)$ rolling-buffer Smith-Waterman dynamic programming (`smith_waterman_score`).
 * **Biotech Concept:** Why 3D structure is more conserved than 1D sequence; discovering uncharacterized extremophile enzymes with <30% sequence identity.
-* **Code & Docs:** [`docs/01_vector_homology.md`](../../docs/01_vector_homology.md) | [`docs/08_native_alignment.md`](../../docs/08_native_alignment.md) | [`examples/swarm_discovery/swarm_discovery.py`](../../examples/swarm_discovery/swarm_discovery.py)
+* **Code & Docs:** [`docs/01_vector_homology.md`](../../docs/01_vector_homology.md) | [`docs/08_native_alignment.md`](../../docs/08_native_alignment.md) | [`jonatas/bio-pipelines` (`base/swarm_discovery.py`)](https://github.com/jonatas/bio-pipelines/blob/main/base/swarm_discovery.py)
 * **Hands-On SQL Lab:** Run the Twilight-Zone bell-curve query combining `<=>` and `smith_waterman_score` to find a divergent structural twin, then fetch its live metadata via `bio_fetch_uniprot()`.
 
 ### Module 2.2: 3D Atomic Space via 64-Bit Morton Curves & Jacobi SVD

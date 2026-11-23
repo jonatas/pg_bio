@@ -24,5 +24,3 @@ To keep `pg_bio` focused strictly on the high-performance Rust `pgrx` PostgreSQL
 - `/compare` — Side-by-Side 3D Kabsch & RangeFinder Pocket Compare Lab
 - `/galaxy` — 3D Organism Correlation Galaxy
 - `/tpp` — CETSA / TPP Microprotein Knockout & Ideal Operating Temp ($T_{\text{opt}}$) Lab
-
-*(Note: `swarm_discovery.py` and `swarm_web.py` in this directory are lightweight forwarding shims for backward compatibility when `BIO_PIPELINES_ROOT` or a sibling `../bio-pipelines` checkout is present).*
