@@ -63,3 +63,8 @@ Use this skill whenever documenting a new protein discovery made via `pg_bio` in
 * Mention to the user that the blog features an interactive 3D plugin (`pg_bio_sync.js`).
 * The user can double-click either 3D viewer to lock their cameras together (synchronized rotation/tilt).
 * The user can click any fragment on one protein, and it will automatically highlight the matching residue (across all complex chains!) on the opposite protein by swapping colors.
+
+### 8. MANDATORY POST-CREATION LINKING (Chat Response, Unified UI & Shared Footer)
+* **Always Link the New File in Your Response:** Whenever you create or update a blog post in `/Users/jonatas/code/ideia.me/_posts/YYYY-MM-DD-slug.md`, you MUST always provide a clickable markdown file link (`[YYYY-MM-DD-slug.md](file:///Users/jonatas/code/ideia.me/_posts/YYYY-MM-DD-slug.md)`) and its Jekyll permalink (`https://ideia.me/slug`, since `_config.yml` uses `permalink: /:title`) in your response to the user.
+* **Register the New Post in the Unified Bio-Pipelines UI (`IDEIAME_BLOG_POSTS`):** Always add the new blog post entry (`date`, `slug`, `url`, `title`, `pair`, `pipeline`, `compare_url`, `cards_url`) to `IDEIAME_BLOG_POSTS` in `/Users/jonatas/code/bio-pipelines/base/discovery_routes.py` so the post is automatically linked on `/telemetry#blog-posts-section` and displays an `📖 ideia.me Post ↗` badge on its featured protein cards in `/cards`.
+* **Cross-Link in `_includes/pg_bio_promo.md`:** Add the new post's `/slug` link to `/Users/jonatas/code/ideia.me/_includes/pg_bio_promo.md` so all other `pg_bio` and `bio-pipelines` posts cross-link to the new discovery.

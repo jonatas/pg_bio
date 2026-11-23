@@ -8,7 +8,13 @@ tests/pg_regress/results
 tests/pg_regress/regression.diffs
 tests/pg_regress/regression.out
 *.pdb
+*.log
 __pycache__/
+*.pyc
+.ipynb_checkpoints/
+build/
+*.egg-info/
+.ingest_checkpoint.json
 .venv/
 .env
 

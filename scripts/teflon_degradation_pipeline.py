@@ -10,7 +10,7 @@ import time
 import json
 import sys
 
-DB_URI = "postgresql://localhost:28818/bio_demo"
+DB_URI = "postgresql://localhost:28818/pg_bio"
 
 def run_teflon_pipeline():
     print("=========================================================================")

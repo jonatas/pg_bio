@@ -21,3 +21,8 @@ trigger: always_on
   - **Z-Order (Morton Coding)** for 3D atomic spatial indexing.
   - **Vector Embeddings** for functional and structural homology (ESM models).
   - **Sparse Attention Maps** for Compressed Sparse Row (CSR) neural network weight storage.
+
+## 4. Git Hygiene & Scratch File Policy
+- **NEVER commit dirty, temporary, scratch, or unrelated files** (e.g., `scratch_*.py`, `*.log`, `test_*`, cross-project scripts like `ideia.me` blog scripts, build caches, or temporary data dumps) to the repository.
+- **NEVER commit or leave behind temporary helper scripts/tools** used as a one-off tool to apply a change, patch, migration, or verification if they are not a core dependency of the project. Delete them immediately after use or keep them in the conversation's `scratch/` directory.
+- **NEVER use broad git staging commands** like `git add *`, `git add .`, or `git add -A`. Always stage specific, verified project files explicitly (`git add <specific-file>`).
