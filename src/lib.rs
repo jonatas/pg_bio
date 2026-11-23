@@ -7676,6 +7676,195 @@ pub fn pocket_iou_8prop_raw(
     sum / 8.0
 }
 
+// 8-temperature CETSA/TPP melting gradient points (°C) packed into a single 64-bit register sketch (`i64`)
+const TPP_GRADIENT_TEMPS_C: [f64; 8] = [40.0, 44.0, 48.0, 52.0, 56.0, 60.0, 64.0, 68.0];
+
+/// Quantizes a Thermal Proteome Profiling (TPP / CETSA-MS) sigmoidal melting curve
+/// `f(T) = 1 / (1 + exp((T - tm_c) / k))` across 8 canonical temperature gradient points
+/// (`40°C..68°C`) into a single 64-bit register code (`i64`, 1 byte `0..255` soluble fraction per temperature).
+#[pg_extern(immutable, parallel_safe)]
+pub fn tpp_melting_curve_quantize(tm_c: f64, cooperativity_k: f64) -> i64 {
+    let k = cooperativity_k.clamp(0.8, 12.0);
+    let tm = tm_c.clamp(30.0, 95.0);
+    let mut q = [0u8; 8];
+    for (idx, &temp_c) in TPP_GRADIENT_TEMPS_C.iter().enumerate() {
+        let frac_soluble = 1.0 / (1.0 + ((temp_c - tm) / k).exp());
+        q[idx] = (frac_soluble.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+    u64::from_le_bytes(q) as i64
+}
+
+/// Computes Register-Direct Thermal Proximity Co-Aggregation (TPCA) Decoherence (`0.0..1.0`)
+/// between two complex subunits `(A, B)` before (`wt_code_a`, `wt_code_b`) and after (`ko_code_a`, `ko_code_b`)
+/// a microprotein knockout or staple disruption, using ONLY 64-bit melting curve codes.
+/// Returns the loss of co-melting coherence `max(0.0, coherence_wt - coherence_ko)`.
+#[pg_extern(immutable, parallel_safe)]
+pub fn tpp_tpca_decoherence_raw(
+    wt_code_a: i64,
+    wt_code_b: i64,
+    ko_code_a: i64,
+    ko_code_b: i64,
+) -> f64 {
+    let wta = (wt_code_a as u64).to_le_bytes();
+    let wtb = (wt_code_b as u64).to_le_bytes();
+    let koa = (ko_code_a as u64).to_le_bytes();
+    let kob = (ko_code_b as u64).to_le_bytes();
+
+    let mut l1_wt = 0u32;
+    let mut l1_ko = 0u32;
+    for t in 0..8 {
+        l1_wt += (wta[t] as i32 - wtb[t] as i32).unsigned_abs();
+        l1_ko += (koa[t] as i32 - kob[t] as i32).unsigned_abs();
+    }
+    let coh_wt = 1.0 - (l1_wt as f64) / (8.0 * 255.0);
+    let coh_ko = 1.0 - (l1_ko as f64) / (8.0 * 255.0);
+    (coh_wt - coh_ko).clamp(0.0, 1.0)
+}
+
+/// Predicts the proteome-wide Thermal Proteome Profiling (TPP) stability shift (`delta_tm_c`),
+/// TPCA complex decoherence, 64-bit WT/KO melting curve register codes, and HSP70/HSP90/CCT chaperone sink load
+/// on a partner complex (`partner_len`) when a microprotein staple (`micro_len <= 150 aa`) is knocked out.
+#[pg_extern(immutable, parallel_safe)]
+pub fn tpp_predict_microprotein_ko_shift(
+    micro_len: i32,
+    partner_len: i32,
+    vector_dist: f64,
+    icomp: f64,
+    rf_iou: f64,
+    surf_hydro_frac: f64,
+    hbond_count: i32,
+    buns_count: i32,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(tm_wt_c, f64),
+        name!(tm_ko_c, f64),
+        name!(delta_tm_c, f64),
+        name!(tpca_decoherence, f64),
+        name!(chaperone_sink_load, f64),
+        name!(wt_curve_code, i64),
+        name!(ko_curve_code, i64),
+    ),
+> {
+    let m_len = micro_len.clamp(15, 300) as f64;
+    let p_len = partner_len.clamp(40, 4000) as f64;
+    let staple_asymmetry = (p_len / m_len).clamp(1.0, 18.0).ln().clamp(0.25, 2.85);
+    let sim = (1.0 - vector_dist.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    let ic = icomp.clamp(0.0, 1.0);
+    let iou = rf_iou.clamp(0.0, 1.0);
+    let hydro = surf_hydro_frac.clamp(0.08, 0.85);
+    let hb = hbond_count.clamp(0, 60) as f64;
+    let buns = buns_count.clamp(0, 25) as f64;
+
+    // Wild-type holo-complex melting point (°C): stabilized by interfacial H-bonds and microprotein staple burial
+    let tm_wt = (51.5 + 4.8 * ic + 3.2 * iou + 0.14 * hb - 0.18 * buns).clamp(42.0, 74.0);
+
+    // Knockout destabilization (°C): unmasking hydrophobic patch + severing interfacial H-bonds + exposing BUNS
+    let raw_drop = (2.15 * ic + 1.85 * iou + 2.40 * hydro + 0.085 * hb + 0.12 * buns)
+        * (0.55 + 0.45 * sim)
+        * (0.60 + 0.15 * staple_asymmetry);
+    let delta_tm = -raw_drop.clamp(0.35, 11.80);
+    let tm_ko = (tm_wt + delta_tm).clamp(36.0, 72.0);
+
+    // Intact holo-complex melts cooperatively (sharp slope k=2.1°C); disrupted complex melts broadly (k=3.9°C)
+    let wt_code = tpp_melting_curve_quantize(tm_wt, 2.1);
+    let wt_partner_ref = tpp_melting_curve_quantize(tm_wt - 0.35, 2.2);
+    let ko_code = tpp_melting_curve_quantize(tm_ko, 3.9);
+    let tpca_decoh = tpp_tpca_decoherence_raw(wt_code, wt_partner_ref, ko_code, wt_partner_ref);
+
+    // Chaperone Proteostasis Sink Load: function of unmasked hydrophobic surface area and thermal destabilization magnitude
+    let chap_load = ((-delta_tm) * (0.45 + 1.25 * hydro) * (1.0 + 0.04 * buns) * (0.75 + 0.25 * tpca_decoh)).clamp(0.1, 25.0);
+
+    pgrx::iter::TableIterator::once((
+        (tm_wt * 100.0).round() / 100.0,
+        (tm_ko * 100.0).round() / 100.0,
+        (delta_tm * 100.0).round() / 100.0,
+        (tpca_decoh * 10000.0).round() / 10000.0,
+        (chap_load * 1000.0).round() / 10000.0 * 10.0,
+        wt_code,
+        ko_code,
+    ))
+}
+
+/// Computes the Ideal Operating Temperature (`t_opt_wt_c` vs `t_opt_ko_c`), temperature ceiling gain (`delta_t_opt_c`),
+/// catalytic flux productivity gain (`catalytic_flux_gain_x`), and 64-bit register-packed Effective Catalytic Activity
+/// curves (`activity_wt_code`, `activity_ko_code` across 40°C..68°C) by combining Eyring-Arrhenius transition-state
+/// acceleration `k_cat(T)` with the CETSA/TPP folded soluble fraction `f_soluble(T)`.
+#[pg_extern(immutable, parallel_safe)]
+pub fn tpp_optimal_bioreactor_window(
+    tm_wt_c: f64,
+    tm_ko_c: f64,
+    activation_energy_kcal: f64,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(t_opt_wt_c, f64),
+        name!(t_opt_ko_c, f64),
+        name!(delta_t_opt_c, f64),
+        name!(catalytic_flux_gain_x, f64),
+        name!(activity_wt_code, i64),
+        name!(activity_ko_code, i64),
+    ),
+> {
+    let tm_w = tm_wt_c.clamp(38.0, 85.0);
+    let tm_k = tm_ko_c.clamp(34.0, tm_w);
+    let ea = activation_energy_kcal.clamp(8.0, 26.0);
+    // Universal gas constant R = 0.0019872 kcal/(mol*K), reference T0 = 310.15 K (37°C)
+    let r_kcal = 0.0019872;
+    let t0_k = 310.15;
+
+    let eval_flux = |temp_c: f64, tm: f64, slope_k: f64| -> f64 {
+        let tk = temp_c + 273.15;
+        let arrhenius = ((ea / r_kcal) * (1.0 / t0_k - 1.0 / tk)).exp();
+        let f_soluble = 1.0 / (1.0 + ((temp_c - tm) / slope_k).exp());
+        arrhenius * f_soluble
+    };
+
+    // Scan 35.0°C..75.0°C in 0.25°C increments to locate exact catalytic productivity peaks (T_opt)
+    let mut best_t_wt = 37.0;
+    let mut max_flux_wt = 1e-9_f64;
+    let mut best_t_ko = 37.0;
+    let mut max_flux_ko = 1e-9_f64;
+
+    for step in 0..=160 {
+        let t_c = 35.0 + (step as f64) * 0.25;
+        let fw = eval_flux(t_c, tm_w, 2.1);
+        if fw > max_flux_wt {
+            max_flux_wt = fw;
+            best_t_wt = t_c;
+        }
+        let fk = eval_flux(t_c, tm_k, 3.9);
+        if fk > max_flux_ko {
+            max_flux_ko = fk;
+            best_t_ko = t_c;
+        }
+    }
+
+    let gain_x = (max_flux_wt / max_flux_ko.max(1e-6)).clamp(1.0, 12.0);
+    let delta_t_opt = best_t_wt - best_t_ko;
+
+    // Pack 8-temperature (40°C..68°C) effective catalytic output into 64-bit register codes
+    // scaled so the WT peak = 250 (allowing direct visual comparison of KO vs WT productivity bell curves)
+    let norm_denom = max_flux_wt.max(1e-6);
+    let mut q_wt = [0u8; 8];
+    let mut q_ko = [0u8; 8];
+    for (idx, &temp_c) in TPP_GRADIENT_TEMPS_C.iter().enumerate() {
+        let fw = (eval_flux(temp_c, tm_w, 2.1) / norm_denom) * 250.0;
+        let fk = (eval_flux(temp_c, tm_k, 3.9) / norm_denom) * 250.0;
+        q_wt[idx] = fw.round().clamp(0.0, 255.0) as u8;
+        q_ko[idx] = fk.round().clamp(0.0, 255.0) as u8;
+    }
+
+    pgrx::iter::TableIterator::once((
+        (best_t_wt * 100.0).round() / 100.0,
+        (best_t_ko * 100.0).round() / 100.0,
+        (delta_t_opt * 100.0).round() / 100.0,
+        (gain_x * 100.0).round() / 100.0,
+        u64::from_le_bytes(q_wt) as i64,
+        u64::from_le_bytes(q_ko) as i64,
+    ))
+}
+
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
 mod tests {
@@ -8973,6 +9162,86 @@ ATOM      9  CA  TRP A  13      -1.500   0.800   2.200  1.00 94.00           C  
         );
         assert!((raw_iou - exact_iou).abs() < 1e-12);
         assert!(q_ub + 1e-12 >= raw_iou, "16B register quantized upper bound {} must >= exact IoU {}", q_ub, raw_iou);
+    }
+
+    #[pg_test]
+    fn test_tpp_microprotein_knockout_and_tpca_decoherence() {
+        // 1. Test 64-bit register melting curve quantization across 40°C..68°C
+        let curve_55 = crate::tpp_melting_curve_quantize(55.0, 2.0);
+        let curve_47 = crate::tpp_melting_curve_quantize(47.0, 3.8);
+        assert_ne!(curve_55, curve_47);
+
+        let b55 = (curve_55 as u64).to_le_bytes();
+        // Melting curve must be monotonically non-increasing with temperature (40°C -> 68°C)
+        for t in 0..7 {
+            assert!(
+                b55[t] >= b55[t + 1],
+                "Melting curve must decrease with temperature: step {} ({}) < step {} ({})",
+                t,
+                b55[t],
+                t + 1,
+                b55[t + 1]
+            );
+        }
+
+        // 2. Test Register-Direct TPCA Decoherence when one subunit shifts from 55°C to 47°C upon microprotein KO
+        let partner_wt = crate::tpp_melting_curve_quantize(54.7, 2.1);
+        let decoh = crate::tpp_tpca_decoherence_raw(curve_55, partner_wt, curve_47, partner_wt);
+        assert!(decoh > 0.20 && decoh <= 1.0, "Expected strong TPCA decoherence (> 0.20), got {}", decoh);
+
+        // Identical WT and KO states must yield 0.0 decoherence
+        let zero_decoh = crate::tpp_tpca_decoherence_raw(curve_55, partner_wt, curve_55, partner_wt);
+        assert!(zero_decoh.abs() < 1e-12);
+
+        // 3. Test biophysical microprotein knockout ΔTm & chaperone sink load prediction
+        let strong_ko: Vec<_> = crate::tpp_predict_microprotein_ko_shift(
+            68,    // 68 aa microprotein staple
+            480,   // 480 aa target complex subunit
+            0.09,  // close PRISM cosine distance
+            0.84,  // high interface complementarity
+            0.78,  // high 3D RangeFinder pocket overlap
+            0.44,  // high unmasked surface hydrophobicity
+            14,    // 14 interfacial H-bonds severed
+            4,     // 4 buried unsatisfied polars exposed
+        )
+        .collect();
+        assert_eq!(strong_ko.len(), 1);
+        let (tm_wt, tm_ko, delta_tm, tpca_d, chap_load, wt_code, ko_code) = strong_ko[0];
+        assert!(tm_wt > tm_ko);
+        assert!(delta_tm < -3.0, "Strong microprotein staple KO should drop Tm by >3°C, got {}", delta_tm);
+        assert!(tpca_d > 0.12, "Expected significant TPCA decoherence (> 0.12), got {}", tpca_d);
+        assert!(chap_load > 2.5, "Expected high HSP70/HSP90 chaperone sink load, got {}", chap_load);
+        assert_ne!(wt_code, ko_code);
+
+        let weak_ko: Vec<_> = crate::tpp_predict_microprotein_ko_shift(
+            140, 200, 0.24, 0.25, 0.10, 0.16, 2, 0,
+        )
+        .collect();
+        assert!(
+            strong_ko[0].2 < weak_ko[0].2,
+            "Strong staple KO delta_tm ({}) must be more negative than weak KO ({})",
+            strong_ko[0].2,
+            weak_ko[0].2
+        );
+        assert!(strong_ko[0].4 > weak_ko[0].4);
+
+        // 4. Test Ideal Operating Temperature (T_opt) & Eyring-TPP Catalytic Flux Gain Window
+        let opt_win: Vec<_> = crate::tpp_optimal_bioreactor_window(tm_wt, tm_ko, 14.5).collect();
+        assert_eq!(opt_win.len(), 1);
+        let (t_opt_wt, t_opt_ko, delta_t_opt, flux_gain_x, act_wt_code, act_ko_code) = opt_win[0];
+        assert!(
+            t_opt_wt > t_opt_ko + 3.0,
+            "Stapled WT T_opt ({}) must exceed KO T_opt ({}) by >3°C",
+            t_opt_wt,
+            t_opt_ko
+        );
+        assert!(delta_t_opt > 3.0);
+        assert!(
+            flux_gain_x > 1.40,
+            "Microprotein staple should boost peak catalytic productivity by >1.4x, got {}x",
+            flux_gain_x
+        );
+        assert_ne!(act_wt_code, act_ko_code);
     }
 }
 

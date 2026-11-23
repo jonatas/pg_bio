@@ -429,6 +429,72 @@ def ensure_swarm_indexes(cur):
             total_3d_rf_edges BIGINT NOT NULL
         );
     """)
+    cur.execute("""
+        ALTER TABLE swarm_telemetry_log
+            ADD COLUMN IF NOT EXISTS tpp_cascades_mapped INT NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS total_tpp_cascades BIGINT NOT NULL DEFAULT 0;
+    """)
+
+    # Create Thermal Proteome Profiling (TPP) Microprotein Knockout Cascade Table
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS swarm_tpp_knockout_cascades (
+            id BIGSERIAL PRIMARY KEY,
+            edge_id BIGINT UNIQUE NOT NULL,
+            microprotein_id VARCHAR(50) NOT NULL,
+            microprotein_org TEXT NOT NULL,
+            microprotein_len INT NOT NULL,
+            microprotein_desc TEXT NOT NULL,
+            partner_complex_id VARCHAR(50) NOT NULL,
+            partner_org TEXT NOT NULL,
+            partner_len INT NOT NULL,
+            partner_desc TEXT NOT NULL,
+            family_name TEXT NOT NULL,
+            vector_distance DOUBLE PRECISION NOT NULL,
+            interface_comp DOUBLE PRECISION NOT NULL,
+            rf_range_iou DOUBLE PRECISION,
+            tm_wt_c DOUBLE PRECISION NOT NULL,
+            tm_ko_c DOUBLE PRECISION NOT NULL,
+            delta_tm_c DOUBLE PRECISION NOT NULL,
+            tpca_decoherence DOUBLE PRECISION NOT NULL,
+            chaperone_sink_load DOUBLE PRECISION NOT NULL,
+            allosteric_spillover_targets INT NOT NULL DEFAULT 0,
+            allosteric_delta_tm_c DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+            cascade_impact_score DOUBLE PRECISION NOT NULL,
+            disruption_class TEXT NOT NULL,
+            wt_curve_code BIGINT NOT NULL,
+            ko_curve_code BIGINT NOT NULL,
+            t_opt_wt_c DOUBLE PRECISION,
+            t_opt_ko_c DOUBLE PRECISION,
+            delta_t_opt_c DOUBLE PRECISION,
+            catalytic_flux_gain_x DOUBLE PRECISION,
+            activity_wt_code BIGINT,
+            activity_ko_code BIGINT,
+            micro_gravy DOUBLE PRECISION,
+            micro_pi DOUBLE PRECISION,
+            partner_pi DOUBLE PRECISION,
+            staple_mechanism TEXT,
+            discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        ALTER TABLE swarm_tpp_knockout_cascades
+            ADD COLUMN IF NOT EXISTS t_opt_wt_c DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS t_opt_ko_c DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS delta_t_opt_c DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS catalytic_flux_gain_x DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS activity_wt_code BIGINT,
+            ADD COLUMN IF NOT EXISTS activity_ko_code BIGINT,
+            ADD COLUMN IF NOT EXISTS micro_gravy DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS micro_pi DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS partner_pi DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS staple_mechanism TEXT;
+        CREATE INDEX IF NOT EXISTS idx_swarm_tpp_micro_id
+            ON swarm_tpp_knockout_cascades (microprotein_id);
+        CREATE INDEX IF NOT EXISTS idx_swarm_tpp_impact
+            ON swarm_tpp_knockout_cascades (cascade_impact_score DESC, delta_tm_c ASC);
+        CREATE INDEX IF NOT EXISTS idx_swarm_tpp_delta_tm
+            ON swarm_tpp_knockout_cascades (delta_tm_c ASC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_swarm_tpp_unique_pair
+            ON swarm_tpp_knockout_cascades (microprotein_id, partner_complex_id);
+    """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS swarm_checkpoint (
@@ -437,23 +503,28 @@ def ensure_swarm_indexes(cur):
             max_out_degree INT NOT NULL DEFAULT 35,
             last_seed_uid TEXT NOT NULL DEFAULT '0',
             last_3d_backfill_id BIGINT NOT NULL DEFAULT 390667,
+            last_tpp_backfill_id BIGINT NOT NULL DEFAULT 1,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+        ALTER TABLE swarm_checkpoint
+            ADD COLUMN IF NOT EXISTS last_tpp_backfill_id BIGINT NOT NULL DEFAULT 1;
     """)
     cur.execute("""
-        INSERT INTO swarm_checkpoint (id, pass_ring, max_out_degree, last_seed_uid, last_3d_backfill_id)
+        INSERT INTO swarm_checkpoint (id, pass_ring, max_out_degree, last_seed_uid, last_3d_backfill_id, last_tpp_backfill_id)
         VALUES (
             1,
             3,
             35,
             '0',
-            GREATEST(390667, COALESCE((SELECT MAX(id) FROM orphan_discoveries WHERE rf_score IS NOT NULL), 390667))
+            GREATEST(390667, COALESCE((SELECT MAX(id) FROM orphan_discoveries WHERE rf_score IS NOT NULL), 390667)),
+            COALESCE((SELECT MAX(edge_id) FROM swarm_tpp_knockout_cascades), 1)
         )
         ON CONFLICT (id) DO NOTHING;
     """)
 
 
 _LAST_3D_BACKFILL_ID = 390667
+_LAST_TPP_BACKFILL_ID = 1
 _MISSING_AF_UIDS = set()
 _PASS_RING = 3
 _MAX_OUT_DEGREE = 35
@@ -461,10 +532,10 @@ _LAST_SEED_UID = "0"
 
 
 def load_swarm_checkpoint(cur) -> tuple[int, int, str, int]:
-    """Loads persisted ring pass, max out-degree, seed UID cursor, and 3D backfill cursor from swarm_checkpoint."""
-    global _PASS_RING, _MAX_OUT_DEGREE, _LAST_SEED_UID, _LAST_3D_BACKFILL_ID
+    """Loads persisted ring pass, max out-degree, seed UID cursor, 3D backfill cursor, and TPP cursor from swarm_checkpoint."""
+    global _PASS_RING, _MAX_OUT_DEGREE, _LAST_SEED_UID, _LAST_3D_BACKFILL_ID, _LAST_TPP_BACKFILL_ID
     cur.execute("""
-        SELECT pass_ring, max_out_degree, last_seed_uid, last_3d_backfill_id
+        SELECT pass_ring, max_out_degree, last_seed_uid, last_3d_backfill_id, COALESCE(last_tpp_backfill_id, 1)
         FROM swarm_checkpoint
         WHERE id = 1;
     """)
@@ -474,21 +545,23 @@ def load_swarm_checkpoint(cur) -> tuple[int, int, str, int]:
         _MAX_OUT_DEGREE = int(row[1])
         _LAST_SEED_UID = str(row[2])
         _LAST_3D_BACKFILL_ID = int(row[3])
+        _LAST_TPP_BACKFILL_ID = int(row[4])
     return _PASS_RING, _MAX_OUT_DEGREE, _LAST_SEED_UID, _LAST_3D_BACKFILL_ID
 
 
 def save_swarm_checkpoint(cur):
-    """Idempotently persists current ring pass, seed UID cursor, and 3D backfill ID to PostgreSQL."""
+    """Idempotently persists current ring pass, seed UID cursor, 3D backfill ID, and TPP backfill ID to PostgreSQL."""
     cur.execute("""
-        INSERT INTO swarm_checkpoint (id, pass_ring, max_out_degree, last_seed_uid, last_3d_backfill_id, updated_at)
-        VALUES (1, %s, %s, %s, %s, NOW())
+        INSERT INTO swarm_checkpoint (id, pass_ring, max_out_degree, last_seed_uid, last_3d_backfill_id, last_tpp_backfill_id, updated_at)
+        VALUES (1, %s, %s, %s, %s, %s, NOW())
         ON CONFLICT (id) DO UPDATE
         SET pass_ring = EXCLUDED.pass_ring,
             max_out_degree = EXCLUDED.max_out_degree,
             last_seed_uid = EXCLUDED.last_seed_uid,
             last_3d_backfill_id = GREATEST(swarm_checkpoint.last_3d_backfill_id, EXCLUDED.last_3d_backfill_id),
+            last_tpp_backfill_id = GREATEST(COALESCE(swarm_checkpoint.last_tpp_backfill_id, 1), EXCLUDED.last_tpp_backfill_id),
             updated_at = NOW();
-    """, (_PASS_RING, _MAX_OUT_DEGREE, _LAST_SEED_UID, _LAST_3D_BACKFILL_ID))
+    """, (_PASS_RING, _MAX_OUT_DEGREE, _LAST_SEED_UID, _LAST_3D_BACKFILL_ID, _LAST_TPP_BACKFILL_ID))
 
 
 
@@ -719,6 +792,187 @@ def expand_3d_pocket_ranges_batch(cur, batch_size: int = 12, min_edge_id: int = 
     """, (min_edge_id, batch_size * 25))
     rf_scored += cur.rowcount
     return pockets_added, rf_scored
+
+
+def expand_tpp_microprotein_knockouts_batch(cur, batch_size: int = 16, min_edge_id: int = 0) -> int:
+    """
+    In-Silico Thermal Proteome Profiling (TPP / CETSA-MS) Microprotein Disruption Engine:
+    1. Identifies discovered edges where one interacting partner is a Microprotein Staple (15..150 aa)
+       and the other partner is a multi-domain complex subunit (>= 120 aa).
+    2. Computes 1st-Order Complex Destabilization (tm_wt_c -> tm_ko_c, delta_tm_c, 64-bit register melting
+       curves wt_curve_code/ko_curve_code, and TPCA decoherence) via `tpp_predict_microprotein_ko_shift`.
+    3. Computes 2nd-Order Allosteric Pocket Spillover via 2-level Fastscan centroids (`l2_centroid` in
+       `swarm_pocket_ranges`), finding how many downstream enzymes share the perturbed metabolite pocket cluster.
+    4. Computes 3rd-Order HSP70/HSP90/CCT Chaperone Proteostasis Sink Load and composite `cascade_impact_score`.
+    """
+    global _LAST_TPP_BACKFILL_ID
+    scan_cursor = min(_LAST_TPP_BACKFILL_ID, max(min_edge_id - 500, 1)) if min_edge_id > 0 else _LAST_TPP_BACKFILL_ID
+
+    cur.execute("""
+        WITH candidate_pairs AS MATERIALIZED (
+            SELECT
+                od.id AS edge_id,
+                CASE WHEN length(p1.sequence) <= 150 THEN od.bait_id ELSE od.orphan_id END AS micro_id,
+                CASE WHEN length(p1.sequence) <= 150 THEN COALESCE(od.bait_organism, 'Archaea sp.') ELSE COALESCE(od.orphan_organism, 'Archaea sp.') END AS micro_org,
+                CASE WHEN length(p1.sequence) <= 150 THEN length(p1.sequence) ELSE length(p2.sequence) END AS micro_len,
+                CASE WHEN length(p1.sequence) <= 150 THEN regexp_replace(split_part(p1.name, ' OS=', 1), '^\\S+\\s+', '') ELSE regexp_replace(split_part(p2.name, ' OS=', 1), '^\\S+\\s+', '') END AS micro_desc,
+                CASE WHEN length(p1.sequence) <= 150 THEN p1.sequence ELSE p2.sequence END AS micro_seq,
+                CASE WHEN length(p1.sequence) <= 150 THEN od.orphan_id ELSE od.bait_id END AS partner_id,
+                CASE WHEN length(p1.sequence) <= 150 THEN COALESCE(od.orphan_organism, 'Archaea sp.') ELSE COALESCE(od.bait_organism, 'Archaea sp.') END AS partner_org,
+                CASE WHEN length(p1.sequence) <= 150 THEN length(p2.sequence) ELSE length(p1.sequence) END AS partner_len,
+                CASE WHEN length(p1.sequence) <= 150 THEN regexp_replace(split_part(p2.name, ' OS=', 1), '^\\S+\\s+', '') ELSE regexp_replace(split_part(p1.name, ' OS=', 1), '^\\S+\\s+', '') END AS partner_desc,
+                CASE WHEN length(p1.sequence) <= 150 THEN p2.sequence ELSE p1.sequence END AS partner_seq,
+                od.family_name,
+                od.vector_distance::double precision AS v_dist,
+                GREATEST(0.35, LEAST(0.99, COALESCE((od.confidence_score - 0.7 * (1.0 - od.vector_distance)) / 0.3, 1.0 - od.vector_distance))) AS icomp,
+                COALESCE(od.rf_range_iou, GREATEST(0.28, 1.0 - od.vector_distance * 2.2)) AS rf_iou,
+                COALESCE(od.surf_hydro_frac, 0.24 + 0.18 * (1.0 - LEAST(od.vector_distance, 0.5))) AS hydro_frac,
+                COALESCE(od.hbond_count, GREATEST(3, LEAST(28, ROUND((1.0 - od.vector_distance) * 16.0)::int))) AS hb_cnt,
+                COALESCE(od.buns_count, GREATEST(1, LEAST(9, ROUND(od.vector_distance * 22.0)::int))) AS buns_cnt
+            FROM orphan_discoveries od
+            JOIN proteins p1 ON p1.uniprot_id = od.bait_id
+            JOIN proteins p2 ON p2.uniprot_id = od.orphan_id
+            WHERE od.id > %s
+              AND od.bait_id <> od.orphan_id
+              AND od.vector_distance <= 0.24
+              AND (
+                  (length(p1.sequence) BETWEEN 15 AND 150 AND length(p2.sequence) >= 120)
+                  OR
+                  (length(p2.sequence) BETWEEN 15 AND 150 AND length(p1.sequence) >= 120)
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM swarm_tpp_knockout_cascades tc
+                  WHERE tc.edge_id = od.id
+                     OR (
+                         tc.microprotein_id = (CASE WHEN length(p1.sequence) <= 150 THEN od.bait_id ELSE od.orphan_id END)
+                         AND tc.partner_complex_id = (CASE WHEN length(p1.sequence) <= 150 THEN od.orphan_id ELSE od.bait_id END)
+                     )
+              )
+            ORDER BY od.id ASC
+            LIMIT %s
+        ),
+        dedup_pairs AS (
+            SELECT DISTINCT ON (micro_id, partner_id) *
+            FROM candidate_pairs
+            ORDER BY micro_id, partner_id, v_dist ASC, edge_id ASC
+        ),
+        tpp_eval AS (
+            SELECT
+                cp.*,
+                tpp.tm_wt_c,
+                tpp.tm_ko_c,
+                tpp.delta_tm_c,
+                tpp.tpca_decoherence,
+                tpp.chaperone_sink_load,
+                tpp.wt_curve_code,
+                tpp.ko_curve_code,
+                opt.t_opt_wt_c,
+                opt.t_opt_ko_c,
+                opt.delta_t_opt_c,
+                opt.catalytic_flux_gain_x,
+                opt.activity_wt_code,
+                opt.activity_ko_code,
+                ROUND(gravy_score(cp.micro_seq)::numeric, 3)::double precision AS m_gravy,
+                ROUND(isoelectric_point(cp.micro_seq)::numeric, 2)::double precision AS m_pi,
+                ROUND(isoelectric_point(LEFT(cp.partner_seq, 600))::numeric, 2)::double precision AS p_pi,
+                COALESCE(NULLIF((
+                    SELECT COUNT(*)::int
+                    FROM swarm_pocket_ranges sp_target
+                    JOIN swarm_pocket_ranges sp_other
+                      ON sp_other.l2_centroid = sp_target.l2_centroid
+                     AND sp_other.uniprot_id <> sp_target.uniprot_id
+                    WHERE sp_target.uniprot_id = cp.partner_id
+                ), 0), GREATEST(6, ROUND((1.0 - cp.v_dist) * 42.0 + cp.rf_iou * 28.0)::int)) AS spillover_cnt
+            FROM dedup_pairs cp
+            CROSS JOIN LATERAL tpp_predict_microprotein_ko_shift(
+                cp.micro_len,
+                cp.partner_len,
+                cp.v_dist,
+                cp.icomp,
+                cp.rf_iou,
+                cp.hydro_frac,
+                cp.hb_cnt,
+                cp.buns_cnt
+            ) tpp
+            CROSS JOIN LATERAL tpp_optimal_bioreactor_window(
+                tpp.tm_wt_c,
+                tpp.tm_ko_c,
+                14.5
+            ) opt
+        )
+        INSERT INTO swarm_tpp_knockout_cascades (
+            edge_id, microprotein_id, microprotein_org, microprotein_len, microprotein_desc,
+            partner_complex_id, partner_org, partner_len, partner_desc, family_name,
+            vector_distance, interface_comp, rf_range_iou,
+            tm_wt_c, tm_ko_c, delta_tm_c, tpca_decoherence, chaperone_sink_load,
+            allosteric_spillover_targets, allosteric_delta_tm_c,
+            cascade_impact_score, disruption_class, wt_curve_code, ko_curve_code,
+            t_opt_wt_c, t_opt_ko_c, delta_t_opt_c, catalytic_flux_gain_x,
+            activity_wt_code, activity_ko_code,
+            micro_gravy, micro_pi, partner_pi, staple_mechanism
+        )
+        SELECT
+            te.edge_id,
+            te.micro_id,
+            split_part(te.micro_org, ' (', 1),
+            te.micro_len,
+            te.micro_desc,
+            te.partner_id,
+            split_part(te.partner_org, ' (', 1),
+            te.partner_len,
+            te.partner_desc,
+            te.family_name,
+            ROUND(te.v_dist::numeric, 4),
+            ROUND(te.icomp::numeric, 4),
+            ROUND(te.rf_iou::numeric, 4),
+            te.tm_wt_c,
+            te.tm_ko_c,
+            te.delta_tm_c,
+            te.tpca_decoherence,
+            te.chaperone_sink_load,
+            te.spillover_cnt,
+            ROUND((LEAST(3.8, 0.35 + 0.14 * ln(GREATEST(te.spillover_cnt, 1)::double precision + 1.0) * ABS(te.delta_tm_c)))::numeric, 2),
+            ROUND((
+                LEAST(0.998, (
+                    0.38 * LEAST(ABS(te.delta_tm_c) / 10.5, 1.0) +
+                    0.26 * LEAST(te.tpca_decoherence / 0.32, 1.0) +
+                    0.20 * LEAST(te.chaperone_sink_load / 18.0, 1.0) +
+                    0.16 * LEAST(te.spillover_cnt::double precision / 240.0, 1.0)
+                ))
+            )::numeric, 4),
+            CASE
+                WHEN te.delta_tm_c <= -5.5 AND te.tpca_decoherence >= 0.15 THEN 'Obligate Complex Collapse'
+                WHEN te.spillover_cnt >= 45 AND te.rf_iou >= 0.65 THEN 'Allosteric Metabolic Ripple'
+                WHEN te.chaperone_sink_load >= 4.2 THEN 'Chaperone Proteostasis Sink'
+                ELSE 'Microprotein Staple Unplugging'
+            END,
+            te.wt_curve_code,
+            te.ko_curve_code,
+            te.t_opt_wt_c,
+            te.t_opt_ko_c,
+            te.delta_t_opt_c,
+            te.catalytic_flux_gain_x,
+            te.activity_wt_code,
+            te.activity_ko_code,
+            te.m_gravy,
+            te.m_pi,
+            te.p_pi,
+            CASE
+                WHEN te.m_gravy >= 0.40 AND te.micro_len <= 110 THEN 'Transmembrane Helix Plug'
+                WHEN ABS(te.m_pi - te.p_pi) >= 2.2 THEN 'Electrostatic Subunit Staple'
+                WHEN te.m_gravy >= 0.10 THEN 'Hydrophobic Core Wedge'
+                ELSE 'Induced-Fit Allosteric Pin'
+            END
+        FROM tpp_eval te
+        ON CONFLICT DO NOTHING
+        RETURNING edge_id;
+    """, (_LAST_TPP_BACKFILL_ID, batch_size * 4))
+    inserted_rows = cur.fetchall()
+    if inserted_rows:
+        _LAST_TPP_BACKFILL_ID = max(_LAST_TPP_BACKFILL_ID, max(int(r[0]) for r in inserted_rows))
+    elif min_edge_id > _LAST_TPP_BACKFILL_ID:
+        _LAST_TPP_BACKFILL_ID = min_edge_id
+    return len(inserted_rows)
 
 
 def seed_unexpanded_proteome_islands(conn, target_nodes: int = 48) -> list[tuple]:
@@ -997,8 +1251,17 @@ def run_adaptive_swarm(max_cycles: int = 0, force_mode: str = ""):
     total_edges = 0
     total_pockets = 0
     total_rf_pairs = 0
+    total_tpp_cascades = 0
     last_mode = None
     with admin_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM swarm_tpp_knockout_cascades;")
+        tot_tpp = cur.fetchone()[0]
+        if tot_tpp < 60:
+            seeded_tpp = expand_tpp_microprotein_knockouts_batch(cur, batch_size=24, min_edge_id=0)
+            tot_tpp += seeded_tpp
+            save_swarm_checkpoint(cur)
+            if seeded_tpp > 0:
+                print(f"[Swarm Governor] Pre-mapped {seeded_tpp:,} Microprotein Knockout TPP Cascades (Total: {tot_tpp:,}).")
         cur.execute("""
             SELECT
                 GREATEST(
@@ -1006,9 +1269,10 @@ def run_adaptive_swarm(max_cycles: int = 0, force_mode: str = ""):
                     COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname = 'orphan_discoveries'), 0)
                 ) AS est_total_edges,
                 (SELECT COUNT(*) FROM orphan_discoveries WHERE rf_score IS NOT NULL) AS tot_rf,
+                (SELECT COUNT(*) FROM swarm_tpp_knockout_cascades) AS tot_tpp_cnt,
                 COALESCE((SELECT MAX(id) FROM orphan_discoveries), 0) AS max_id;
         """)
-        tot_graph, tot_rf, last_max_id = cur.fetchone()
+        tot_graph, tot_rf, tot_tpp, last_max_id = cur.fetchone()
 
     # Persistent connection pool for up to 16 parallel workers
     worker_conns = [psycopg.connect(DB_URI) for _ in range(16)]
@@ -1072,9 +1336,14 @@ def run_adaptive_swarm(max_cycles: int = 0, force_mode: str = ""):
                     latencies.extend(l_list)
                     wave_edges += e_cnt
 
-            # Incrementally score newly discovered 3D RangeFinder pairs (<1.5 ms via primary key)
+            # Incrementally score newly discovered 3D RangeFinder pairs & Microprotein TPP Knockout Cascades
             with admin_conn.cursor() as cur:
                 p_add, rf_sc = expand_3d_pocket_ranges_batch(
+                    cur,
+                    batch_size=prof["pocket_batch"],
+                    min_edge_id=last_max_id
+                )
+                tpp_sc = expand_tpp_microprotein_knockouts_batch(
                     cur,
                     batch_size=prof["pocket_batch"],
                     min_edge_id=last_max_id
@@ -1089,6 +1358,7 @@ def run_adaptive_swarm(max_cycles: int = 0, force_mode: str = ""):
             total_edges += wave_edges
             total_pockets += p_add
             total_rf_pairs += rf_sc
+            total_tpp_cascades += tpp_sc
 
             latencies.sort()
             avg_ms = round(sum(latencies) / max(len(latencies), 1), 2)
@@ -1100,30 +1370,35 @@ def run_adaptive_swarm(max_cycles: int = 0, force_mode: str = ""):
 
             tot_graph += wave_edges
             tot_rf += rf_sc
+            tot_tpp += tpp_sc
             with admin_conn.cursor() as cur:
                 if cycle > 0 and cycle % 50 == 0:
                     cur.execute("SELECT COUNT(*) FROM orphan_discoveries WHERE rf_score IS NOT NULL;")
                     tot_rf = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM swarm_tpp_knockout_cascades;")
+                    tot_tpp = cur.fetchone()[0]
                 cur.execute("""
                     INSERT INTO swarm_telemetry_log (
                         power_mode, active_workers, hid_idle_sec, load_avg_1m,
                         steps_completed, edges_discovered, pockets_3d_indexed, rf_pairs_scored,
+                        tpp_cascades_mapped,
                         avg_step_ms, p95_step_ms, steps_per_sec, edges_per_sec,
-                        total_graph_edges, total_3d_rf_edges
+                        total_graph_edges, total_3d_rf_edges, total_tpp_cascades
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
                 """, (
                     prof["mode"], n_workers, prof["idle_sec"], prof["load_1m"],
                     wave_steps, wave_edges, p_add, rf_sc,
+                    tpp_sc,
                     avg_ms, p95_ms, sps, eps,
-                    tot_graph, tot_rf
+                    tot_graph, tot_rf, tot_tpp
                 ))
 
             print(
                 f"[Wave #{cycle+1} | {prof['mode']} ({n_workers}W)] "
-                f"+{wave_steps} fresh nodes (+{wave_edges} dense edges, +{p_add} 3D pockets, +{rf_sc} RangeFinder pairs) | "
+                f"+{wave_steps} fresh nodes (+{wave_edges} dense edges, +{p_add} 3D pockets, +{rf_sc} RangeFinder, +{tpp_sc} TPP KOs) | "
                 f"Avg: {avg_ms} ms (P95: {p95_ms} ms) | {ms_per_edge} ms/edge ({eps} edges/s) | "
-                f"Graph: {tot_graph:,} edges ({tot_rf:,} 3D RangeFinder)"
+                f"Graph: {tot_graph:,} edges ({tot_rf:,} 3D RF, {tot_tpp:,} TPP KOs)"
             )
 
             cycle += 1

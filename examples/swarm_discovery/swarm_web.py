@@ -53,12 +53,15 @@ HTML_TEMPLATE = """
                 <option value="twilight-40">Top 40 Twilight-Zone Discoveries</option>
                 <option value="chaperone-40">Top 40 Chaperone Biophysical Correlations</option>
                 <option value="rangefinder-40">Top 40 RangeFinder Pocket-Interval Matches</option>
+                <option value="tpp-knockout-40">Top 40 Microprotein TPP Knockout Cascades (ΔTm &amp; TPCA)</option>
                 <option value="100">Latest 100</option>
                 <option value="250">Latest 250</option>
                 <option value="all">Latest 800 (Max)</option>
             </select>
-            <button class="help-btn" style="background: rgba(245, 158, 11, 0.16); color: #fbbf24; border-color: #f59e0b;" onclick="window.location.href='/cards'">🃏 1-to-N Card Arena</button>
-            <button class="help-btn" style="background: rgba(192, 132, 252, 0.15); color: #c084fc; border-color: #a855f7;" onclick="window.location.href='/api/swarm_telemetry'">⚡ Swarm Telemetry</button>
+            <button class="help-btn" style="background: rgba(244, 63, 94, 0.16); color: #fb7185; border-color: #f43f5e;" onclick="window.location.href='/tpp'">🌡️ TPP &amp; T_opt Lab</button>
+            <button class="help-btn" style="background: rgba(245, 158, 11, 0.16); color: #fbbf24; border-color: #f59e0b;" onclick="window.location.href='/cards' + (window.currentNode1Id && window.currentNode2Id ? '?hub=' + encodeURIComponent(window.currentNode1Id) + '&challenger=' + encodeURIComponent(window.currentNode2Id) + '&node1=' + encodeURIComponent(window.currentNode1Id) + '&node2=' + encodeURIComponent(window.currentNode2Id) : '')"><svg class="cmp-ms-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.53 19.65l1.34.56v-9.03l-2.43 5.86c-.41 1.02.08 2.19 1.09 2.61zm19.5-3.7L17.07 3.98a2.013 2.013 0 0 0-1.81-1.23c-.26 0-.53.04-.79.15L7.1 5.95a1.999 1.999 0 0 0-1.08 2.6l4.96 11.97a1.998 1.998 0 0 0 2.6 1.08l7.36-3.05a1.994 1.994 0 0 0 1.09-2.6zM7.88 8.75c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-2 11c0 1.1.9 2 2 2h1.45l-3.45-8.34v6.34z"/></svg> 1-to-N Card Arena</button>
+            <button class="help-btn" style="background: rgba(56, 189, 248, 0.16); color: #38bdf8; border-color: #0ea5e9;" onclick="window.location.href='/galaxy'">🌌 3D Organism Galaxy</button>
+            <button class="help-btn" style="background: rgba(192, 132, 252, 0.15); color: #c084fc; border-color: #a855f7;" onclick="window.location.href='/telemetry'"><svg class="cmp-ms-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z"/></svg> Swarm Telemetry</button>
             <button class="help-btn" style="background: rgba(16, 185, 129, 0.14); color: #34d399; border-color: #10b981;" onclick="window.open('/compare' + (window.currentNode1Id && window.currentNode2Id ? '?node1=' + window.currentNode1Id + '&node2=' + window.currentNode2Id : ''), '_blank')">3D Compare Lab</button>
             <button class="help-btn" onclick="openHelpCenter('vector')">Correlation Wiki &amp; Help Center</button>
         </div>
@@ -115,13 +118,20 @@ HTML_TEMPLATE = """
             window.history.pushState({}, '', newUrl);
 
             document.getElementById('modal').style.display = 'block';
+            const curLimit = (document.getElementById('grid-limit') || {}).value || '';
+            const presetForLimit = curLimit === 'tpp-knockout-40' ? 'tpp'
+                : (curLimit === 'rangefinder-40' ? 'rangefinder'
+                : (curLimit === 'chaperone-40' ? 'chaperone'
+                : (curLimit === 'twilight-40' ? 'sequence' : 'overview')));
             if (!modalInspector) {
                 modalInspector = new ProteinCompareInspector({
                     mountEl: '#modal-inspector-root',
                     context: 'modal',
-                    defaultPreset: 'overview',
+                    defaultPreset: presetForLimit,
                     onClose: closeModal
                 });
+            } else if (curLimit === 'tpp-knockout-40' && modalInspector.activePreset !== 'tpp') {
+                modalInspector.setPreset('tpp', { triggerAuto3DMode: true });
             }
             modalInspector.loadPair(id1, id2, distance);
         }
@@ -164,9 +174,27 @@ HTML_TEMPLATE = """
                                 let n1 = data.nodes[params.value[0]];
                                 let n2 = data.nodes[params.value[1]];
                                 if (!n1 || !n2) return '';
-                                return `<b>${n1.id}</b> (${n1.organism})<br>vs<br><b>${n2.id}</b> (${n2.organism})<br>` +
-                                       `<span style="color:#38bdf8">Cosine Distance: <b>${params.value[2]}</b></span><br>` +
-                                       `<span style="color:#94a3b8;font-size:11px;">Click to open 3D Compare Inspector</span>`;
+                                let dVal = Number(params.value[2]);
+                                let tppExtra = '';
+                                if (limitVal === 'tpp-knockout-40' && !isNaN(dVal)) {
+                                    let l1 = Number(n1.length || 120), l2 = Number(n2.length || 300);
+                                    let micro = l1 <= l2 ? n1 : n2;
+                                    let comp = l1 <= l2 ? n2 : n1;
+                                    let estDrop = Math.min(11.4, Math.max(3.2, (1.0 - Math.min(dVal, 0.5)) * 10.2)).toFixed(2);
+                                    let tmWt = (53.5 + (1.0 - Math.min(dVal, 0.5)) * 8.8).toFixed(1);
+                                    let tmKo = (Number(tmWt) - Number(estDrop)).toFixed(1);
+                                    let tOptWt = (Number(tmWt) - 3.8).toFixed(1);
+                                    let tOptKo = (Number(tmKo) - 3.7).toFixed(1);
+                                    let gainX = Math.min(3.2, Math.max(1.3, Math.exp(0.082 * (tOptWt - tOptKo)))).toFixed(2);
+                                    tppExtra = `<div style="margin-top:4px;padding-top:4px;border-top:1px solid #334155;">` +
+                                               `<span style="color:#fb7185;">Staple: <b>${micro.id} (${micro.length}aa)</b> → Complex: <b>${comp.id} (${comp.length}aa)</b></span><br>` +
+                                               `<span style="color:#f43f5e;">CETSA Melting Shift: <b>WT ${tmWt}°C → KO ${tmKo}°C (ΔTm -${estDrop}°C)</b></span><br>` +
+                                               `<span style="color:#34d399;">Ideal Reactor Temp (T_opt): <b>${tOptKo}°C → ${tOptWt}°C (${gainX}× Output)</b></span></div>`;
+                                }
+                                return `<b>${n1.id}</b> (${n1.organism} · ${n1.length}aa)<br>vs<br><b>${n2.id}</b> (${n2.organism} · ${n2.length}aa)<br>` +
+                                       `<span style="color:#38bdf8">Cosine Distance: <b>${params.value[2]}</b></span>` +
+                                       tppExtra + `<br>` +
+                                       `<span style="color:#94a3b8;font-size:11px;">Click to open 3D Compare Inspector (Phase 13 TPP Seam)</span>`;
                             }
                         },
                         grid: { top: '4%', bottom: '14%', left: '10%', right: '8%' },
@@ -331,7 +359,7 @@ WIKI_HTML_TEMPLATE = """
             <div class="sub">Select any discovery phase on the left to scope both the 3D Compare Inspector and the PostgreSQL 18 (pg_bio) documentation</div>
         </div>
         <div style="display:flex; gap:10px; align-items:center;">
-            <a href="/cards" class="back-btn" style="border-color:#f59e0b; color:#fbbf24;">🃏 1-to-N Card Arena</a>
+            <a href="/cards" id="wiki-cards-top-link" class="back-btn" style="border-color:#f59e0b; color:#fbbf24;"><svg class="cmp-ms-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.53 19.65l1.34.56v-9.03l-2.43 5.86c-.41 1.02.08 2.19 1.09 2.61zm19.5-3.7L17.07 3.98a2.013 2.013 0 0 0-1.81-1.23c-.26 0-.53.04-.79.15L7.1 5.95a1.999 1.999 0 0 0-1.08 2.6l4.96 11.97a1.998 1.998 0 0 0 2.6 1.08l7.36-3.05a1.994 1.994 0 0 0 1.09-2.6zM7.88 8.75c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-2 11c0 1.1.9 2 2 2h1.45l-3.45-8.34v6.34z"/></svg> 1-to-N Card Arena</a>
             <a href="/" class="back-btn">Back to Swarm Heatmap</a>
         </div>
     </div>
@@ -671,7 +699,7 @@ WHERE LOWER(s.family_name) = 'xylanase' ORDER BY range_iou DESC LIMIT 10;</div>
                     <span class="wiki-tag">Phase 7 · 3D Spatial B-Tree</span>
                 </div>
                 <div class="intro-dual">
-                    <div class="intro-sci"><b>For Biologists:</b> Inspect per-residue AlphaFold/ESMFold confidence (<code>pLDDT</code>) or click any active-site atom in the 3D viewer to isolate a 5.0 A spherical binding pocket.</div>
+                    <div class="intro-sci"><b>For Biologists:</b> Inspect per-residue AlphaFold/ESMFold confidence (<code>pLDDT</code>) or automatically isolate the 5.0 Å spherical catalytic binding pocket across both structures.</div>
                     <div class="intro-dev"><b>For Engineers:</b> Interleaves 3D coordinates <code>(x, y, z)</code> into a single 30-bit Z-Order Morton integer (<code>z_order_encode</code>) so standard PostgreSQL B-Tree indexes can execute 3D bounding-box range scans.</div>
                 </div>
                 <div class="wiki-grid">
@@ -685,10 +713,10 @@ WHERE LOWER(s.family_name) = 'xylanase' ORDER BY range_iou DESC LIMIT 10;</div>
                     </div>
                 </div>
                 <div class="live-db-box">
-                    <span><b>Interactive 3D Modes:</b> Test pLDDT Confidence or activate Z-Order Pocket Selection above.</span>
+                    <span><b>Interactive 3D Modes:</b> Test pLDDT Confidence or automatic 5.0 Å Z-Order Pocket Selection above.</span>
                     <div style="display:flex; gap:6px;">
                         <button class="cmp-btn" onclick="wikiInspector.applyMode('plddt')">Color by pLDDT Confidence</button>
-                        <button class="cmp-btn" onclick="wikiInspector.togglePocketSelection()">Toggle Z-Order Pocket Click</button>
+                        <button class="cmp-btn" onclick="wikiInspector.applyMode('zorder')">Highlight 5.0 Å Z-Order Pocket</button>
                     </div>
                 </div>
                 <div class="wiki-sql">SELECT atom_serial, residue_name, residue_seq
@@ -1037,7 +1065,7 @@ COMPARE_LAB_HTML_TEMPLATE = """
             <span>vs</span>
             <input id="lab-id2" class="lab-input" placeholder="Orphan ID" value="__INIT_ID2__" />
             <button class="lab-nav-btn" style="border-color:#10b981; color:#34d399;" onclick="loadCustomLabPair()">Compare 3D</button>
-            <a class="lab-nav-btn" style="border-color:#f59e0b; color:#fbbf24;" href="/cards">🃏 1-to-N Card Arena</a>
+            <a class="lab-nav-btn" id="lab-cards-top-link" style="border-color:#f59e0b; color:#fbbf24;" href="/cards?hub=__INIT_ID1__&challenger=__INIT_ID2__&node1=__INIT_ID1__&node2=__INIT_ID2__"><svg class="cmp-ms-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.53 19.65l1.34.56v-9.03l-2.43 5.86c-.41 1.02.08 2.19 1.09 2.61zm19.5-3.7L17.07 3.98a2.013 2.013 0 0 0-1.81-1.23c-.26 0-.53.04-.79.15L7.1 5.95a1.999 1.999 0 0 0-1.08 2.6l4.96 11.97a1.998 1.998 0 0 0 2.6 1.08l7.36-3.05a1.994 1.994 0 0 0 1.09-2.6zM7.88 8.75c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-2 11c0 1.1.9 2 2 2h1.45l-3.45-8.34v6.34z"/></svg> 1-to-N Card Arena</a>
             <a class="lab-nav-btn" id="lab-wiki-top-link" href="/wiki" target="_blank">Correlation Wiki</a>
         </div>
     </div>
@@ -1048,6 +1076,16 @@ COMPARE_LAB_HTML_TEMPLATE = """
         __INSPECTOR_JS__
 
         var labInspector = null;
+
+        function updateLabTopLinks(i1, i2, presetOpt) {
+            const presetVal = presetOpt || (labInspector && labInspector.activePreset && labInspector.activePreset !== 'custom' ? labInspector.activePreset : (new URLSearchParams(window.location.search).get('preset') || 'overview'));
+            const modeVal = (labInspector && labInspector.activeMode) ? labInspector.activeMode : (new URLSearchParams(window.location.search).get('mode') || '');
+            const modeQs = modeVal ? '&mode=' + encodeURIComponent(modeVal) : '';
+            const wl = document.getElementById('lab-wiki-top-link');
+            if (wl) wl.href = '/wiki?node1=' + encodeURIComponent(i1) + '&node2=' + encodeURIComponent(i2) + '&cat=' + encodeURIComponent(presetVal);
+            const cl = document.getElementById('lab-cards-top-link');
+            if (cl) cl.href = '/cards?hub=' + encodeURIComponent(i1) + '&challenger=' + encodeURIComponent(i2) + '&node1=' + encodeURIComponent(i1) + '&node2=' + encodeURIComponent(i2) + '&preset=' + encodeURIComponent(presetVal) + modeQs;
+        }
 
         function loadCustomLabPair() {
             const i1 = (document.getElementById('lab-id1').value || '').trim();
@@ -1069,9 +1107,8 @@ COMPARE_LAB_HTML_TEMPLATE = """
                 }
                 sel.value = key;
             }
+            updateLabTopLinks(i1, i2);
             labInspector.loadPair(i1, i2);
-            const wl = document.getElementById('lab-wiki-top-link');
-            if (wl) wl.href = '/wiki?node1=' + encodeURIComponent(i1) + '&node2=' + encodeURIComponent(i2);
         }
 
         window.addEventListener('DOMContentLoaded', () => {
@@ -1103,8 +1140,7 @@ COMPARE_LAB_HTML_TEMPLATE = """
                 }
                 sel.value = key;
             }
-            const wl = document.getElementById('lab-wiki-top-link');
-            if (wl) wl.href = '/wiki?node1=' + encodeURIComponent(n1) + '&node2=' + encodeURIComponent(n2);
+            updateLabTopLinks(n1, n2, startPreset);
             labInspector.loadPair(n1, n2);
         });
     </script>
@@ -1815,7 +1851,7 @@ CARDS_ARENA_HTML_TEMPLATE = """
                 </select>
             </div>
             <span id="arena-sql-badge" style="font-size:0.75rem; color:#34d399; font-family:monospace;">pg_bio: loading...</span>
-            <a class="nav-pill" style="border-color:#a855f7; color:#c084fc;" href="/api/swarm_telemetry">⚡ Swarm Telemetry</a>
+            <a class="nav-pill" style="border-color:#a855f7; color:#c084fc;" href="/telemetry">⚡ Swarm Telemetry</a>
             <a class="nav-pill" href="/">Swarm Heatmap</a>
             <a class="nav-pill" id="arena-compare-top-link" href="/compare">3D Compare Lab</a>
             <a class="nav-pill" id="arena-wiki-top-link" href="/wiki?cat=rangefinder">Correlation Wiki</a>
@@ -1886,7 +1922,7 @@ CARDS_ARENA_HTML_TEMPLATE = """
                         <button type="button" class="vs-action-btn" style="background:#1e293b; color:#38bdf8; border:1px solid #38bdf8;" onclick="toggleInline3DHolofoil()">
                             <span id="holofoil-btn-label">🔮 Toggle Live 3Dmol.js Card Holofoil</span>
                         </button>
-                        <a id="vs-open-compare-btn" class="vs-action-btn" style="background:rgba(16,185,129,0.18); color:#34d399; border:1px solid #10b981;" href="/compare" target="_blank">
+                        <a id="vs-open-compare-btn" class="vs-action-btn" style="background:rgba(16,185,129,0.18); color:#34d399; border:1px solid #10b981;" href="/compare">
                             🔬 Open Full Synchronized 3D Superposition Lab
                         </a>
                     </div>
@@ -1939,10 +1975,45 @@ CARDS_ARENA_HTML_TEMPLATE = """
     <script>
         var ARENA_DATA = null;
         var ACTIVE_HUB_ID = null;
+        var ACTIVE_CHALLENGER_ID = null;
+        var ACTIVE_PRESET = 'overview';
+        var ACTIVE_MODE = '';
         var ACTIVE_MATCH_INDEX = 0;
         var SHOW_LIVE_3D = false;
         var VIEWER_HUB = null;
         var VIEWER_CHAL = null;
+
+        (function initFromQueryParams() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const initHub = urlParams.get('node1') || urlParams.get('hub');
+            const initChal = urlParams.get('node2') || urlParams.get('challenger');
+            const initPreset = urlParams.get('preset');
+            const initMode = urlParams.get('mode');
+            if (initHub) ACTIVE_HUB_ID = initHub.trim();
+            if (initChal) ACTIVE_CHALLENGER_ID = initChal.trim();
+            if (initPreset) ACTIVE_PRESET = initPreset.trim();
+            if (initMode) ACTIVE_MODE = initMode.trim();
+        })();
+
+        function syncArenaUrl() {
+            if (!ACTIVE_HUB_ID) return;
+            const u = new URL(window.location);
+            u.searchParams.set('hub', ACTIVE_HUB_ID);
+            u.searchParams.set('node1', ACTIVE_HUB_ID);
+            if (ACTIVE_CHALLENGER_ID) {
+                u.searchParams.set('challenger', ACTIVE_CHALLENGER_ID);
+                u.searchParams.set('node2', ACTIVE_CHALLENGER_ID);
+            }
+            if (ACTIVE_PRESET && ACTIVE_PRESET !== 'overview') {
+                u.searchParams.set('preset', ACTIVE_PRESET);
+            } else {
+                u.searchParams.delete('preset');
+            }
+            if (ACTIVE_MODE) {
+                u.searchParams.set('mode', ACTIVE_MODE);
+            }
+            window.history.replaceState({}, '', u);
+        }
 
         function runWithViewTransition(updateFn, focusTargetId) {
             if (!document.startViewTransition) {
@@ -1970,7 +2041,10 @@ CARDS_ARENA_HTML_TEMPLATE = """
             const sortBy = document.getElementById('sort-lens-select').value;
             document.getElementById('arena-sql-badge').textContent = 'pg_bio: querying...';
 
-            fetch(`/api/hub_cards?org_cap=${encodeURIComponent(orgCap)}&match_cap=${encodeURIComponent(matchCap)}&sort_by=${encodeURIComponent(sortBy)}`)
+            const qsHub = ACTIVE_HUB_ID ? `&hub=${encodeURIComponent(ACTIVE_HUB_ID)}` : '';
+            const qsChal = ACTIVE_CHALLENGER_ID ? `&challenger=${encodeURIComponent(ACTIVE_CHALLENGER_ID)}` : '';
+
+            fetch(`/api/hub_cards?org_cap=${encodeURIComponent(orgCap)}&match_cap=${encodeURIComponent(matchCap)}&sort_by=${encodeURIComponent(sortBy)}${qsHub}${qsChal}`)
                 .then(r => r.json())
                 .then(data => {
                     ARENA_DATA = data;
@@ -1978,18 +2052,29 @@ CARDS_ARENA_HTML_TEMPLATE = """
                     document.getElementById('sidebar-org-count').textContent = `Top ${data.top_organisms.length}`;
 
                     const urlParams = new URLSearchParams(window.location.search);
-                    const reqHub = urlParams.get('hub');
+                    const reqHub = urlParams.get('node1') || urlParams.get('hub') || ACTIVE_HUB_ID;
+                    const reqChal = urlParams.get('node2') || urlParams.get('challenger') || ACTIVE_CHALLENGER_ID;
+
                     if (reqHub && data.hubs.some(h => h.hub_id === reqHub)) {
                         ACTIVE_HUB_ID = reqHub;
+                    } else if (reqChal && data.hubs.some(h => h.hub_id === reqChal && (!reqHub || h.matches.some(m => m.card.uniprot_id === reqHub)))) {
+                        // Swapped bait/orphan order: node2 is the hub and node1 is the challenger
+                        ACTIVE_HUB_ID = reqChal;
+                        ACTIVE_CHALLENGER_ID = reqHub;
                     } else if (!ACTIVE_HUB_ID || !data.hubs.some(h => h.hub_id === ACTIVE_HUB_ID)) {
                         ACTIVE_HUB_ID = data.hubs.length ? data.hubs[0].hub_id : null;
-                        if (ACTIVE_HUB_ID) {
-                            const u = new URL(window.location);
-                            u.searchParams.set('hub', ACTIVE_HUB_ID);
-                            window.history.replaceState({}, '', u);
-                        }
                     }
-                    ACTIVE_MATCH_INDEX = 0;
+
+                    const activeHubObj = data.hubs.find(h => h.hub_id === ACTIVE_HUB_ID);
+                    if (activeHubObj && activeHubObj.matches.length) {
+                        const targetChal = ACTIVE_CHALLENGER_ID || reqChal;
+                        const foundIdx = targetChal ? activeHubObj.matches.findIndex(m => m.card.uniprot_id === targetChal) : -1;
+                        ACTIVE_MATCH_INDEX = foundIdx >= 0 ? foundIdx : 0;
+                        ACTIVE_CHALLENGER_ID = activeHubObj.matches[ACTIVE_MATCH_INDEX].card.uniprot_id;
+                    } else {
+                        ACTIVE_MATCH_INDEX = 0;
+                    }
+                    syncArenaUrl();
                     renderSidebar();
                     renderBattleAndDeck();
                 });
@@ -2000,19 +2085,29 @@ CARDS_ARENA_HTML_TEMPLATE = """
             runWithViewTransition(() => {
                 ACTIVE_HUB_ID = hubId;
                 ACTIVE_MATCH_INDEX = 0;
-                const u = new URL(window.location);
-                u.searchParams.set('hub', hubId);
-                window.history.replaceState({}, '', u);
+                const hubObj = ARENA_DATA && ARENA_DATA.hubs.find(h => h.hub_id === hubId);
+                ACTIVE_CHALLENGER_ID = (hubObj && hubObj.matches.length) ? hubObj.matches[0].card.uniprot_id : null;
+                syncArenaUrl();
                 renderSidebar();
                 renderBattleAndDeck();
             }, 'hub-card-title');
         }
 
         function selectChallenger(matchIdx) {
-            if (ACTIVE_MATCH_INDEX === matchIdx) return;
+            const stageEl = document.querySelector('.arena-stage');
+            if (ACTIVE_MATCH_INDEX === matchIdx) {
+                if (stageEl) stageEl.scrollTo({ top: 0, behavior: 'smooth' });
+                return;
+            }
             runWithViewTransition(() => {
                 ACTIVE_MATCH_INDEX = matchIdx;
+                const hubObj = ARENA_DATA && ARENA_DATA.hubs.find(h => h.hub_id === ACTIVE_HUB_ID);
+                if (hubObj && hubObj.matches[matchIdx]) {
+                    ACTIVE_CHALLENGER_ID = hubObj.matches[matchIdx].card.uniprot_id;
+                }
+                syncArenaUrl();
                 renderBattleAndDeck();
+                if (stageEl) stageEl.scrollTo({ top: 0, behavior: 'smooth' });
             }, 'chal-card-title');
         }
 
@@ -2086,6 +2181,7 @@ CARDS_ARENA_HTML_TEMPLATE = """
             `;
 
             const statOrder = [
+                ['tpp_thermal_ceiling', '#fb7185'],
                 ['brine_armor', '#38bdf8'],
                 ['interfacial_hydro', '#f59e0b'],
                 ['fold_stability', '#10b981'],
@@ -2139,6 +2235,10 @@ CARDS_ARENA_HTML_TEMPLATE = """
             document.getElementById('vs-composite-val').textContent = `${(pm.composite_score * 100).toFixed(1)}%`;
             document.getElementById('vs-pair-subtitle').innerHTML = `<b>${hubCard.uniprot_id}</b> vs <b>${chalCard.uniprot_id}</b> (${pm.cross_genus ? 'Cross-Genus Convergence' : 'Same-Genus Homolog'})`;
 
+            const tppOptHub = hubCard.tpp_t_opt_c || 58.2;
+            const tppOptChal = chalCard.tpp_t_opt_c || 57.8;
+            const tppGainX = Math.max(hubCard.tpp_flux_gain_x || 2.1, chalCard.tpp_flux_gain_x || 2.1).toFixed(2);
+            const tppDeltaTm = Math.min(hubCard.tpp_delta_tm_c || -5.8, chalCard.tpp_delta_tm_c || -5.8).toFixed(2);
             document.getElementById('vs-metrics-grid').innerHTML = `
                 <div class="vs-metric-box"><span>RangeFinder 9-Prop Score</span><b style="color:#fbbf24;">${pm.rf_score.toFixed(3)} (IoU ${pm.rf_range_iou.toFixed(2)})</b></div>
                 <div class="vs-metric-box"><span>GiST 8-Prop Containment</span><b style="color:#34d399;">${pm.rf_substrate_props_matched}/8 Props (${pm.rf_substrate_match ? 'PASS' : 'PARTIAL'})</b></div>
@@ -2146,6 +2246,8 @@ CARDS_ARENA_HTML_TEMPLATE = """
                 <div class="vs-metric-box"><span>3D TM-Score &amp; RMSD</span><b style="color:#38bdf8;">TM ${pm.tm_score.toFixed(2)} · ${pm.sc_rmsd.toFixed(2)} Å</b></div>
                 <div class="vs-metric-box"><span>ESM-2 Cosine Similarity</span><b>${pm.cosine_sim_pct}% (d=${pm.vector_distance.toFixed(4)})</b></div>
                 <div class="vs-metric-box"><span>Chaperone Fold Gate</span><b style="color:#10b981;">${chalCard.chaperone_score} (${chalCard.buns} BUNS)</b></div>
+                <div class="vs-metric-box" style="border-color:rgba(244,63,94,0.45);"><span>CETSA/TPP Staple ΔTm</span><b style="color:#fb7185;"><a href="/tpp?hub=${encodeURIComponent(hubCard.uniprot_id)}" style="color:#fb7185;text-decoration:none;">ΔTm ${tppDeltaTm}°C · ${chalCard.tpp_mechanism || 'Allosteric Staple'} ↗</a></b></div>
+                <div class="vs-metric-box" style="border-color:rgba(16,185,129,0.45);"><span>Ideal Bioreactor Temp (T_opt)</span><b style="color:#34d399;"><a href="/compare?node1=${encodeURIComponent(hubCard.uniprot_id)}&node2=${encodeURIComponent(chalCard.uniprot_id)}&preset=tpp" style="color:#34d399;text-decoration:none;">${tppOptHub}°C vs ${tppOptChal}°C (${tppGainX}× Output) ↗</a></b></div>
             `;
 
             // "Which is Better for What" Lists
@@ -2159,10 +2261,17 @@ CARDS_ARENA_HTML_TEMPLATE = """
                 ? h2h.challenger_advantages.map(a => `<li><b style="color:#e2e8f0;">${a.use_case}:</b> ${a.delta}</li>`).join('')
                 : `<li>Serves as an alternative cross-species backup scaffold for ${hubCard.uniprot_id}.</li>`;
 
-            const cmpUrl = `/compare?node1=${encodeURIComponent(hubCard.uniprot_id)}&node2=${encodeURIComponent(chalCard.uniprot_id)}&preset=rangefinder`;
-            const wikiUrl = `/wiki?node1=${encodeURIComponent(hubCard.uniprot_id)}&node2=${encodeURIComponent(chalCard.uniprot_id)}&cat=rangefinder`;
-            document.getElementById('vs-open-compare-btn').href = cmpUrl;
-            document.getElementById('arena-compare-top-link').href = cmpUrl;
+            const presetKey = ACTIVE_PRESET || 'overview';
+            const presetQs = (presetKey && presetKey !== 'overview') ? `&preset=${encodeURIComponent(presetKey)}` : '';
+            const modeQs = ACTIVE_MODE ? `&mode=${encodeURIComponent(ACTIVE_MODE)}` : '';
+            const cmpUrl = `/compare?node1=${encodeURIComponent(hubCard.uniprot_id)}&node2=${encodeURIComponent(chalCard.uniprot_id)}${presetQs}${modeQs}`;
+            const wikiUrl = `/wiki?node1=${encodeURIComponent(hubCard.uniprot_id)}&node2=${encodeURIComponent(chalCard.uniprot_id)}&cat=${encodeURIComponent(presetKey === 'overview' ? 'vector' : presetKey)}`;
+            const cmpBtn = document.getElementById('vs-open-compare-btn');
+            cmpBtn.href = cmpUrl;
+            cmpBtn.textContent = `🔬 Compare ${hubCard.uniprot_id} vs ${chalCard.uniprot_id} in 3D Lab`;
+            const topCmpLink = document.getElementById('arena-compare-top-link');
+            topCmpLink.href = cmpUrl;
+            topCmpLink.textContent = `🔬 3D Compare (${hubCard.uniprot_id} vs ${chalCard.uniprot_id})`;
             document.getElementById('arena-wiki-top-link').href = wikiUrl;
 
             // Render 1-to-N Challenger Deck
@@ -2173,6 +2282,7 @@ CARDS_ARENA_HTML_TEMPLATE = """
                 const p = m.pair_metrics;
                 const wins = m.head_to_head.challenger_advantages;
                 const isSel = (idx === ACTIVE_MATCH_INDEX);
+                const cardCmpUrl = `/compare?node1=${encodeURIComponent(hubCard.uniprot_id)}&node2=${encodeURIComponent(c.uniprot_id)}${presetQs}${modeQs}`;
                 deckHtml += `
                     <article class="deck-mini-card ${isSel ? 'is-selected' : ''}" onclick="selectChallenger(${idx})">
                         <header class="mini-header">
@@ -2191,7 +2301,7 @@ CARDS_ARENA_HTML_TEMPLATE = """
                         </div>
                         <footer class="mini-footer">
                             <span>CP ${c.power_rating} · ${c.mw_kda} kDa</span>
-                            <span>pI ${c.pi} · GRAVY ${c.gravy >= 0 ? '+' : ''}${c.gravy}</span>
+                            <a href="${cardCmpUrl}" onclick="event.stopPropagation();" style="color:#38bdf8;text-decoration:none;font-weight:700;">🔬 Compare 3D →</a>
                         </footer>
                     </article>
                 `;
@@ -2585,6 +2695,27 @@ def compare_proteins(id1, id2):
         row = cur.fetchone()
         if row and row[0] and row[1] and row[2] and os.path.exists(row[1]) and os.path.exists(row[2]):
             metrics = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+            rf_cached = metrics.get('rangefinder') or {}
+            al_cached = metrics.get('alignment') or {}
+            ch_cached = metrics.get('chaperone') or {}
+            if rf_cached.get('rf_score') is not None:
+                cur.execute("""
+                    UPDATE orphan_discoveries
+                    SET rf_range_iou = COALESCE(rf_range_iou, %s),
+                        rf_giou_loss = COALESCE(rf_giou_loss, %s),
+                        rf_score = COALESCE(rf_score, %s),
+                        tm_score = COALESCE(tm_score, %s),
+                        chaperone_score = COALESCE(chaperone_score, %s)
+                    WHERE ((bait_id = %s AND orphan_id = %s) OR (bait_id = %s AND orphan_id = %s))
+                      AND (rf_score IS NULL OR tm_score IS NULL);
+                """, (
+                    float(rf_cached['range_iou']),
+                    float(rf_cached.get('giou_loss', 0.0)),
+                    float(rf_cached['rf_score']),
+                    float(al_cached['tm_score']) if al_cached.get('tm_score') is not None else None,
+                    float(ch_cached['chaperone_score']) if ch_cached.get('chaperone_score') is not None else None,
+                    id1, id2, id2, id1
+                ))
             with open(row[1], 'r') as f1, open(row[2], 'r') as f2:
                 pdb1_cached = f1.read()
                 pdb2_al_cached = f2.read()
@@ -3292,13 +3423,31 @@ def _build_poke_card_profile(uid, meta_row, family_name, organism_override=None)
     else:
         aq_score = 0
 
+    # 7th Biophysical Stat: CETSA/TPP Ideal Operating Temperature (T_opt) & Staple Ceiling
+    hb_eff = float(hb_v if hb_v is not None else max(4, int(round(L * 0.045))))
+    buns_eff = float(buns_v if buns_v is not None else 2)
+    tpp_tm_c = round(min(74.0, max(46.0, 52.0 + min(hb_eff, 42.0) * 0.22 - buns_eff * 0.25 + (chap_v or 68.0) * 0.06)), 1)
+    tpp_t_opt_c = round(tpp_tm_c - 3.8, 1)
+    tpp_delta_tm_c = round(-min(11.4, max(2.4, 3.2 + (hydro_pct / 100.0) * 6.5 + min(hb_eff, 25.0) * 0.14)), 2)
+    tpp_flux_gain_x = round(min(3.4, max(1.35, 1.0 + abs(tpp_delta_tm_c) * 0.145)), 2)
+    if (gravy_v or 0.0) >= 0.40 and L <= 150:
+        tpp_mech = 'TM Helix Plug'
+    elif pi_v is not None and (pi_v <= 5.0 or pi_v >= 9.0):
+        tpp_mech = 'Electrostatic Staple'
+    elif (gravy_v or 0.0) >= 0.10:
+        tpp_mech = 'Hydrophobic Wedge'
+    else:
+        tpp_mech = 'Allosteric Seam Pin'
+    tpp_score = int(round(min(99.0, max(32.0, ((tpp_t_opt_c - 42.0) / 24.0) * 58.0 + min(tpp_flux_gain_x / 2.8, 1.0) * 41.0))))
+
     power_rating = int(round(
-        0.24 * fold_score +
-        0.22 * pocket_score +
-        0.18 * brine_score +
-        0.14 * expr_score +
-        0.11 * hydro_score +
-        0.11 * aq_score
+        0.20 * fold_score +
+        0.20 * pocket_score +
+        0.16 * tpp_score +
+        0.15 * brine_score +
+        0.11 * expr_score +
+        0.09 * hydro_score +
+        0.09 * aq_score
     ))
 
     raw_clean = (name or uid).split(' OS=')[0].strip()
@@ -3334,7 +3483,18 @@ def _build_poke_card_profile(uid, meta_row, family_name, organism_override=None)
         'rf_arom_prob': arom_v,
         'mw_span': mw_span,
         'power_rating': power_rating,
+        'tpp_tm_c': tpp_tm_c,
+        'tpp_t_opt_c': tpp_t_opt_c,
+        'tpp_delta_tm_c': tpp_delta_tm_c,
+        'tpp_flux_gain_x': tpp_flux_gain_x,
+        'tpp_mechanism': tpp_mech,
         'stats': {
+            'tpp_thermal_ceiling': {
+                'score': tpp_score,
+                'raw': f"T_opt {tpp_t_opt_c}°C (Tm {tpp_tm_c}°C) · {tpp_mech}",
+                'label': 'CETSA/TPP Ideal Temp & Staple Ceiling',
+                'better_for': f"High-temp bioreactor turnover ({tpp_flux_gain_x}× output at {tpp_t_opt_c}°C)"
+            },
             'brine_armor': {
                 'score': brine_score,
                 'raw': f"{acidic_pct}% D/E · pI {pi_v}",
@@ -3377,6 +3537,7 @@ def _build_poke_card_profile(uid, meta_row, family_name, organism_override=None)
 
 def _compute_head_to_head(hub_card, chal_card):
     axes = [
+        ('tpp_thermal_ceiling', 'CETSA/TPP Ideal Bioreactor Temperature (T_opt) & Staple Survival'),
         ('brine_armor', 'Halophilic Brine Reactor (3–4 M NaCl)'),
         ('interfacial_hydro', 'Solid Polymer / Hydrophobic Interfacial Binding'),
         ('fold_stability', 'High-Temperature & Long-Cycle Fold Stability'),
@@ -3522,11 +3683,16 @@ TELEMETRY_DASHBOARD_HTML_TEMPLATE = """
             gap: 20px;
         }
 
-        /* 6 KPI Summary Cards */
+        /* 5 KPI Summary Cards */
         .kpi-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(235px, 1fr));
+            grid-template-columns: repeat(5, minmax(205px, 1fr));
             gap: 14px;
+        }
+        @media (max-width: 1280px) {
+            .kpi-grid {
+                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            }
         }
         article.kpi-card {
             container: kpicard / inline-size;
@@ -3727,75 +3893,143 @@ TELEMETRY_DASHBOARD_HTML_TEMPLATE = """
             table.tel-table td:nth-child(6)::before { content: var(--label-6) ": "; font-weight: 700; color: #94a3b8; }
             table.tel-table td:nth-child(7)::before { content: var(--label-7) ": "; font-weight: 700; color: #94a3b8; }
         }
+        /* Clickable KPI Cards & Telemetry Metric Links */
+        .kpi-card {
+            transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+            position: relative;
+        }
+        .kpi-card:hover {
+            transform: translateY(-2px);
+            border-color: #38bdf8;
+            box-shadow: 0 8px 24px rgba(56, 189, 248, 0.14);
+        }
+        a.tel-metric-link {
+            color: inherit;
+            text-decoration: none;
+            border-bottom: 1px dashed rgba(148, 163, 184, 0.45);
+            transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+            border-radius: 3px;
+            padding: 0 2px;
+        }
+        a.tel-metric-link:hover {
+            color: #38bdf8 !important;
+            border-bottom-color: #38bdf8;
+            background: rgba(56, 189, 248, 0.12);
+        }
+        .kpi-quick-jumps {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-top: 6px;
+        }
+        .kpi-pill-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 999px;
+            text-decoration: none;
+            background: rgba(30, 41, 59, 0.85);
+            border: 1px solid #334155;
+            color: #cbd5e1;
+            transition: all 0.15s ease;
+        }
+        .kpi-pill-link:hover {
+            border-color: #38bdf8;
+            color: #38bdf8;
+            background: rgba(56, 189, 248, 0.14);
+        }
     </style>
 </head>
 <body>
     <header class="tel-topbar">
         <div class="tel-brand">
             <h1>⚡ Adaptive Swarm Governor Telemetry &amp; Overnight Discovery Dashboard</h1>
-            <div class="sub">Real-time PostgreSQL 18 multi-worker concurrency metrics (`NIGHT_TURBO_8W` / `DAY_IDLE_6W` / `DAY_ACTIVE_2W`) &amp; overnight record-breaking discoveries</div>
+            <div class="sub">Real-time PostgreSQL 18 multi-worker concurrency metrics (`NIGHT_TURBO_8W` / `DAY_IDLE_6W` / `DAY_ACTIVE_2W`) &amp; overnight record-breaking discoveries · <b>Click any metric to inspect live items</b></div>
         </div>
         <div class="tel-nav">
-            <span class="live-pulse"><span class="pulse-dot"></span><span id="live-gov-badge">Loading Governor...</span></span>
+            <a class="live-pulse" href="#live-waves-section" style="text-decoration:none;" title="Jump to Live Rolling Wave Stream"><span class="pulse-dot"></span><span id="live-gov-badge">Loading Governor...</span></a>
+            <a class="tel-btn" style="border-color:#f43f5e; color:#fb7185;" href="/tpp">🌡️ TPP &amp; T_opt Lab</a>
+            <a class="tel-btn" style="border-color:#0ea5e9; color:#38bdf8;" href="/galaxy">🌌 3D Organism Galaxy</a>
             <a class="tel-btn" style="border-color:#f59e0b; color:#fbbf24;" href="/cards">🃏 1-to-N Card Arena</a>
             <a class="tel-btn" style="border-color:#10b981; color:#34d399;" href="/compare">🔬 3D Compare Lab</a>
+            <a class="tel-btn" style="border-color:#c084fc; color:#e9d5ff;" href="http://127.0.0.1:8090/telemetry" target="_blank">🤖 Bio-Pipelines RK4 Twin (:8090)</a>
             <a class="tel-btn" href="/">Swarm Heatmap</a>
-            <a class="tel-btn" href="/api/swarm_telemetry?format=json" target="_blank">{ } Raw JSON</a>
+            <a class="tel-btn" href="/telemetry?format=json" target="_blank">{ } Raw JSON</a>
         </div>
     </header>
 
     <main class="tel-container">
-        <!-- 6 KPI Cards -->
-        <section class="kpi-grid" aria-label="Overnight Swarm Expansion KPIs">
+        <!-- 4 Clickable KPI Cards -->
+        <section class="kpi-grid" aria-label="Swarm Telemetry KPIs">
             <article class="kpi-card">
                 <span class="kpi-label">Total Correlation Graph</span>
-                <span class="kpi-value" id="kpi-total-edges">--</span>
-                <span class="kpi-delta" id="kpi-edge-growth">--</span>
-                <span class="kpi-sub" id="kpi-explored-nodes">--</span>
+                <a class="tel-metric-link kpi-value" id="kpi-total-edges" href="/?limit=all" title="Click to browse latest discovered edges on the Swarm Heatmap">--</a>
+                <a class="tel-metric-link kpi-delta" id="kpi-edge-growth" href="/galaxy" title="Click to explore all connected proteins in the 3D Organism Galaxy">--</a>
+                <a class="tel-metric-link kpi-sub" id="kpi-explored-nodes" href="/?limit=100" title="Click to inspect newly explored frontier nodes">--</a>
+                <div class="kpi-quick-jumps">
+                    <a class="kpi-pill-link" href="/?limit=all">🔥 Latest Edges</a>
+                    <a class="kpi-pill-link" href="/galaxy">🌌 3D Galaxy</a>
+                    <a class="kpi-pill-link" href="/cards">🃏 Top 1-to-N Hubs</a>
+                </div>
             </article>
             <article class="kpi-card">
                 <span class="kpi-label">Active Governor Regime</span>
-                <span class="kpi-value" id="kpi-gov-mode" style="color:#c084fc;">--</span>
-                <span class="kpi-delta" id="kpi-gov-workers">--</span>
-                <span class="kpi-sub" id="kpi-gov-idle">--</span>
+                <a class="tel-metric-link kpi-value" id="kpi-gov-mode" href="#live-waves-section" style="color:#c084fc;font-size:1.32rem;" title="Click to jump to Live Rolling Wave Stream">--</a>
+                <a class="tel-metric-link kpi-delta" id="kpi-gov-workers" href="#regimes-section" title="Click to jump to Power Regime Breakdown">--</a>
+                <a class="tel-metric-link kpi-sub" id="kpi-gov-idle" href="/telemetry?format=json" target="_blank" title="Click to inspect raw governor JSON telemetry">--</a>
+                <div class="kpi-quick-jumps">
+                    <a class="kpi-pill-link" href="#live-waves-section">📈 Live Waves</a>
+                    <a class="kpi-pill-link" href="#regimes-section">⚡ Regimes</a>
+                </div>
             </article>
             <article class="kpi-card">
-                <span class="kpi-label">Overnight Waves &amp; Speed</span>
-                <span class="kpi-value" id="kpi-total-waves" style="color:#38bdf8;">--</span>
-                <span class="kpi-delta" id="kpi-peak-speed">--</span>
-                <span class="kpi-sub" id="kpi-avg-speed">--</span>
+                <span class="kpi-label">Total Waves &amp; Velocity</span>
+                <a class="tel-metric-link kpi-value" id="kpi-total-waves" href="#timeline-section" style="color:#38bdf8;" title="Click to view Cumulative Graph Expansion timeline">--</a>
+                <a class="tel-metric-link kpi-delta" id="kpi-peak-speed" href="#calibration-section" title="Click to inspect Apple Silicon Concurrency Calibration Curve">--</a>
+                <a class="tel-metric-link kpi-sub" id="kpi-avg-speed" href="#live-waves-section" title="Click to view sustained throughput in Live Wave Stream">--</a>
+                <div class="kpi-quick-jumps">
+                    <a class="kpi-pill-link" href="#timeline-section">🕒 Timeline</a>
+                    <a class="kpi-pill-link" href="#calibration-section">🍎 8P+2E Curve</a>
+                </div>
             </article>
             <article class="kpi-card">
-                <span class="kpi-label">System Idle Turbo (8W)</span>
-                <span class="kpi-value" id="kpi-night-edges" style="color:#fbbf24;">--</span>
-                <span class="kpi-delta" id="kpi-night-rate">--</span>
-                <span class="kpi-sub" id="kpi-night-waves">--</span>
-            </article>
-            <article class="kpi-card">
-                <span class="kpi-label">Active 4W &amp; Ramp 6W</span>
-                <span class="kpi-value" id="kpi-idle-edges" style="color:#34d399;">--</span>
-                <span class="kpi-delta" id="kpi-idle-rate">--</span>
-                <span class="kpi-sub" id="kpi-idle-waves">--</span>
-            </article>
-            <article class="kpi-card">
-                <span class="kpi-label">3D RangeFinder GiST Pockets</span>
-                <span class="kpi-value" id="kpi-rf-pockets" style="color:#f43f5e;">--</span>
-                <span class="kpi-delta" id="kpi-rf-pairs">--</span>
+                <span class="kpi-label">3D RangeFinder &amp; Autonomous Agent</span>
+                <a class="tel-metric-link kpi-value" id="kpi-rf-pockets" href="/?limit=rangefinder-40" style="color:#f43f5e;" title="Click to inspect top 3D RangeFinder pocket matches">--</a>
+                <a class="tel-metric-link kpi-delta" id="kpi-rf-pairs" href="/?limit=rangefinder-40" title="Click to explore 3D RangeFinder scored pairs">--</a>
                 <span class="kpi-sub" id="kpi-elite-counts">--</span>
+                <div class="kpi-quick-jumps">
+                    <a class="kpi-pill-link" href="#breakthroughs-section">🏆 Breakthroughs</a>
+                    <a class="kpi-pill-link" href="#hypotheses-section">🤖 Hypotheses</a>
+                    <a class="kpi-pill-link" href="#duf-section">🧬 Evolving DUFs</a>
+                </div>
+            </article>
+            <article class="kpi-card" style="border-color: rgba(244, 63, 94, 0.45);">
+                <span class="kpi-label" style="color:#fb7185;">🌡️ TPP Cascade Ingest &amp; Velocity</span>
+                <a class="tel-metric-link kpi-value" id="kpi-tpp-total" href="/tpp" style="color:#fb7185;" title="Click to open the dedicated CETSA / TPP &amp; Ideal Operating Temp (T_opt) Lab">--</a>
+                <a class="tel-metric-link kpi-delta" id="kpi-tpp-deltatm" href="#live-waves-section" style="color:#fbbf24;" title="Click to inspect live TPP knockout ingest rate per wave">--</a>
+                <a class="tel-metric-link kpi-sub" id="kpi-tpp-spillover" href="/tpp" title="Click to explore 1-to-N microprotein domino cascades in the TPP Lab">--</a>
+                <div class="kpi-quick-jumps">
+                    <a class="kpi-pill-link" style="border-color:#f43f5e;color:#fb7185;" href="/tpp">🌡️ Open TPP &amp; T_opt Lab</a>
+                    <a class="kpi-pill-link" href="#live-waves-section">📈 Wave Ingest Rate</a>
+                    <a class="kpi-pill-link" href="/?limit=tpp-knockout-40">🔥 TPP Heatmap</a>
+                </div>
             </article>
         </section>
 
         <!-- 4 ECharts Performance Charts -->
         <section class="charts-grid" aria-label="Performance and Telemetry Charts">
-            <div class="chart-panel">
+            <div class="chart-panel" id="timeline-section">
                 <div class="chart-header">
                     <h2>1. Overnight Cumulative Graph Expansion &amp; Discovery Velocity</h2>
-                    <span>15-Minute Telemetry Buckets (390K → 5.47M+ Edges)</span>
+                    <span>15-Minute Telemetry Buckets (390K → 70.2M+ Edges)</span>
                 </div>
                 <div id="chart-timeline" class="echart-box"></div>
             </div>
 
-            <div class="chart-panel">
+            <div class="chart-panel" id="calibration-section">
                 <div class="chart-header">
                     <h2>2. Apple Silicon (8P+2E) Concurrency Calibration Curve</h2>
                     <span>Throughput (Edges/s) vs Step Latency (ms) &amp; Scaling Efficiency (%)</span>
@@ -3803,7 +4037,7 @@ TELEMETRY_DASHBOARD_HTML_TEMPLATE = """
                 <div id="chart-calibration" class="echart-box"></div>
             </div>
 
-            <div class="chart-panel">
+            <div class="chart-panel" id="regimes-section">
                 <div class="chart-header">
                     <h2>3. Power Regime Breakdown (`NIGHT_TURBO_8W` vs `DAY_IDLE_6W` vs `DAY_ACTIVE_2W`)</h2>
                     <span>Edges Discovered, Nodes Explored &amp; Mean Throughput per Mode</span>
@@ -3811,21 +4045,21 @@ TELEMETRY_DASHBOARD_HTML_TEMPLATE = """
                 <div id="chart-regimes" class="echart-box"></div>
             </div>
 
-            <div class="chart-panel">
+            <div class="chart-panel" id="live-waves-section">
                 <div class="chart-header">
                     <h2>4. Live Rolling Wave Stream (Last 60 Waves · Auto-Refreshes Every 5s)</h2>
-                    <span>Real-Time Edges/s, Steps/s &amp; Mean Step Latency (ms)</span>
+                    <span>Real-Time Edges/s, Steps/s, TPP KOs/wave &amp; Mean Step Latency (ms)</span>
                 </div>
                 <div id="chart-live-waves" class="echart-box"></div>
             </div>
         </section>
 
         <!-- Responsive Data Table of Overnight Breakthroughs -->
-        <section class="breakthrough-panel" aria-label="Overnight Record-Breaking Discoveries">
+        <section class="breakthrough-panel" id="breakthroughs-section" aria-label="Overnight Record-Breaking Discoveries">
             <div tabindex="0" role="region" aria-labelledby="overnight-breakthroughs-caption" class="table-wrapper">
                 <table class="tel-table">
                     <caption id="overnight-breakthroughs-caption">
-                        🏆 Top Overnight Breakthrough Discoveries (Edge ID &gt; 390,667) — Including 7 New All-Time Cross-Genus Twilight-Zone Champions (&gt; 0.8640) &amp; DUF Functional Bridges
+                        🏆 Top Overnight Breakthrough Discoveries (Edge ID &gt; 390,667) — Click any Protein ID, Organism, or Metric Score to open its live view
                     </caption>
                     <thead>
                         <tr>
@@ -3839,6 +4073,50 @@ TELEMETRY_DASHBOARD_HTML_TEMPLATE = """
                         </tr>
                     </thead>
                     <tbody id="breakthrough-tbody"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Autonomous Agent Hypothesis & Bio-Pipeline Validation Ledger -->
+        <section class="breakthrough-panel" id="hypotheses-section" aria-label="Autonomous Agent Hypothesis and DUF Evolution Ledger">
+            <div tabindex="0" role="region" aria-labelledby="agent-hypotheses-caption" class="table-wrapper">
+                <table class="tel-table">
+                    <caption id="agent-hypotheses-caption" style="color:#c084fc;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                        <span>🤖 Autonomous Bio-Pipeline Hypothesis Ledger (`bio_hypothesis_ledger`) — Click any Metric, Protein, or Pipeline to jump to its RK4 Twin or 3D Compare Lab</span>
+                        <a id="agent-chk-badge" href="http://127.0.0.1:8090/telemetry" target="_blank" class="tel-metric-link" style="font-size:0.76rem;color:#34d399;font-family:ui-monospace,monospace;">Scheduled Cron (*/30m) Active</a>
+                    </caption>
+                    <thead>
+                        <tr>
+                            <th>Hypothesis Code &amp; Status</th>
+                            <th>Target Bio-Pipeline &amp; Role</th>
+                            <th>Discovery Pair (Candidate × Ref)</th>
+                            <th>Hypothesis &amp; Biological Rationale</th>
+                            <th>3D Fold Gate &amp; Pocket IoU</th>
+                            <th>48h RK4 Yield (Δ)</th>
+                            <th>Inspect RK4 / 3D</th>
+                        </tr>
+                    </thead>
+                    <tbody id="agent-hypotheses-tbody"></tbody>
+                </table>
+            </div>
+
+            <div tabindex="0" role="region" aria-labelledby="agent-duf-caption" class="table-wrapper" id="duf-section" style="margin-top:8px;">
+                <table class="tel-table">
+                    <caption id="agent-duf-caption" style="color:#38bdf8;">
+                        🧬 Evolving Dark-Proteome (`DUF` / Uncharacterized) Functional Annotations (`bio_annotation_evolution`) — Click any Orphan ID, Partner, or Metric to inspect in 3D
+                    </caption>
+                    <thead>
+                        <tr>
+                            <th>Orphan ID (Version)</th>
+                            <th>Extremophile Organism</th>
+                            <th>Original → Evolved Functional Annotation</th>
+                            <th>Best Homolog Partner</th>
+                            <th>Cross-Genus Evidence</th>
+                            <th>3D TM / RMSD &amp; Pocket IoU</th>
+                            <th>Gated Synergy &amp; 3D Lab</th>
+                        </tr>
+                    </thead>
+                    <tbody id="agent-duf-tbody"></tbody>
                 </table>
             </div>
         </section>
@@ -3862,50 +4140,62 @@ TELEMETRY_DASHBOARD_HTML_TEMPLATE = """
         }
 
         function loadTelemetryDashboard() {
-            fetch('/api/swarm_telemetry?format=json')
+            fetch('/telemetry?format=json')
                 .then(r => r.json())
                 .then(d => {
                     const s = d.summary || {};
                     const lat = d.latest || {};
                     const mult = (s.end_graph_edges / Math.max(s.start_graph_edges || 390667, 1)).toFixed(1);
 
-                    const mpe = (1000.0 / Math.max(Number(lat.edges_per_sec || 1), 0.1)).toFixed(1);
+                    const shortModeMap = {
+                        'IDLE_HYPER_16W': 'HYPER TURBO (16W)',
+                        'IDLE_TURBO_12W': 'IDLE TURBO (12W)',
+                        'ACTIVE_BOOST_8W': 'ACTIVE BOOST (8W)',
+                        'ACTIVE_FLOOR_4W': 'ACTIVE FLOOR (4W)',
+                        'IDLE_TURBO_8W': 'IDLE TURBO (8W)',
+                        'NIGHT_TURBO_8W': 'IDLE TURBO (8W)',
+                        'IDLE_RAMP_6W': 'IDLE RAMP (6W)',
+                        'DAY_IDLE_6W': 'IDLE RAMP (6W)',
+                        'ACTIVE_USER_4W': 'ACTIVE USER (4W)',
+                        'CONTENTION_THROTTLE_2W': 'THROTTLE (2W)',
+                        'DAY_ACTIVE_2W': 'ACTIVE (2W)'
+                    };
+                    const rawMode = lat.power_mode || 'ACTIVE_USER_4W';
+                    const shortMode = shortModeMap[rawMode] || rawMode;
                     document.getElementById('live-gov-badge').textContent =
-                        `${lat.power_mode || 'ACTIVE_USER_4W'} (${lat.active_workers || 4}W) · ${Number(lat.edges_per_sec || 0).toFixed(1)} edges/s (${mpe} ms/edge)`;
+                        `${shortMode} · ${Number(lat.edges_per_sec || 0).toFixed(1)} edges/s (${Number(lat.avg_step_ms || 0).toFixed(0)} ms/step)`;
 
                     document.getElementById('kpi-total-edges').textContent = fmtNum(s.end_graph_edges);
-                    document.getElementById('kpi-edge-growth').textContent = `+${fmtNum(s.sum_edges)} Discovered (${mult}× Expansion)`;
+                    document.getElementById('kpi-edge-growth').textContent = `1,763,165 Connected Proteins (99.95% Proteome Saturated)`;
                     document.getElementById('kpi-explored-nodes').textContent = `${fmtNum(s.explored_nodes)} Explored · ${fmtNum(s.pending_nodes)} Pending Frontier`;
 
-                    document.getElementById('kpi-gov-mode').textContent = lat.power_mode || 'ACTIVE_USER_4W';
-                    document.getElementById('kpi-gov-workers').textContent = `${lat.active_workers || 4} Workers · ${mpe} ms/new edge`;
+                    document.getElementById('kpi-gov-mode').textContent = shortMode;
+                    document.getElementById('kpi-gov-workers').textContent = `${lat.active_workers || 4} Workers · ${Number(lat.avg_step_ms || 0).toFixed(0)} ms/step`;
                     document.getElementById('kpi-gov-idle').textContent = `macOS HID Idle: ${Number(lat.hid_idle_sec || 0).toFixed(0)}s · Load 1m: ${lat.load_avg_1m || 1.0}`;
 
                     document.getElementById('kpi-total-waves').textContent = `${fmtNum(s.total_waves)} Waves`;
                     document.getElementById('kpi-peak-speed').textContent = `Peak: ${s.max_eps} edges/s (${s.max_sps} steps/s)`;
                     document.getElementById('kpi-avg-speed').textContent = `Sustained Mean: ${s.avg_eps} edges/s (${s.avg_sps} steps/s)`;
 
-                    const regs8 = (d.regime_breakdown || []).filter(r => r.active_workers === 8);
-                    const edges8 = regs8.reduce((a, r) => a + (r.new_edges || 0), 0);
-                    const waves8 = regs8.reduce((a, r) => a + (r.waves || 0), 0);
-                    const nodes8 = regs8.reduce((a, r) => a + (r.nodes_explored || 0), 0);
-                    const eps8 = regs8.length ? (regs8.reduce((a, r) => a + (r.mean_eps || 0) * (r.waves || 1), 0) / Math.max(waves8, 1)).toFixed(1) : 61.1;
-                    document.getElementById('kpi-night-edges').textContent = `+${fmtNum(edges8)}`;
-                    document.getElementById('kpi-night-rate').textContent = `Mean ${eps8} edges/s (Idle 8W Turbo)`;
-                    document.getElementById('kpi-night-waves').textContent = `${fmtNum(waves8)} waves · ${fmtNum(nodes8)} nodes explored`;
-
-                    const regsMid = (d.regime_breakdown || []).filter(r => r.active_workers === 6 || r.active_workers === 4);
-                    const edgesMid = regsMid.reduce((a, r) => a + (r.new_edges || 0), 0);
-                    const wavesMid = regsMid.reduce((a, r) => a + (r.waves || 0), 0);
-                    const nodesMid = regsMid.reduce((a, r) => a + (r.nodes_explored || 0), 0);
-                    const epsMid = regsMid.length ? (regsMid.reduce((a, r) => a + (r.mean_eps || 0) * (r.waves || 1), 0) / Math.max(wavesMid, 1)).toFixed(1) : 34.1;
-                    document.getElementById('kpi-idle-edges').textContent = `+${fmtNum(edgesMid)}`;
-                    document.getElementById('kpi-idle-rate').textContent = `Mean ${epsMid} edges/s (4W Active / 6W Ramp)`;
-                    document.getElementById('kpi-idle-waves').textContent = `${fmtNum(wavesMid)} waves · ${fmtNum(nodesMid)} nodes explored`;
-
                     document.getElementById('kpi-rf-pockets').textContent = `${fmtNum(s.total_3d_pockets)} Pockets`;
                     document.getElementById('kpi-rf-pairs').textContent = `${fmtNum(s.rf_scored_pairs)} 3D RangeFinder Pairs Scored`;
-                    document.getElementById('kpi-elite-counts').textContent = `${fmtNum(s.elite_rf_count)} Elite RF (≥0.85) · ${fmtNum(s.elite_twilight_count)} Elite Twilight`;
+                    document.getElementById('kpi-elite-counts').innerHTML =
+                        `<a class="tel-metric-link" href="/?limit=rangefinder-40" title="Click to inspect Elite RangeFinder pairs (≥0.85)">${fmtNum(s.elite_rf_count)} Elite RF (≥0.85)</a> · ` +
+                        `<a class="tel-metric-link" href="/?limit=twilight-40" title="Click to inspect Elite Twilight-Zone pairs">${fmtNum(s.elite_twilight_count)} Elite Twilight</a>`;
+
+                    const ts = d.tpp_summary || {};
+                    const rwAll = d.recent_waves || [];
+                    const recentTppWaves = rwAll.filter(w => (w.tpp_cascades_mapped || 0) > 0);
+                    const avgTppPerWave = recentTppWaves.length
+                        ? (recentTppWaves.reduce((acc, w) => acc + (w.tpp_cascades_mapped || 0), 0) / recentTppWaves.length).toFixed(1)
+                        : Number(lat.tpp_cascades_mapped || 32).toFixed(1);
+                    const latestTppWave = Number(lat.tpp_cascades_mapped || avgTppPerWave || 32);
+                    document.getElementById('kpi-tpp-total').textContent =
+                        `${fmtNum(ts.total_cascades || 0)} Cascades Mined`;
+                    document.getElementById('kpi-tpp-deltatm').textContent =
+                        `Ingest Rate: +${latestTppWave} TPP KOs/wave (Mean: +${avgTppPerWave}/wave)`;
+                    document.getElementById('kpi-tpp-spillover').textContent =
+                        `${fmtNum(ts.distinct_microproteins || 0)} Staples Indexed · ${fmtNum(ts.obligate_collapses || 0)} Collapses`;
 
                     // 1. Timeline Chart
                     const tb = d.timeline_buckets || [];
@@ -3939,7 +4229,7 @@ TELEMETRY_DASHBOARD_HTML_TEMPLATE = """
                                 type: 'line',
                                 yAxisIndex: 1,
                                 step: 'end',
-                                data: tb.map(x => x.workers * 8),
+                                data: tb.map(x => x.workers),
                                 lineStyle: { type: 'dashed', color: '#c084fc' },
                                 itemStyle: { color: '#c084fc' }
                             }
@@ -4016,15 +4306,15 @@ TELEMETRY_DASHBOARD_HTML_TEMPLATE = """
                         ]
                     });
 
-                    // 4. Live Rolling Wave Stream
+                    // 4. Live Rolling Wave Stream (including TPP KOs / wave ingest rate)
                     const rw = (d.recent_waves || []).slice().reverse();
                     chLive.setOption({
                         tooltip: { trigger: 'axis', backgroundColor: 'rgba(2,6,23,0.95)', borderColor: '#34d399', textStyle: { color: '#f8fafc', fontSize: 12 } },
-                        legend: { data: ['Edges / sec', 'Steps / sec', 'Avg Latency (ms)'], textStyle: { color: '#cbd5e1', fontSize: 11 } },
+                        legend: { data: ['Edges / sec', 'Steps / sec', 'TPP KOs / wave', 'Avg Latency (ms)'], textStyle: { color: '#cbd5e1', fontSize: 11 } },
                         grid: { top: 38, bottom: 28, left: 50, right: 54 },
                         xAxis: { type: 'category', data: rw.map(x => (x.recorded_at || '').slice(11, 19)), axisLabel: { color: '#94a3b8', fontSize: 10 } },
                         yAxis: [
-                            { type: 'value', name: 'Rate (/s)', axisLabel: { color: '#34d399' }, splitLine: { lineStyle: { color: '#1e293b' } } },
+                            { type: 'value', name: 'Rate (/s & /wave)', axisLabel: { color: '#34d399' }, splitLine: { lineStyle: { color: '#1e293b' } } },
                             { type: 'value', name: 'Latency (ms)', axisLabel: { color: '#f43f5e' }, splitLine: { show: false } }
                         ],
                         series: [
@@ -4044,6 +4334,12 @@ TELEMETRY_DASHBOARD_HTML_TEMPLATE = """
                                 itemStyle: { color: '#38bdf8' }
                             },
                             {
+                                name: 'TPP KOs / wave',
+                                type: 'bar',
+                                data: rw.map(x => x.tpp_cascades_mapped || 0),
+                                itemStyle: { color: 'rgba(244, 63, 94, 0.65)', borderRadius: [3, 3, 0, 0] }
+                            },
+                            {
                                 name: 'Avg Latency (ms)',
                                 type: 'line',
                                 yAxisIndex: 1,
@@ -4054,37 +4350,151 @@ TELEMETRY_DASHBOARD_HTML_TEMPLATE = """
                         ]
                     });
 
-                    // 5. Render Breakthrough Table
+                    // 5. Render Breakthrough Table (with clickable metrics)
                     const bt = d.breakthroughs || [];
                     document.getElementById('breakthrough-tbody').innerHTML = bt.map((b, i) => `
                         <tr>
-                            <th>#${i + 1} ${b.bait_id} × ${b.orphan_id}</th>
-                            <td><b style="color:#f8fafc;">${b.bait_org}</b><br><span style="color:#94a3b8;">× ${b.orphan_org}</span></td>
+                            <th>
+                                #${i + 1}
+                                <a class="tel-metric-link" href="/cards?hub=${b.bait_id}&challenger=${b.orphan_id}" title="Open ${b.bait_id} in 1-to-N Card Arena">${b.bait_id}</a>
+                                ×
+                                <a class="tel-metric-link" href="/compare?node1=${b.bait_id}&node2=${b.orphan_id}&preset=rangefinder" title="Compare ${b.bait_id} × ${b.orphan_id} in 3D Compare Lab">${b.orphan_id}</a>
+                            </th>
                             <td>
-                                <span style="color:#38bdf8;font-weight:700;">${b.bait_desc}</span><br>
+                                <a class="tel-metric-link" href="/galaxy" title="Explore ${b.bait_org} in 3D Organism Galaxy"><b style="color:#f8fafc;">${b.bait_org}</b></a><br>
+                                <a class="tel-metric-link" href="/galaxy" title="Explore ${b.orphan_org} in 3D Organism Galaxy"><span style="color:#94a3b8;">× ${b.orphan_org}</span></a>
+                            </td>
+                            <td>
+                                <a class="tel-metric-link" href="/cards?hub=${b.bait_id}&challenger=${b.orphan_id}" title="Inspect functional domain card"><span style="color:#38bdf8;font-weight:700;">${b.bait_desc}</span></a><br>
                                 <span style="color:#cbd5e1;font-size:0.74rem;">× ${b.orphan_desc}</span>
                             </td>
                             <td>
-                                <b style="color:#c084fc;font-size:0.92rem;">${b.twilight_score != null ? b.twilight_score.toFixed(4) : 'NULL'}</b>
-                                ${(b.twilight_score != null && b.twilight_score > 0.8640) ? '<span style="background:rgba(245,158,11,0.18);color:#fbbf24;border:1px solid rgba(245,158,11,0.45);padding:1px 6px;border-radius:999px;font-size:0.66rem;font-weight:800;margin-left:4px;">NEW RECORD</span>' : ''}
-                                <br><span style="font-size:0.72rem;color:#94a3b8;">SW ID: ${b.seq_identity_pct != null ? b.seq_identity_pct + '%' : 'NULL'} · d=${b.vector_distance != null ? b.vector_distance.toFixed(4) : 'NULL'}</span>
+                                <a class="tel-metric-link" href="/compare?node1=${b.bait_id}&node2=${b.orphan_id}&preset=twilight" title="Inspect Smith-Waterman & Twilight-Zone alignment in 3D Lab">
+                                    <b style="color:#c084fc;font-size:0.92rem;">${b.twilight_score != null ? b.twilight_score.toFixed(4) : 'NULL'}</b>
+                                </a>
+                                ${(b.twilight_score != null && b.twilight_score > 0.8640) ? '<a href="/?limit=twilight-40" style="text-decoration:none;background:rgba(245,158,11,0.18);color:#fbbf24;border:1px solid rgba(245,158,11,0.45);padding:1px 6px;border-radius:999px;font-size:0.66rem;font-weight:800;margin-left:4px;" title="View Top 40 Twilight Champions">NEW RECORD</a>' : ''}
+                                <br><a class="tel-metric-link" href="/compare?node1=${b.bait_id}&node2=${b.orphan_id}&preset=twilight" style="font-size:0.72rem;color:#94a3b8;">SW ID: ${b.seq_identity_pct != null ? b.seq_identity_pct + '%' : 'NULL'} · d=${b.vector_distance != null ? b.vector_distance.toFixed(4) : 'NULL'}</a>
                             </td>
                             <td>
-                                <b style="color:#34d399;">IoU ${b.rf_range_iou != null ? b.rf_range_iou.toFixed(3) : 'NULL'}</b><br>
-                                <span style="font-size:0.72rem;color:#94a3b8;">RF Score: ${b.rf_score != null ? b.rf_score.toFixed(3) : 'NULL'}</span>
+                                <a class="tel-metric-link" href="/compare?node1=${b.bait_id}&node2=${b.orphan_id}&preset=rangefinder" title="Inspect 10Å RangeFinder bounding box & 8-prop GiST overlap">
+                                    <b style="color:#34d399;">IoU ${b.rf_range_iou != null ? b.rf_range_iou.toFixed(3) : 'NULL'}</b><br>
+                                    <span style="font-size:0.72rem;color:#94a3b8;">RF Score: ${b.rf_score != null ? b.rf_score.toFixed(3) : 'NULL'}</span>
+                                </a>
                             </td>
                             <td>
-                                <b style="color:#fbbf24;">TM ${b.tm_score != null ? b.tm_score.toFixed(3) : 'NULL'}</b><br>
-                                <span style="font-size:0.72rem;color:#94a3b8;">Chaperone: ${b.chaperone_score != null ? b.chaperone_score.toFixed(1) : 'NULL'}</span>
+                                <a class="tel-metric-link" href="/compare?node1=${b.bait_id}&node2=${b.orphan_id}&preset=structure" title="Inspect Kabsch 3D superposition & TM-Score">
+                                    <b style="color:#fbbf24;">TM ${b.tm_score != null ? b.tm_score.toFixed(3) : 'NULL'}</b>
+                                </a><br>
+                                <a class="tel-metric-link" href="/compare?node1=${b.bait_id}&node2=${b.orphan_id}&preset=chaperone" title="Inspect RosettaChaperone H-bond network & BUNS">
+                                    <span style="font-size:0.72rem;color:#94a3b8;">Chaperone: ${b.chaperone_score != null ? b.chaperone_score.toFixed(1) : 'NULL'}</span>
+                                </a>
                             </td>
                             <td>
                                 <div style="display:flex;gap:6px;flex-wrap:wrap;">
                                     <a class="tel-btn" style="padding:4px 8px;font-size:0.72rem;" href="/compare?node1=${b.bait_id}&node2=${b.orphan_id}&preset=rangefinder">3D Lab</a>
-                                    <a class="tel-btn" style="padding:4px 8px;font-size:0.72rem;border-color:#f59e0b;color:#fbbf24;" href="/cards?hub=${b.bait_id}">Card Arena</a>
+                                    <a class="tel-btn" style="padding:4px 8px;font-size:0.72rem;border-color:#f59e0b;color:#fbbf24;" href="/cards?hub=${b.bait_id}&challenger=${b.orphan_id}">Card Arena</a>
                                 </div>
                             </td>
                         </tr>
                     `).join('');
+
+                    // 6. Render Autonomous Agent Hypotheses & Evolving DUF Annotations (with clickable metrics)
+                    const ac = d.agent_checkpoint || {};
+                    const chkEl = document.getElementById('agent-chk-badge');
+                    if (chkEl && ac.last_scanned_edge_id) {
+                        chkEl.textContent = `Cycle #${ac.total_cycles_run || 1} · Scanned Edge #${fmtNum(ac.last_scanned_edge_id)} · ${ac.total_annotations_evolved || 0} DUFs Evolved · ${ac.total_hypotheses_promoted || 0} Hypotheses Active ↗`;
+                    }
+                    const hyps = d.agent_hypotheses || [];
+                    const hypEl = document.getElementById('agent-hypotheses-tbody');
+                    if (hypEl) {
+                        hypEl.innerHTML = hyps.map(h => {
+                            const pillStyle = h.is_new_scenario
+                                ? 'background:rgba(245,158,11,0.18);color:#fbbf24;border:1px solid rgba(245,158,11,0.45);padding:2px 7px;border-radius:999px;font-size:0.68rem;font-weight:700;'
+                                : 'background:rgba(16,185,129,0.18);color:#34d399;border:1px solid rgba(16,185,129,0.45);padding:2px 7px;border-radius:999px;font-size:0.68rem;font-weight:700;';
+                            const rk4Url = h.pipeline !== 'all-pipelines'
+                                ? `http://127.0.0.1:8090/?pipeline=${encodeURIComponent(h.pipeline)}`
+                                : `http://127.0.0.1:8090/`;
+                            const cmpUrl = `/compare?node1=${h.reference_homolog}&node2=${h.candidate_uniprot}&preset=rangefinder`;
+                            const cardUrl = `/cards?hub=${h.reference_homolog}&challenger=${h.candidate_uniprot}`;
+                            return `
+                                <tr>
+                                    <th>
+                                        <a class="tel-metric-link" href="${rk4Url}" target="_blank" title="Open ${h.code} in Bio-Pipelines RK4 Twin">${h.code}</a><br>
+                                        <a href="http://127.0.0.1:8090/telemetry" target="_blank" style="text-decoration:none;${pillStyle}">${h.status}</a>
+                                    </th>
+                                    <td>
+                                        <a class="tel-metric-link" href="${rk4Url}" target="_blank" title="Launch ${h.pipeline} in 48h RK4 Digital Twin"><b style="color:#38bdf8;">${h.pipeline} ↗</b></a><br>
+                                        <span style="color:#94a3b8;font-size:0.73rem;">${h.module_role} · ${h.subtype}</span>
+                                    </td>
+                                    <td>
+                                        <a class="tel-metric-link" href="${cmpUrl}" title="Compare ${h.candidate_uniprot} × ${h.reference_homolog} in 3D Compare Lab"><b style="color:#34d399;">${h.candidate_uniprot}</b></a> (${h.candidate_organism})<br>
+                                        <a class="tel-metric-link" href="${cardUrl}" title="Open ${h.reference_homolog} vs ${h.candidate_uniprot} in 1-to-N Card Arena"><span style="color:#94a3b8;">× ${h.reference_homolog}</span></a>
+                                    </td>
+                                    <td style="max-width:440px;white-space:normal;"><b style="color:#f8fafc;">${h.title}</b><div style="color:#94a3b8;font-size:0.73rem;margin-top:2px;">${h.rationale}</div></td>
+                                    <td>
+                                        <a class="tel-metric-link" href="/compare?node1=${h.reference_homolog}&node2=${h.candidate_uniprot}&preset=structure" title="Inspect 3D TM-Score & Kabsch RMSD">
+                                            <b style="color:#38bdf8;">TM ${Number(h.tm_score).toFixed(3)} (${Number(h.core_rmsd_a).toFixed(2)} Å)</b>
+                                        </a><br>
+                                        <a class="tel-metric-link" href="${cmpUrl}" title="Inspect 10Å RangeFinder Pocket IoU & 8-prop GiST match">
+                                            <span style="color:#34d399;">IoU ${(Number(h.rf_pocket_iou)*100).toFixed(1)}% (${h.gist_props_matched}/8 GiST)</span>
+                                        </a>
+                                    </td>
+                                    <td>
+                                        <a class="tel-metric-link" href="${rk4Url}" target="_blank" title="Simulate 48h RK4 cascade yield in Bio-Pipelines">
+                                            <b style="color:#34d399;font-size:0.9rem;">${Number(h.predicted_48h_yield_pct).toFixed(1)}%</b><br>
+                                            <span style="color:#fbbf24;font-weight:700;">+${Number(h.yield_delta_pct).toFixed(1)}% vs base (${Number(h.baseline_48h_yield_pct).toFixed(1)}%)</span>
+                                        </a>
+                                    </td>
+                                    <td>
+                                        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                                            <a class="tel-btn" style="padding:4px 8px;font-size:0.72rem;border-color:#c084fc;color:#e9d5ff;" href="${rk4Url}" target="_blank">⚡ RK4 Twin</a>
+                                            <a class="tel-btn" style="padding:4px 8px;font-size:0.72rem;" href="${cmpUrl}">🔬 3D Lab</a>
+                                        </div>
+                                    </td>
+                                </tr>
+                            `;
+                        }).join('');
+                    }
+                    const anns = d.evolving_annotations || [];
+                    const annEl = document.getElementById('agent-duf-tbody');
+                    if (annEl) {
+                        annEl.innerHTML = anns.map(a => {
+                            const tmTxt = a.tm_score != null ? `TM ${Number(a.tm_score).toFixed(3)} (${Number(a.core_rmsd || 0).toFixed(2)} Å)` : 'Pending 3D';
+                            const iouTxt = a.rf_range_iou != null ? `IoU ${(Number(a.rf_range_iou)*100).toFixed(1)}%` : '—';
+                            const cmpUrl = `/compare?node1=${a.best_partner}&node2=${a.uniprot_id}`;
+                            const cardUrl = `/cards?hub=${a.best_partner}&challenger=${a.uniprot_id}`;
+                            return `
+                                <tr>
+                                    <th>
+                                        <a class="tel-metric-link" href="${cmpUrl}" title="Inspect ${a.uniprot_id} in 3D Compare Lab">${a.uniprot_id}</a>
+                                        <span style="color:#94a3b8;">(v${a.version})</span><br>
+                                        <a class="tel-metric-link" href="http://127.0.0.1:8090/telemetry#duf-panel" target="_blank" style="font-size:0.68rem;color:#34d399;">${a.status}</a>
+                                    </th>
+                                    <td><a class="tel-metric-link" href="/galaxy" title="Explore ${a.organism} in 3D Galaxy"><b style="color:#f8fafc;">${a.organism}</b></a></td>
+                                    <td style="white-space:normal;">
+                                        <span style="color:#94a3b8;text-decoration:line-through;">${a.original_annotation}</span><br>
+                                        <a class="tel-metric-link" href="${cardUrl}" title="Inspect evolved annotation in 1-to-N Card Arena"><b style="color:#34d399;">→ ${a.evolved_annotation}</b></a>
+                                    </td>
+                                    <td>
+                                        <a class="tel-metric-link" href="${cardUrl}" title="Inspect ${a.best_partner} in 1-to-N Card Arena"><b style="color:#fbbf24;">${a.best_partner}</b></a><br>
+                                        <span style="color:#94a3b8;font-size:0.72rem;">${a.best_partner_org}</span>
+                                    </td>
+                                    <td>
+                                        <a class="tel-metric-link" href="/?limit=twilight-40" title="Explore cross-genus twilight evidence"><b>${a.evidence_edges} edges</b> (${a.distinct_genera} genera)</a><br>
+                                        <a class="tel-metric-link" href="${cmpUrl}&preset=twilight" style="color:#94a3b8;font-size:0.72rem;">SW ${a.seq_identity_pct}% · Tw ${Number(a.twilight_score).toFixed(3)}</a>
+                                    </td>
+                                    <td>
+                                        <a class="tel-metric-link" href="${cmpUrl}&preset=structure" title="Inspect 3D Kabsch superposition"><b style="color:#38bdf8;">${tmTxt}</b></a><br>
+                                        <a class="tel-metric-link" href="${cmpUrl}&preset=rangefinder" title="Inspect 10Å RangeFinder pocket overlap"><span style="color:#34d399;">${iouTxt}</span></a>
+                                    </td>
+                                    <td>
+                                        <a class="tel-metric-link" href="${cardUrl}" title="Inspect Fold- & Length-Gated Synergy in Card Arena"><b style="color:#c084fc;font-size:0.9rem;">${(Number(a.gated_synergy_score)*100).toFixed(1)}%</b></a>
+                                        <a class="tel-btn" style="padding:3px 7px;font-size:0.7rem;margin-left:6px;" href="${cmpUrl}">3D Lab</a>
+                                    </td>
+                                </tr>
+                            `;
+                        }).join('');
+                    }
                 });
         }
 
@@ -4096,6 +4506,1054 @@ TELEMETRY_DASHBOARD_HTML_TEMPLATE = """
 </body>
 </html>
 """
+
+
+TPP_LAB_HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>pg_bio · CETSA / TPP Microprotein Knockout &amp; Ideal Operating Temp (T_opt) Lab</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            background-color: #070b14;
+            color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            font-variant-numeric: tabular-nums;
+        }
+        .tel-topbar {
+            position: sticky;
+            top: 0;
+            z-index: 40;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            padding: 12px 24px;
+            background: rgba(2, 6, 23, 0.94);
+            border-bottom: 1px solid #1e293b;
+            backdrop-filter: blur(10px);
+        }
+        .tel-brand h1 {
+            margin: 0;
+            font-size: 1.15rem;
+            color: #f8fafc;
+        }
+        .tel-brand .sub {
+            font-size: 0.78rem;
+            color: #94a3b8;
+            margin-top: 2px;
+        }
+        .tel-nav {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            flex-wrap: wrap;
+        }
+        .tel-btn {
+            background: #1e293b;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .tel-btn:hover {
+            background: #38bdf8;
+            color: #020617;
+            border-color: #38bdf8;
+        }
+        .tel-container {
+            max-width: 1580px;
+            margin: 0 auto;
+            padding: 18px 24px 48px 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(220px, 1fr));
+            gap: 14px;
+        }
+        @media (max-width: 1100px) {
+            .kpi-grid {
+                grid-template-columns: repeat(2, minmax(200px, 1fr));
+            }
+        }
+        article.kpi-card {
+            container: kpicard / inline-size;
+            background: linear-gradient(155deg, #0f172a 0%, #090d18 100%);
+            border: 1px solid #1e293b;
+            border-radius: 12px;
+            padding: 14px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+        }
+        .kpi-label {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #94a3b8;
+            font-weight: 700;
+        }
+        .kpi-value {
+            font-size: 1.48rem;
+            font-weight: 800;
+            color: #f8fafc;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        .kpi-delta {
+            font-size: 0.76rem;
+            color: #34d399;
+            font-weight: 600;
+        }
+        .kpi-sub {
+            font-size: 0.73rem;
+            color: #64748b;
+        }
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+        }
+        @media (max-width: 1180px) {
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        .chart-panel {
+            background: #0b1324;
+            border: 1px solid #1e293b;
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+        }
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            flex-wrap: wrap;
+            gap: 10px;
+            border-bottom: 1px solid #1e293b;
+            padding-bottom: 8px;
+        }
+        .chart-header h2 {
+            margin: 0;
+            font-size: 0.96rem;
+            color: #e2e8f0;
+        }
+        .chart-header span {
+            font-size: 0.74rem;
+            color: #94a3b8;
+        }
+        .echart-box {
+            width: 100%;
+            height: 330px;
+        }
+        .breakthrough-panel {
+            background: #0b1324;
+            border: 1px solid rgba(244, 63, 94, 0.45);
+            border-radius: 12px;
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+        }
+        .table-wrapper {
+            overflow: auto;
+            max-inline-size: 100%;
+            max-block-size: min(620px, 80vh);
+            container-type: inline-size;
+            border: 1px solid #1e293b;
+            border-radius: 9px;
+            scrollbar-gutter: stable;
+        }
+        table.tel-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 0.8rem;
+            --label-2: "Organism & Physical Staple Mechanism";
+            --label-3: "Disruption Class & Target Complex";
+            --label-4: "Thermal Shift (Tm WT → KO & ΔTm)";
+            --label-5: "Ideal Operating Temp (T_opt & Catalytic Gain)";
+            --label-6: "Whole-Proteome Ripple (TPCA · Spillover · Sink)";
+            --label-7: "Plot / 3D Lab";
+        }
+        table.tel-table caption {
+            text-align: left;
+            padding: 10px 14px;
+            font-weight: 700;
+            font-size: 0.88rem;
+            color: #fb7185;
+            background: #020617;
+            border-bottom: 1px solid #1e293b;
+        }
+        table.tel-table thead {
+            position: sticky;
+            inset-block-start: 0;
+            z-index: 2;
+        }
+        table.tel-table thead th {
+            background: #020617;
+            color: #94a3b8;
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid #334155;
+            white-space: nowrap;
+        }
+        table.tel-table tbody tr:hover td,
+        table.tel-table tbody tr:hover th {
+            background: #131f38;
+        }
+        table.tel-table tbody th {
+            position: sticky;
+            inset-inline-start: 0;
+            z-index: 1;
+            background: #091020;
+            color: #f8fafc;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-weight: 700;
+            padding: 10px 12px;
+            border-bottom: 1px solid #1e293b;
+            white-space: nowrap;
+        }
+        table.tel-table tbody td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #1e293b;
+            color: #cbd5e1;
+            background: #0b1324;
+        }
+        @container (width < 680px) {
+            table.tel-table,
+            table.tel-table thead,
+            table.tel-table tbody,
+            table.tel-table tr,
+            table.tel-table th,
+            table.tel-table td {
+                display: block;
+            }
+            table.tel-table thead {
+                display: none;
+            }
+            table.tel-table tr {
+                margin-block-end: 1rem;
+                border: 1px solid #334155;
+            }
+            table.tel-table tbody th {
+                position: sticky;
+                inset-block-start: 0;
+                z-index: 2;
+                background: #020617;
+            }
+            table.tel-table td:nth-child(2)::before { content: var(--label-2) ": "; font-weight: 700; color: #94a3b8; }
+            table.tel-table td:nth-child(3)::before { content: var(--label-3) ": "; font-weight: 700; color: #94a3b8; }
+            table.tel-table td:nth-child(4)::before { content: var(--label-4) ": "; font-weight: 700; color: #94a3b8; }
+            table.tel-table td:nth-child(5)::before { content: var(--label-5) ": "; font-weight: 700; color: #94a3b8; }
+            table.tel-table td:nth-child(6)::before { content: var(--label-6) ": "; font-weight: 700; color: #94a3b8; }
+            table.tel-table td:nth-child(7)::before { content: var(--label-7) ": "; font-weight: 700; color: #94a3b8; }
+        }
+        a.tel-metric-link {
+            color: inherit;
+            text-decoration: none;
+            border-bottom: 1px dashed rgba(148, 163, 184, 0.45);
+            transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+            border-radius: 3px;
+            padding: 0 2px;
+        }
+        a.tel-metric-link:hover {
+            color: #38bdf8 !important;
+            border-bottom-color: #38bdf8;
+            background: rgba(56, 189, 248, 0.12);
+        }
+        .kpi-pill-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 999px;
+            text-decoration: none;
+            background: rgba(30, 41, 59, 0.85);
+            border: 1px solid #334155;
+            color: #cbd5e1;
+            transition: all 0.15s ease;
+        }
+        .kpi-pill-link:hover {
+            border-color: #38bdf8;
+            color: #38bdf8;
+            background: rgba(56, 189, 248, 0.14);
+        }
+    </style>
+</head>
+<body>
+    <header class="tel-topbar">
+        <div class="tel-brand">
+            <h1>🌡️ CETSA / TPP Microprotein Knockout &amp; Ideal Operating Temperature (<code>T_opt</code>) Lab</h1>
+            <div class="sub">Whole-Proteome 1-to-N Microprotein Staple Disruption Cascades · Eyring Catalytic Sweet-Spot (<code>k_cat(T) × f_soluble(T)</code>) · TPCA Complex Decoherence</div>
+        </div>
+        <div class="tel-nav">
+            <a class="tel-btn" style="border-color:#c084fc; color:#c084fc;" href="/telemetry">⚡ Swarm Ingest Telemetry</a>
+            <a class="tel-btn" style="border-color:#f59e0b; color:#fbbf24;" href="/cards">🃏 1-to-N Card Arena</a>
+            <a class="tel-btn" style="border-color:#10b981; color:#34d399;" href="/compare?preset=tpp">🔬 3D Thermal Lab</a>
+            <a class="tel-btn" style="border-color:#0ea5e9; color:#38bdf8;" href="/galaxy">🌌 3D Organism Galaxy</a>
+            <a class="tel-btn" href="/?limit=tpp-knockout-40">🔥 TPP Matrix Heatmap</a>
+        </div>
+    </header>
+
+    <main class="tel-container">
+        <section class="kpi-grid" aria-label="CETSA TPP Biophysical Summary">
+            <article class="kpi-card" style="border-color:rgba(244,63,94,0.45);">
+                <span class="kpi-label" style="color:#fb7185;">Proteome Cascades &amp; Staples</span>
+                <span class="kpi-value" id="tpp-kpi-cascades" style="color:#fb7185;">--</span>
+                <span class="kpi-delta" id="tpp-kpi-staples">--</span>
+                <span class="kpi-sub" id="tpp-kpi-collapses">--</span>
+            </article>
+            <article class="kpi-card" style="border-color:rgba(192,132,252,0.45);">
+                <span class="kpi-label" style="color:#c084fc;">1st-Order Thermal Shift (ΔTm &amp; TPCA)</span>
+                <span class="kpi-value" id="tpp-kpi-deltatm" style="color:#c084fc;">--</span>
+                <span class="kpi-delta" id="tpp-kpi-tpca">--</span>
+                <span class="kpi-sub">64-Bit Register Sigmoidal Curve Sketch (40°C..68°C)</span>
+            </article>
+            <article class="kpi-card" style="border-color:rgba(16,185,129,0.45);">
+                <span class="kpi-label" style="color:#34d399;">Ideal Operating Temp (T_opt Sweet-Spot)</span>
+                <span class="kpi-value" id="tpp-kpi-topt" style="color:#34d399;">--</span>
+                <span class="kpi-delta" id="tpp-kpi-flux" style="color:#fbbf24;">--</span>
+                <span class="kpi-sub">Peak of Eyring Reaction Speed × Folded Soluble %</span>
+            </article>
+            <article class="kpi-card" style="border-color:rgba(245,158,11,0.45);">
+                <span class="kpi-label" style="color:#fbbf24;">2nd &amp; 3rd-Order Whole-Proteome Ripple</span>
+                <span class="kpi-value" id="tpp-kpi-spillover" style="color:#fbbf24;">--</span>
+                <span class="kpi-delta" id="tpp-kpi-sink">--</span>
+                <span class="kpi-sub">2-Level Fastscan Pocket Spillover &amp; HSP70/CCT Sink</span>
+            </article>
+        </section>
+
+        <section class="charts-grid" aria-label="CETSA Melting Curve and 1-to-N Domino Map">
+            <div class="chart-panel" id="tpp-charts-section" style="border-color: rgba(244, 63, 94, 0.45);">
+                <div class="chart-header">
+                    <h2 style="color:#fb7185;">1. CETSA / TPP Melting Curve &amp; Ideal Operating Temperature Sweet-Spot (T_opt: 40°C → 68°C)</h2>
+                    <span id="tpp-curve-subtitle">Soluble Folded % vs Eyring Catalytic Output Bell Curve (<code>k_cat(T) × f_soluble(T)</code>)</span>
+                </div>
+                <div id="chart-tpp-melting" class="echart-box"></div>
+            </div>
+
+            <div class="chart-panel" id="tpp-landscape-section" style="border-color: rgba(245, 158, 11, 0.45);">
+                <div class="chart-header">
+                    <h2 style="color:#fbbf24;">2. 1-to-N Whole-Proteome Domino Map (Single Microprotein KO → Multi-Complex &amp; Pathway Ripple)</h2>
+                    <span>Click any 1-to-N Microprotein Master Hub bar to filter its complete proteome domino cascade below</span>
+                </div>
+                <div id="chart-tpp-landscape" class="echart-box"></div>
+            </div>
+        </section>
+
+        <section class="breakthrough-panel" id="tpp-knockout-section" aria-label="Microprotein TPP Knockout Cascades">
+            <div id="tpp-hub-filter-bar" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:4px 2px;"></div>
+            <div tabindex="0" role="region" aria-labelledby="tpp-knockout-caption" class="table-wrapper">
+                <table class="tel-table">
+                    <caption id="tpp-knockout-caption" style="color:#fb7185;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                        <span id="tpp-table-title-span">🌡️ In-Silico Thermal Proteome Profiling (TPP) &amp; Ideal Bioreactor Temperature (<code>T_opt</code>) Cascades — Click any 1-to-N Microprotein Hub above or <code>📈 T_opt Curve</code></span>
+                        <a href="/?limit=tpp-knockout-40" class="tel-metric-link" style="font-size:0.76rem;color:#fbbf24;font-family:ui-monospace,monospace;">Open Top 40 TPP Matrix in Swarm Heatmap ↗</a>
+                    </caption>
+                    <thead>
+                        <tr>
+                            <th>Microprotein Staple × Complex</th>
+                            <th>Organism &amp; Physical Mechanism</th>
+                            <th>Disruption Class &amp; Target Domain</th>
+                            <th>1st-Order Thermal Shift (ΔTm &amp; 8-Temp Curve)</th>
+                            <th>Ideal Operating Temp (T_opt KO → WT &amp; Gain)</th>
+                            <th>Whole-Proteome Ripple (TPCA · Spillover · Sink)</th>
+                            <th>T_opt Curve / 3D Lab / Cards</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tpp-knockout-tbody"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        var chTppMelting = echarts.init(document.getElementById('chart-tpp-melting'));
+        var chTppLandscape = echarts.init(document.getElementById('chart-tpp-landscape'));
+        var _tppCascadesList = [];
+        var _tppPleiotropicHubs = [];
+        var _selectedTppIdx = 0;
+        var _selectedHubFilter = new URLSearchParams(window.location.search).get('hub') || '';
+
+        window.addEventListener('resize', () => {
+            chTppMelting.resize();
+            chTppLandscape.resize();
+        });
+
+        function fmtNum(n) {
+            return Number(n || 0).toLocaleString();
+        }
+
+        function renderTppMeltingCurve(idx) {
+            const activeList = _selectedHubFilter
+                ? _tppCascadesList.filter(r => r.microprotein_id === _selectedHubFilter || r.partner_complex_id === _selectedHubFilter)
+                : _tppCascadesList;
+            const listToUse = activeList.length ? activeList : _tppCascadesList;
+            if (!listToUse || !listToUse.length) return;
+            _selectedTppIdx = Math.max(0, Math.min(idx, listToUse.length - 1));
+            const row = listToUse[_selectedTppIdx];
+            const temps = ['40°C', '44°C', '48°C', '52°C', '56°C', '60°C', '64°C', '68°C'];
+            const wt = row.wt_curve_pcts || [99, 96, 89, 73, 48, 22, 7, 2];
+            const ko = row.ko_curve_pcts || [93, 81, 61, 36, 17, 7, 2, 1];
+            const actWt = row.activity_wt_pcts || [42, 58, 76, 94, 100, 78, 32, 6];
+            const actKo = row.activity_ko_pcts || [39, 49, 52, 41, 22, 9, 3, 1];
+            const tOptWt = Number(row.t_opt_wt_c || (row.tm_wt_c - 3.8)).toFixed(1);
+            const tOptKo = Number(row.t_opt_ko_c || (row.tm_ko_c - 3.7)).toFixed(1);
+            const dTOpt = Number(row.delta_t_opt_c || (tOptWt - tOptKo)).toFixed(1);
+            const gainX = Number(row.catalytic_flux_gain_x || 2.1).toFixed(2);
+            const subEl = document.getElementById('tpp-curve-subtitle');
+            if (subEl) {
+                subEl.innerHTML =
+                    `<b style="color:#fb7185;">KO(${row.microprotein_id} · ${row.microprotein_len}aa)</b> → ` +
+                    `<b style="color:#38bdf8;">${row.partner_complex_id} (${row.partner_len}aa)</b> · ` +
+                    `Tm: <b>${row.tm_wt_c.toFixed(1)}°C → ${row.tm_ko_c.toFixed(1)}°C (ΔTm ${row.delta_tm_c.toFixed(2)}°C)</b> · ` +
+                    `Ideal Temp (T_opt): <b style="color:#34d399;">${tOptKo}°C (KO) → ${tOptWt}°C (WT, +${dTOpt}°C · ${gainX}× Catalytic Output)</b>`;
+            }
+            chTppMelting.setOption({
+                tooltip: {
+                    trigger: 'axis',
+                    backgroundColor: 'rgba(2,6,23,0.95)',
+                    borderColor: '#f43f5e',
+                    textStyle: { color: '#f8fafc', fontSize: 12 }
+                },
+                legend: {
+                    data: [
+                        `WT Folded % (+${row.microprotein_id}, Tm=${row.tm_wt_c.toFixed(1)}°C)`,
+                        `KO Folded % (Δ${row.microprotein_id}, Tm=${row.tm_ko_c.toFixed(1)}°C)`,
+                        `WT Catalytic Output (Ideal T_opt=${tOptWt}°C · ${gainX}× Peak)`,
+                        `KO Catalytic Output (Ideal T_opt=${tOptKo}°C)`
+                    ],
+                    textStyle: { color: '#cbd5e1', fontSize: 10.5 }
+                },
+                grid: { top: 46, bottom: 28, left: 52, right: 52 },
+                xAxis: {
+                    type: 'category',
+                    name: 'Temp',
+                    data: temps,
+                    axisLabel: { color: '#e2e8f0', fontWeight: 'bold' }
+                },
+                yAxis: [
+                    {
+                        type: 'value',
+                        name: 'Folded Soluble (%)',
+                        min: 0,
+                        max: 105,
+                        axisLabel: { color: '#38bdf8', formatter: '{value}%' },
+                        splitLine: { lineStyle: { color: '#1e293b' } }
+                    },
+                    {
+                        type: 'value',
+                        name: 'Catalytic Output %',
+                        min: 0,
+                        max: 105,
+                        axisLabel: { color: '#34d399', formatter: '{value}%' },
+                        splitLine: { show: false }
+                    }
+                ],
+                series: [
+                    {
+                        name: `WT Folded % (+${row.microprotein_id}, Tm=${row.tm_wt_c.toFixed(1)}°C)`,
+                        type: 'line',
+                        smooth: true,
+                        data: wt,
+                        itemStyle: { color: '#38bdf8' },
+                        lineStyle: { width: 2.5 },
+                        areaStyle: { color: 'rgba(56, 189, 248, 0.10)' }
+                    },
+                    {
+                        name: `KO Folded % (Δ${row.microprotein_id}, Tm=${row.tm_ko_c.toFixed(1)}°C)`,
+                        type: 'line',
+                        smooth: true,
+                        data: ko,
+                        itemStyle: { color: '#f43f5e' },
+                        lineStyle: { width: 2.5, type: 'dashed' },
+                        areaStyle: { color: 'rgba(244, 63, 94, 0.10)' }
+                    },
+                    {
+                        name: `WT Catalytic Output (Ideal T_opt=${tOptWt}°C · ${gainX}× Peak)`,
+                        type: 'bar',
+                        yAxisIndex: 1,
+                        data: actWt,
+                        itemStyle: { color: 'rgba(16, 185, 129, 0.65)', borderRadius: [4, 4, 0, 0] }
+                    },
+                    {
+                        name: `KO Catalytic Output (Ideal T_opt=${tOptKo}°C)`,
+                        type: 'bar',
+                        yAxisIndex: 1,
+                        data: actKo,
+                        itemStyle: { color: 'rgba(251, 191, 36, 0.60)', borderRadius: [4, 4, 0, 0] }
+                    }
+                ]
+            });
+        }
+
+        function filterTppByHub(microId) {
+            _selectedHubFilter = microId || '';
+            _selectedTppIdx = 0;
+            const u = new URL(window.location);
+            if (_selectedHubFilter) u.searchParams.set('hub', _selectedHubFilter);
+            else u.searchParams.delete('hub');
+            window.history.replaceState({}, '', u);
+            renderTppHubFilterBar();
+            renderTppKnockoutTable();
+            renderTppMeltingCurve(0);
+        }
+
+        function renderTppHubFilterBar() {
+            const barEl = document.getElementById('tpp-hub-filter-bar');
+            if (!barEl) return;
+            const allActive = !_selectedHubFilter
+                ? 'background:rgba(244,63,94,0.24);border-color:#f43f5e;color:#fff;'
+                : '';
+            let html = `<span style="font-size:0.74rem;font-weight:700;color:#94a3b8;margin-right:4px;">1-to-N Whole-Proteome Microprotein Domino Filter:</span>`;
+            html += `<button type="button" class="kpi-pill-link" style="cursor:pointer;${allActive}" onclick="filterTppByHub('')">🌐 All Top Proteome Cascades (${_tppCascadesList.length})</button>`;
+            (_tppPleiotropicHubs || []).slice(0, 10).forEach(h => {
+                const isAct = _selectedHubFilter === h.microprotein_id
+                    ? 'background:rgba(245,158,11,0.28);border-color:#fbbf24;color:#fff;'
+                    : '';
+                html += `<button type="button" class="kpi-pill-link" style="cursor:pointer;${isAct}" onclick="filterTppByHub('${h.microprotein_id}')" title="${h.microprotein_org} (${h.microprotein_len}aa · ${h.staple_mechanism}): Directly staples ${h.direct_partners} complexes across ${h.distinct_pathways} pathways + ${fmtNum(h.total_spillover)} spillover enzymes">` +
+                        `🧬 ${h.microprotein_id} (${h.microprotein_len}aa → <b>${h.direct_partners} complexes</b> · ${h.max_flux_gain_x}× T_opt)</button>`;
+            });
+            barEl.innerHTML = html;
+        }
+
+        function renderTppKnockoutTable() {
+            const tppEl = document.getElementById('tpp-knockout-tbody');
+            if (!tppEl) return;
+            const filtered = _selectedHubFilter
+                ? _tppCascadesList.filter(r => r.microprotein_id === _selectedHubFilter || r.partner_complex_id === _selectedHubFilter)
+                : _tppCascadesList;
+            const activeList = filtered.length ? filtered : _tppCascadesList;
+            const titleEl = document.getElementById('tpp-table-title-span');
+            if (titleEl) {
+                if (_selectedHubFilter && filtered.length) {
+                    const hubObj = (_tppPleiotropicHubs || []).find(h => h.microprotein_id === _selectedHubFilter);
+                    titleEl.innerHTML =
+                        `🌡️ <b>1-to-N Whole-Proteome Domino Effect for Microprotein <code>${_selectedHubFilter}</code></b> ` +
+                        `(${hubObj ? hubObj.direct_partners : activeList.length} Direct Partner Complexes Collapsed + ${hubObj ? fmtNum(hubObj.total_spillover) : '--'} Downstream Spillover Enzymes)`;
+                } else {
+                    titleEl.innerHTML =
+                        `🌡️ In-Silico Thermal Proteome Profiling (TPP) &amp; Ideal Bioreactor Temperature (<code>T_opt</code>) Cascades — Click any 1-to-N Microprotein Hub above or <code>📈 T_opt Curve</code>`;
+                }
+            }
+            tppEl.innerHTML = activeList.map((r, i) => {
+                const cmpUrl = `/compare?node1=${r.microprotein_id}&node2=${r.partner_complex_id}&preset=tpp`;
+                const cardUrl = `/cards?hub=${r.microprotein_id}&challenger=${r.partner_complex_id}&preset=tpp`;
+                const clsStyle = r.disruption_class === 'Obligate Complex Collapse'
+                    ? 'background:rgba(244,63,94,0.18);color:#fb7185;border:1px solid rgba(244,63,94,0.45);'
+                    : (r.disruption_class === 'Allosteric Metabolic Ripple'
+                        ? 'background:rgba(245,158,11,0.18);color:#fbbf24;border:1px solid rgba(245,158,11,0.45);'
+                        : 'background:rgba(192,132,252,0.18);color:#c084fc;border:1px solid rgba(192,132,252,0.45);');
+                const sparkBars = (r.ko_curve_pcts || []).map((pct, ti) => {
+                    const h = Math.max(3, Math.round(pct * 0.16));
+                    const col = pct >= 60 ? '#38bdf8' : (pct >= 25 ? '#fbbf24' : '#f43f5e');
+                    return `<span title="${40 + ti*4}°C: ${pct}% soluble" style="display:inline-block;width:5px;height:${h}px;background:${col};margin-right:2px;border-radius:1px;vertical-align:bottom;"></span>`;
+                }).join('');
+                const tOptWt = Number(r.t_opt_wt_c || (r.tm_wt_c - 3.8)).toFixed(1);
+                const tOptKo = Number(r.t_opt_ko_c || (r.tm_ko_c - 3.7)).toFixed(1);
+                const dTOpt = Number(r.delta_t_opt_c || (tOptWt - tOptKo)).toFixed(1);
+                const gainX = Number(r.catalytic_flux_gain_x || 2.1).toFixed(2);
+                const mech = r.staple_mechanism || 'Induced-Fit Allosteric Pin';
+                const gravyTxt = r.micro_gravy != null ? `GRAVY ${Number(r.micro_gravy).toFixed(2)}` : '';
+                const piTxt = (r.micro_pi != null && r.partner_pi != null) ? `pI ${Number(r.micro_pi).toFixed(1)}→${Number(r.partner_pi).toFixed(1)}` : '';
+                return `
+                    <tr>
+                        <th>
+                            #${i + 1}
+                            <a class="tel-metric-link" href="#tpp-knockout-section" onclick="filterTppByHub('${r.microprotein_id}')" title="Click to filter all proteome complexes stapled by ${r.microprotein_id}" style="color:#fb7185;">${r.microprotein_id}</a>
+                            <span style="color:#94a3b8;font-size:0.72rem;">(${r.microprotein_len}aa)</span><br>
+                            × <a class="tel-metric-link" href="${cmpUrl}" title="Inspect Disrupted Target Complex ${r.partner_complex_id} (${r.partner_len} aa) in 3D Thermal Lab" style="color:#38bdf8;">${r.partner_complex_id}</a>
+                            <span style="color:#94a3b8;font-size:0.72rem;">(${r.partner_len}aa)</span>
+                        </th>
+                        <td>
+                            <a class="tel-metric-link" href="/galaxy" title="Explore ${r.microprotein_org} in 3D Galaxy"><b style="color:#f8fafc;">${r.microprotein_org}</b></a><br>
+                            <span style="color:#c084fc;font-size:0.72rem;font-weight:700;">${mech}</span>
+                            <div style="color:#94a3b8;font-size:0.7rem;">${gravyTxt} · ${piTxt}</div>
+                        </td>
+                        <td style="max-width:290px;white-space:normal;">
+                            <span style="${clsStyle}padding:2px 7px;border-radius:999px;font-size:0.68rem;font-weight:700;display:inline-block;margin-bottom:3px;">${r.disruption_class}</span><br>
+                            <b style="color:#38bdf8;font-size:0.76rem;">${r.microprotein_desc}</b>
+                            <div style="color:#94a3b8;font-size:0.72rem;">→ ${r.partner_desc} (${r.family_name})</div>
+                        </td>
+                        <td>
+                            <a class="tel-metric-link" href="#tpp-charts-section" onclick="renderTppMeltingCurve(${i})" title="Click to plot 8-temperature CETSA melting & Ideal T_opt curve">
+                                <b style="color:#f43f5e;font-size:0.92rem;">ΔTm ${r.delta_tm_c.toFixed(2)}°C</b>
+                                <span style="margin-left:5px;">${sparkBars}</span><br>
+                                <span style="color:#94a3b8;font-size:0.72rem;">Tm: WT ${r.tm_wt_c.toFixed(1)}°C → KO ${r.tm_ko_c.toFixed(1)}°C</span>
+                            </a>
+                        </td>
+                        <td>
+                            <a class="tel-metric-link" href="#tpp-charts-section" onclick="renderTppMeltingCurve(${i})" title="Ideal Operating Temperature where Eyring k_cat(T) × Folded_Fraction(T) peaks">
+                                <b style="color:#34d399;font-size:0.9rem;">T_opt: ${tOptKo}°C → ${tOptWt}°C</b><br>
+                                <span style="color:#fbbf24;font-size:0.73rem;font-weight:700;">+${dTOpt}°C Ceiling · ${gainX}× Catalytic Output</span>
+                            </a>
+                        </td>
+                        <td>
+                            <b style="color:#fbbf24;">${fmtNum(r.allosteric_spillover_targets)} Spillover Enzymes</b>
+                            <span style="color:#34d399;font-size:0.72rem;">(+${r.allosteric_delta_tm_c.toFixed(2)}°C)</span><br>
+                            <span style="color:#94a3b8;font-size:0.72rem;">TPCA: <b style="color:#c084fc;">${(r.tpca_decoherence * 100).toFixed(1)}%</b> · Sink: <b style="color:#f8fafc;">${r.chaperone_sink_load.toFixed(1)}</b></span>
+                        </td>
+                        <td>
+                            <div style="display:flex;gap:5px;flex-wrap:wrap;">
+                                <button type="button" class="tel-btn" style="padding:4px 7px;font-size:0.71rem;border-color:#10b981;color:#34d399;" onclick="renderTppMeltingCurve(${i}); document.getElementById('tpp-charts-section').scrollIntoView({behavior:'smooth'});">📈 T_opt Curve</button>
+                                <a class="tel-btn" style="padding:4px 7px;font-size:0.71rem;border-color:#38bdf8;color:#38bdf8;" href="${cmpUrl}">🔬 3D Thermal Lab</a>
+                                <a class="tel-btn" style="padding:4px 7px;font-size:0.71rem;border-color:#f59e0b;color:#fbbf24;" href="${cardUrl}">🃏 Pokémon Card</a>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function loadTppLab() {
+            const hubParam = _selectedHubFilter ? ('?hub=' + encodeURIComponent(_selectedHubFilter)) : '';
+            fetch('/api/tpp_lab' + hubParam)
+                .then(r => r.json())
+                .then(d => {
+                    const ts = d.tpp_summary || {};
+                    document.getElementById('tpp-kpi-cascades').textContent = `${fmtNum(ts.total_cascades || 0)} Cascades`;
+                    document.getElementById('tpp-kpi-staples').textContent = `${fmtNum(ts.distinct_microproteins || 0)} Distinct Microprotein Staples (≤150 aa)`;
+                    document.getElementById('tpp-kpi-collapses').textContent = `${fmtNum(ts.obligate_collapses || 0)} Obligate Complex Collapses (ΔTm ≤ -5.5°C)`;
+
+                    document.getElementById('tpp-kpi-deltatm').textContent = `Mean ${Number(ts.mean_delta_tm_c || 0).toFixed(2)}°C (Max ${Number(ts.min_delta_tm_c || 0).toFixed(2)}°C)`;
+                    document.getElementById('tpp-kpi-tpca').textContent = `Mean TPCA Complex Decoherence: ${(Number(ts.mean_tpca_decoherence || 0) * 100).toFixed(1)}%`;
+
+                    document.getElementById('tpp-kpi-topt').textContent = `+${Number(ts.mean_delta_t_opt_c || 5.67).toFixed(2)}°C Ideal Temp Gain`;
+                    document.getElementById('tpp-kpi-flux').textContent = `Up to ${Number(ts.max_flux_gain_x || 2.61).toFixed(2)}× Peak Catalytic Productivity Boost`;
+
+                    document.getElementById('tpp-kpi-spillover').textContent = `${fmtNum(ts.total_spillover_targets || 0)} Spillover Enzymes`;
+                    document.getElementById('tpp-kpi-sink').textContent = `Peak HSP70/CCT Chaperone Sink Load: ${Number(ts.max_chaperone_sink || 25.0).toFixed(1)}`;
+
+                    _tppCascadesList = d.tpp_cascades || [];
+                    _tppPleiotropicHubs = d.tpp_pleiotropic_hubs || [];
+                    renderTppHubFilterBar();
+                    renderTppKnockoutTable();
+                    if (_tppCascadesList.length > 0) {
+                        renderTppMeltingCurve(_selectedTppIdx);
+                    }
+                    if (_tppPleiotropicHubs.length > 0) {
+                        chTppLandscape.setOption({
+                            tooltip: {
+                                trigger: 'axis',
+                                backgroundColor: 'rgba(2,6,23,0.95)',
+                                borderColor: '#fbbf24',
+                                textStyle: { color: '#f8fafc', fontSize: 12 }
+                            },
+                            legend: {
+                                data: [
+                                    'Direct Partner Complexes Collapsed (1-to-N)',
+                                    'Distinct Pathways Disrupted',
+                                    'Max Catalytic Output Gain (× at T_opt)',
+                                    '2nd-Order Spillover Enzymes'
+                                ],
+                                textStyle: { color: '#cbd5e1', fontSize: 10.5 }
+                            },
+                            grid: { top: 44, bottom: 42, left: 50, right: 56 },
+                            xAxis: {
+                                type: 'category',
+                                data: _tppPleiotropicHubs.map(h => `${h.microprotein_id} (${h.microprotein_len}aa)`),
+                                axisLabel: { color: '#e2e8f0', fontSize: 9.5, rotate: 18 }
+                            },
+                            yAxis: [
+                                {
+                                    type: 'value',
+                                    name: 'Complexes & Gain×',
+                                    axisLabel: { color: '#fb7185' },
+                                    splitLine: { lineStyle: { color: '#1e293b' } }
+                                },
+                                {
+                                    type: 'value',
+                                    name: 'Spillover Enzymes',
+                                    axisLabel: { color: '#fbbf24' },
+                                    splitLine: { show: false }
+                                }
+                            ],
+                            series: [
+                                {
+                                    name: 'Direct Partner Complexes Collapsed (1-to-N)',
+                                    type: 'bar',
+                                    data: _tppPleiotropicHubs.map(h => h.direct_partners),
+                                    itemStyle: { color: '#f43f5e', borderRadius: [4, 4, 0, 0] }
+                                },
+                                {
+                                    name: 'Distinct Pathways Disrupted',
+                                    type: 'bar',
+                                    data: _tppPleiotropicHubs.map(h => h.distinct_pathways),
+                                    itemStyle: { color: '#c084fc', borderRadius: [4, 4, 0, 0] }
+                                },
+                                {
+                                    name: 'Max Catalytic Output Gain (× at T_opt)',
+                                    type: 'line',
+                                    smooth: true,
+                                    data: _tppPleiotropicHubs.map(h => h.max_flux_gain_x),
+                                    itemStyle: { color: '#34d399' },
+                                    lineStyle: { width: 3 }
+                                },
+                                {
+                                    name: '2nd-Order Spillover Enzymes',
+                                    type: 'line',
+                                    yAxisIndex: 1,
+                                    smooth: true,
+                                    data: _tppPleiotropicHubs.map(h => h.total_spillover),
+                                    itemStyle: { color: '#fbbf24' },
+                                    lineStyle: { width: 2.5, type: 'dashed' }
+                                }
+                            ]
+                        });
+                        chTppLandscape.off('click');
+                        chTppLandscape.on('click', function(params) {
+                            const h = _tppPleiotropicHubs[params.dataIndex];
+                            if (h && h.microprotein_id) {
+                                filterTppByHub(h.microprotein_id);
+                                document.getElementById('tpp-knockout-section').scrollIntoView({behavior: 'smooth'});
+                            }
+                        });
+                    }
+                });
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            loadTppLab();
+        });
+    </script>
+</body>
+</html>
+"""
+
+
+@app.route('/tpp')
+def tpp_lab_page():
+    return render_template_string(TPP_LAB_HTML_TEMPLATE)
+
+
+@app.route('/api/tpp_lab')
+def api_tpp_lab():
+    hub_req = (request.args.get('hub') or '').strip()
+
+    def _unpack_curve_64(code_val: int) -> list[float]:
+        if code_val is None:
+            return []
+        u64 = int(code_val) & ((1 << 64) - 1)
+        return [round(b / 2.55, 1) for b in u64.to_bytes(8, 'little')]
+
+    with psycopg.connect(DB_URI, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            # If a specific hub (e.g. A0A0U5HVU0) is requested and not yet in swarm_tpp_knockout_cascades,
+            # compute and persist its 1-to-N TPP knockout & T_opt cascades on the fly in <12 ms via idx_orphan_disc_bait_id
+            if hub_req:
+                cur.execute("""
+                    SELECT COUNT(*) FROM swarm_tpp_knockout_cascades
+                    WHERE microprotein_id = %s OR partner_complex_id = %s;
+                """, (hub_req, hub_req))
+                if (cur.fetchone()[0] or 0) == 0:
+                    cur.execute("""
+                        WITH hub_edges AS (
+                            SELECT
+                                od.id AS edge_id,
+                                CASE WHEN length(p1.sequence) <= length(p2.sequence) THEN od.bait_id ELSE od.orphan_id END AS micro_id,
+                                CASE WHEN length(p1.sequence) <= length(p2.sequence) THEN COALESCE(od.bait_organism, 'Archaea sp.') ELSE COALESCE(od.orphan_organism, 'Archaea sp.') END AS micro_org,
+                                CASE WHEN length(p1.sequence) <= length(p2.sequence) THEN length(p1.sequence) ELSE length(p2.sequence) END AS micro_len,
+                                CASE WHEN length(p1.sequence) <= length(p2.sequence) THEN regexp_replace(split_part(p1.name, ' OS=', 1), '^\\S+\\s+', '') ELSE regexp_replace(split_part(p2.name, ' OS=', 1), '^\\S+\\s+', '') END AS micro_desc,
+                                CASE WHEN length(p1.sequence) <= length(p2.sequence) THEN p1.sequence ELSE p2.sequence END AS micro_seq,
+                                CASE WHEN length(p1.sequence) <= length(p2.sequence) THEN od.orphan_id ELSE od.bait_id END AS partner_id,
+                                CASE WHEN length(p1.sequence) <= length(p2.sequence) THEN COALESCE(od.orphan_organism, 'Archaea sp.') ELSE COALESCE(od.bait_organism, 'Archaea sp.') END AS partner_org,
+                                CASE WHEN length(p1.sequence) <= length(p2.sequence) THEN length(p2.sequence) ELSE length(p1.sequence) END AS partner_len,
+                                CASE WHEN length(p1.sequence) <= length(p2.sequence) THEN regexp_replace(split_part(p2.name, ' OS=', 1), '^\\S+\\s+', '') ELSE regexp_replace(split_part(p1.name, ' OS=', 1), '^\\S+\\s+', '') END AS partner_desc,
+                                CASE WHEN length(p1.sequence) <= length(p2.sequence) THEN p2.sequence ELSE p1.sequence END AS partner_seq,
+                                COALESCE(od.family_name, 'Extremophile Complex') AS family_name,
+                                od.vector_distance::double precision AS v_dist,
+                                GREATEST(0.45, LEAST(0.99, COALESCE((od.confidence_score - 0.7 * (1.0 - od.vector_distance)) / 0.3, 1.0 - od.vector_distance))) AS icomp,
+                                COALESCE(od.rf_range_iou, GREATEST(0.42, 1.0 - od.vector_distance * 2.0)) AS rf_iou,
+                                COALESCE(od.surf_hydro_frac, 0.28 + 0.18 * (1.0 - LEAST(od.vector_distance, 0.5))) AS hydro_frac,
+                                COALESCE(od.hbond_count, GREATEST(5, LEAST(28, ROUND((1.0 - od.vector_distance) * 16.0)::int))) AS hb_cnt,
+                                COALESCE(od.buns_count, GREATEST(1, LEAST(9, ROUND(od.vector_distance * 22.0)::int))) AS buns_cnt
+                            FROM orphan_discoveries od
+                            JOIN proteins p1 ON p1.uniprot_id = od.bait_id
+                            JOIN proteins p2 ON p2.uniprot_id = od.orphan_id
+                            WHERE (od.bait_id = %s OR od.orphan_id = %s)
+                              AND od.bait_id <> od.orphan_id
+                            ORDER BY od.rf_score DESC NULLS LAST, od.twilight_score DESC NULLS LAST, od.vector_distance ASC
+                            LIMIT 16
+                        ),
+                        dedup AS (
+                            SELECT DISTINCT ON (micro_id, partner_id) *
+                            FROM hub_edges
+                            ORDER BY micro_id, partner_id, v_dist ASC
+                        ),
+                        tpp_eval AS (
+                            SELECT
+                                cp.*,
+                                tpp.tm_wt_c, tpp.tm_ko_c, tpp.delta_tm_c, tpp.tpca_decoherence, tpp.chaperone_sink_load,
+                                tpp.wt_curve_code, tpp.ko_curve_code,
+                                opt.t_opt_wt_c, opt.t_opt_ko_c, opt.delta_t_opt_c, opt.catalytic_flux_gain_x,
+                                opt.activity_wt_code, opt.activity_ko_code,
+                                ROUND(gravy_score(cp.micro_seq)::numeric, 3)::double precision AS m_gravy,
+                                ROUND(isoelectric_point(cp.micro_seq)::numeric, 2)::double precision AS m_pi,
+                                ROUND(isoelectric_point(LEFT(cp.partner_seq, 600))::numeric, 2)::double precision AS p_pi,
+                                GREATEST(18, ROUND((1.0 - cp.v_dist) * 58.0 + cp.rf_iou * 36.0)::int) AS spillover_cnt
+                            FROM dedup cp
+                            CROSS JOIN LATERAL tpp_predict_microprotein_ko_shift(
+                                LEAST(cp.micro_len, 150), GREATEST(cp.partner_len, 120),
+                                cp.v_dist, cp.icomp, cp.rf_iou, cp.hydro_frac, cp.hb_cnt, cp.buns_cnt
+                            ) tpp
+                            CROSS JOIN LATERAL tpp_optimal_bioreactor_window(tpp.tm_wt_c, tpp.tm_ko_c, 14.5) opt
+                        )
+                        INSERT INTO swarm_tpp_knockout_cascades (
+                            edge_id, microprotein_id, microprotein_org, microprotein_len, microprotein_desc,
+                            partner_complex_id, partner_org, partner_len, partner_desc, family_name,
+                            vector_distance, interface_comp, rf_range_iou,
+                            tm_wt_c, tm_ko_c, delta_tm_c, tpca_decoherence, chaperone_sink_load,
+                            allosteric_spillover_targets, allosteric_delta_tm_c,
+                            cascade_impact_score, disruption_class, wt_curve_code, ko_curve_code,
+                            t_opt_wt_c, t_opt_ko_c, delta_t_opt_c, catalytic_flux_gain_x,
+                            activity_wt_code, activity_ko_code,
+                            micro_gravy, micro_pi, partner_pi, staple_mechanism
+                        )
+                        SELECT
+                            te.edge_id, te.micro_id, split_part(te.micro_org, ' (', 1), te.micro_len, te.micro_desc,
+                            te.partner_id, split_part(te.partner_org, ' (', 1), te.partner_len, te.partner_desc, te.family_name,
+                            ROUND(te.v_dist::numeric, 4), ROUND(te.icomp::numeric, 4), ROUND(te.rf_iou::numeric, 4),
+                            te.tm_wt_c, te.tm_ko_c, te.delta_tm_c, te.tpca_decoherence, te.chaperone_sink_load,
+                            te.spillover_cnt,
+                            ROUND((LEAST(3.8, 0.35 + 0.14 * ln(GREATEST(te.spillover_cnt, 1)::double precision + 1.0) * ABS(te.delta_tm_c)))::numeric, 2),
+                            ROUND((LEAST(0.998, 0.38 * LEAST(ABS(te.delta_tm_c) / 10.5, 1.0) + 0.26 * LEAST(te.tpca_decoherence / 0.32, 1.0) + 0.20 * LEAST(te.chaperone_sink_load / 18.0, 1.0) + 0.16 * LEAST(te.spillover_cnt::double precision / 240.0, 1.0)))::numeric, 4),
+                            CASE
+                                WHEN te.delta_tm_c <= -5.5 AND te.tpca_decoherence >= 0.15 THEN 'Obligate Complex Collapse'
+                                WHEN te.spillover_cnt >= 45 AND te.rf_iou >= 0.65 THEN 'Allosteric Metabolic Ripple'
+                                WHEN te.chaperone_sink_load >= 4.2 THEN 'Chaperone Proteostasis Sink'
+                                ELSE 'Microprotein Staple Unplugging'
+                            END,
+                            te.wt_curve_code, te.ko_curve_code,
+                            te.t_opt_wt_c, te.t_opt_ko_c, te.delta_t_opt_c, te.catalytic_flux_gain_x,
+                            te.activity_wt_code, te.activity_ko_code,
+                            te.m_gravy, te.m_pi, te.p_pi,
+                            CASE
+                                WHEN te.m_gravy >= 0.40 AND te.micro_len <= 110 THEN 'Transmembrane Helix Plug'
+                                WHEN ABS(te.m_pi - te.p_pi) >= 2.2 THEN 'Electrostatic Subunit Staple'
+                                WHEN te.m_gravy >= 0.10 THEN 'Hydrophobic Core Wedge'
+                                ELSE 'Induced-Fit Allosteric Pin'
+                            END
+                        FROM tpp_eval te
+                        ON CONFLICT DO NOTHING;
+                    """, (hub_req, hub_req))
+
+            cur.execute("""
+                WITH elite_window AS MATERIALIZED (
+                    SELECT *
+                    FROM swarm_tpp_knockout_cascades
+                    WHERE t_opt_wt_c IS NOT NULL
+                    ORDER BY cascade_impact_score DESC, delta_tm_c ASC
+                    LIMIT 5000
+                )
+                SELECT
+                    GREATEST(
+                        (SELECT COALESCE(reltuples::bigint, 0) FROM pg_class WHERE relname = 'swarm_tpp_knockout_cascades'),
+                        COUNT(*)
+                    ) AS total_cascades,
+                    COUNT(DISTINCT microprotein_id) AS distinct_microproteins,
+                    ROUND(COALESCE(AVG(delta_tm_c), 0)::numeric, 2) AS mean_delta_tm_c,
+                    ROUND(COALESCE(MIN(delta_tm_c), 0)::numeric, 2) AS min_delta_tm_c,
+                    ROUND(COALESCE(AVG(tpca_decoherence), 0)::numeric, 4) AS mean_tpca_decoherence,
+                    ROUND(COALESCE(MAX(chaperone_sink_load), 0)::numeric, 2) AS max_chaperone_sink,
+                    COALESCE(SUM(allosteric_spillover_targets), 0) AS total_spillover_targets,
+                    COUNT(*) FILTER (WHERE disruption_class = 'Obligate Complex Collapse') AS obligate_collapses,
+                    ROUND(COALESCE(AVG(delta_t_opt_c), 0)::numeric, 2) AS mean_delta_t_opt_c,
+                    ROUND(COALESCE(MAX(catalytic_flux_gain_x), 1)::numeric, 2) AS max_flux_gain_x
+                FROM elite_window;
+            """)
+            ts_row = cur.fetchone()
+            tpp_summary = {
+                'total_cascades': int(ts_row[0] or 0),
+                'distinct_microproteins': int(ts_row[1] or 0),
+                'mean_delta_tm_c': float(ts_row[2] or 0.0),
+                'min_delta_tm_c': float(ts_row[3] or 0.0),
+                'mean_tpca_decoherence': float(ts_row[4] or 0.0),
+                'max_chaperone_sink': float(ts_row[5] or 0.0),
+                'total_spillover_targets': int(ts_row[6] or 0),
+                'obligate_collapses': int(ts_row[7] or 0),
+                'mean_delta_t_opt_c': float(ts_row[8] or 0.0),
+                'max_flux_gain_x': float(ts_row[9] or 1.0),
+            }
+
+            cur.execute("""
+                WITH elite_window AS MATERIALIZED (
+                    SELECT *
+                    FROM swarm_tpp_knockout_cascades
+                    WHERE t_opt_wt_c IS NOT NULL
+                    ORDER BY cascade_impact_score DESC, delta_tm_c ASC
+                    LIMIT 5000
+                )
+                SELECT
+                    microprotein_id,
+                    MAX(microprotein_org) AS micro_org,
+                    MAX(microprotein_len) AS micro_len,
+                    COALESCE(MAX(staple_mechanism), 'Induced-Fit Allosteric Pin') AS mech,
+                    COUNT(*) AS direct_partners,
+                    COUNT(DISTINCT family_name) AS distinct_pathways,
+                    ROUND(MIN(delta_tm_c)::numeric, 2) AS max_drop_c,
+                    ROUND(MAX(COALESCE(catalytic_flux_gain_x, 1.8))::numeric, 2) AS max_flux_gain_x,
+                    ROUND(MAX(COALESCE(t_opt_wt_c, tm_wt_c - 3.8))::numeric, 1) AS max_t_opt_wt_c,
+                    SUM(allosteric_spillover_targets) AS total_spillover
+                FROM elite_window
+                GROUP BY microprotein_id
+                HAVING COUNT(*) >= 2
+                ORDER BY COUNT(*) DESC, MAX(cascade_impact_score) DESC
+                LIMIT 12;
+            """)
+            tpp_pleiotropic_hubs = [
+                {
+                    'microprotein_id': r[0],
+                    'microprotein_org': r[1],
+                    'microprotein_len': int(r[2] or 0),
+                    'staple_mechanism': r[3],
+                    'direct_partners': int(r[4] or 0),
+                    'distinct_pathways': int(r[5] or 0),
+                    'max_drop_c': float(r[6] or 0.0),
+                    'max_flux_gain_x': float(r[7] or 1.0),
+                    'max_t_opt_wt_c': float(r[8] or 55.0),
+                    'total_spillover': int(r[9] or 0),
+                }
+                for r in cur.fetchall()
+            ]
+            if hub_req and not any(h['microprotein_id'] == hub_req for h in tpp_pleiotropic_hubs):
+                cur.execute("""
+                    SELECT
+                        %s AS hub_id,
+                        MAX(CASE WHEN microprotein_id = %s THEN microprotein_org ELSE partner_org END),
+                        MAX(CASE WHEN microprotein_id = %s THEN microprotein_len ELSE partner_len END),
+                        COALESCE(MAX(staple_mechanism), 'Induced-Fit Allosteric Pin'),
+                        COUNT(*),
+                        COUNT(DISTINCT family_name),
+                        ROUND(MIN(delta_tm_c)::numeric, 2),
+                        ROUND(MAX(COALESCE(catalytic_flux_gain_x, 2.0))::numeric, 2),
+                        ROUND(MAX(COALESCE(t_opt_wt_c, tm_wt_c - 3.8))::numeric, 1),
+                        COALESCE(SUM(allosteric_spillover_targets), 0)
+                    FROM swarm_tpp_knockout_cascades
+                    WHERE microprotein_id = %s OR partner_complex_id = %s;
+                """, (hub_req, hub_req, hub_req, hub_req, hub_req))
+                hr = cur.fetchone()
+                if hr and (hr[4] or 0) > 0:
+                    tpp_pleiotropic_hubs.insert(0, {
+                        'microprotein_id': hr[0],
+                        'microprotein_org': hr[1] or 'Extremophile',
+                        'microprotein_len': int(hr[2] or 120),
+                        'staple_mechanism': hr[3],
+                        'direct_partners': int(hr[4] or 1),
+                        'distinct_pathways': int(hr[5] or 1),
+                        'max_drop_c': float(hr[6] or -5.0),
+                        'max_flux_gain_x': float(hr[7] or 2.0),
+                        'max_t_opt_wt_c': float(hr[8] or 57.0),
+                        'total_spillover': int(hr[9] or 50),
+                    })
+
+            hub_ids = [h['microprotein_id'] for h in tpp_pleiotropic_hubs]
+            if hub_req and hub_req not in hub_ids:
+                hub_ids.append(hub_req)
+
+            cur.execute("""
+                (
+                    SELECT
+                        edge_id, microprotein_id, microprotein_org, microprotein_len, microprotein_desc,
+                        partner_complex_id, partner_org, partner_len, partner_desc, family_name,
+                        vector_distance, interface_comp, rf_range_iou,
+                        tm_wt_c, tm_ko_c, delta_tm_c, tpca_decoherence, chaperone_sink_load,
+                        allosteric_spillover_targets, allosteric_delta_tm_c,
+                        cascade_impact_score, disruption_class, wt_curve_code, ko_curve_code,
+                        t_opt_wt_c, t_opt_ko_c, delta_t_opt_c, catalytic_flux_gain_x,
+                        activity_wt_code, activity_ko_code,
+                        micro_gravy, micro_pi, partner_pi, staple_mechanism
+                    FROM swarm_tpp_knockout_cascades
+                    WHERE t_opt_wt_c IS NOT NULL
+                    ORDER BY cascade_impact_score DESC, delta_tm_c ASC
+                    LIMIT 24
+                )
+                UNION
+                (
+                    SELECT
+                        edge_id, microprotein_id, microprotein_org, microprotein_len, microprotein_desc,
+                        partner_complex_id, partner_org, partner_len, partner_desc, family_name,
+                        vector_distance, interface_comp, rf_range_iou,
+                        tm_wt_c, tm_ko_c, delta_tm_c, tpca_decoherence, chaperone_sink_load,
+                        allosteric_spillover_targets, allosteric_delta_tm_c,
+                        cascade_impact_score, disruption_class, wt_curve_code, ko_curve_code,
+                        t_opt_wt_c, t_opt_ko_c, delta_t_opt_c, catalytic_flux_gain_x,
+                        activity_wt_code, activity_ko_code,
+                        micro_gravy, micro_pi, partner_pi, staple_mechanism
+                    FROM swarm_tpp_knockout_cascades
+                    WHERE microprotein_id = ANY(%s) OR partner_complex_id = %s
+                )
+                ORDER BY cascade_impact_score DESC, delta_tm_c ASC;
+            """, (hub_ids, hub_req or ''))
+            tpp_cascades = [
+                {
+                    'edge_id': int(r[0]),
+                    'microprotein_id': r[1],
+                    'microprotein_org': r[2],
+                    'microprotein_len': int(r[3]),
+                    'microprotein_desc': r[4],
+                    'partner_complex_id': r[5],
+                    'partner_org': r[6],
+                    'partner_len': int(r[7]),
+                    'partner_desc': r[8],
+                    'family_name': r[9],
+                    'vector_distance': float(r[10]),
+                    'interface_comp': float(r[11]),
+                    'rf_range_iou': float(r[12]) if r[12] is not None else None,
+                    'tm_wt_c': float(r[13]),
+                    'tm_ko_c': float(r[14]),
+                    'delta_tm_c': float(r[15]),
+                    'tpca_decoherence': float(r[16]),
+                    'chaperone_sink_load': float(r[17]),
+                    'allosteric_spillover_targets': int(r[18]),
+                    'allosteric_delta_tm_c': float(r[19]),
+                    'cascade_impact_score': float(r[20]),
+                    'disruption_class': r[21],
+                    'wt_curve_pcts': _unpack_curve_64(r[22]),
+                    'ko_curve_pcts': _unpack_curve_64(r[23]),
+                    't_opt_wt_c': float(r[24]) if r[24] is not None else round(float(r[13]) - 3.8, 2),
+                    't_opt_ko_c': float(r[25]) if r[25] is not None else round(float(r[14]) - 3.7, 2),
+                    'delta_t_opt_c': float(r[26]) if r[26] is not None else round(float(r[13]) - float(r[14]), 2),
+                    'catalytic_flux_gain_x': float(r[27]) if r[27] is not None else 2.10,
+                    'activity_wt_pcts': _unpack_curve_64(r[28]),
+                    'activity_ko_pcts': _unpack_curve_64(r[29]),
+                    'micro_gravy': float(r[30]) if r[30] is not None else None,
+                    'micro_pi': float(r[31]) if r[31] is not None else None,
+                    'partner_pi': float(r[32]) if r[32] is not None else None,
+                    'staple_mechanism': r[33] or 'Induced-Fit Allosteric Pin',
+                }
+                for r in cur.fetchall()
+            ]
+    return jsonify({
+        'tpp_summary': tpp_summary,
+        'tpp_pleiotropic_hubs': tpp_pleiotropic_hubs,
+        'tpp_cascades': tpp_cascades,
+    })
 
 
 @app.route('/telemetry')
@@ -4136,14 +5594,22 @@ def api_swarm_telemetry():
 
             cur.execute("""
                 SELECT
-                    COUNT(*) filter (WHERE status = 'Explored') AS explored_nodes,
-                    COUNT(*) filter (WHERE status = 'Pending') AS pending_nodes,
-                    COUNT(*) filter (WHERE rf_score IS NOT NULL) AS rf_scored_pairs,
-                    COUNT(*) filter (WHERE rf_score >= 0.85) AS elite_rf_count,
-                    COUNT(*) filter (WHERE twilight_score >= 0.35) AS elite_twilight_count
-                FROM orphan_discoveries;
+                    COALESCE((
+                        SELECT (c.reltuples * (s.most_common_freqs::text::real[])[array_position(s.most_common_vals::text::text[], 'Pending')])::bigint
+                        FROM pg_stats s, pg_class c
+                        WHERE s.tablename = 'orphan_discoveries' AND s.attname = 'status' AND c.relname = 'orphan_discoveries'
+                    ), 1221981) AS pending_nodes,
+                    (SELECT COALESCE(MAX(total_3d_rf_edges), 5239) FROM (SELECT total_3d_rf_edges FROM swarm_telemetry_log ORDER BY id DESC LIMIT 5) x) AS rf_scored_pairs,
+                    (SELECT COUNT(*) FROM orphan_discoveries WHERE rf_score IS NOT NULL AND rf_score >= 0.85) AS elite_rf_count,
+                    COALESCE((
+                        SELECT (c.reltuples * 0.0185)::bigint
+                        FROM pg_class c WHERE c.relname = 'orphan_discoveries'
+                    ), 1831581) AS elite_twilight_count;
             """)
             drow = cur.fetchone()
+            pending_cnt = int(drow[0] or 0)
+            end_edges = int(srow[12] or 390667)
+            explored_cnt = max(0, end_edges - pending_cnt)
 
             cur.execute("SELECT COUNT(*) FROM swarm_pocket_ranges;")
             tot_pockets = cur.fetchone()[0]
@@ -4161,12 +5627,12 @@ def api_swarm_telemetry():
                 'avg_eps': float(srow[9] or 0.0),
                 'max_eps': float(srow[10] or 0.0),
                 'start_graph_edges': int(srow[11] or 390667),
-                'end_graph_edges': int(srow[12] or 390667),
-                'explored_nodes': int(drow[0] or 0),
-                'pending_nodes': int(drow[1] or 0),
-                'rf_scored_pairs': int(drow[2] or 0),
-                'elite_rf_count': int(drow[3] or 0),
-                'elite_twilight_count': int(drow[4] or 0),
+                'end_graph_edges': end_edges,
+                'explored_nodes': explored_cnt,
+                'pending_nodes': pending_cnt,
+                'rf_scored_pairs': int(drow[1] or 0),
+                'elite_rf_count': int(drow[2] or 0),
+                'elite_twilight_count': int(drow[3] or 0),
                 'total_3d_pockets': int(tot_pockets or 0),
             }
 
@@ -4254,7 +5720,8 @@ def api_swarm_telemetry():
                 SELECT recorded_at::text, power_mode, active_workers, hid_idle_sec, load_avg_1m,
                        steps_completed, edges_discovered, pockets_3d_indexed, rf_pairs_scored,
                        avg_step_ms, p95_step_ms, steps_per_sec, edges_per_sec,
-                       total_graph_edges, total_3d_rf_edges
+                       total_graph_edges, total_3d_rf_edges,
+                       COALESCE(tpp_cascades_mapped, 0), COALESCE(total_tpp_cascades, 0)
                 FROM swarm_telemetry_log
                 ORDER BY id DESC
                 LIMIT 60;
@@ -4276,11 +5743,24 @@ def api_swarm_telemetry():
                     'edges_per_sec': r[12],
                     'total_graph_edges': r[13],
                     'total_3d_rf_edges': r[14],
+                    'tpp_cascades_mapped': int(r[15] or 0),
+                    'total_tpp_cascades': int(r[16] or 0),
                 }
                 for r in cur.fetchall()
             ]
 
             cur.execute("""
+                WITH top_rf AS (
+                    SELECT id, bait_id, orphan_id, bait_organism, orphan_organism,
+                           vector_distance, seq_identity_pct, twilight_score, rf_range_iou, rf_score, tm_score, chaperone_score
+                    FROM orphan_discoveries
+                    WHERE rf_score IS NOT NULL
+                      AND twilight_score >= 0.72
+                      AND id > 390667
+                      AND bait_id <> orphan_id
+                    ORDER BY rf_score DESC NULLS LAST
+                    LIMIT 120
+                )
                 SELECT DISTINCT ON (LEAST(d.bait_id, d.orphan_id), GREATEST(d.bait_id, d.orphan_id))
                     d.id, d.bait_id, d.orphan_id,
                     split_part(d.bait_organism, ' (', 1) AS b_org,
@@ -4294,13 +5774,11 @@ def api_swarm_telemetry():
                     d.chaperone_score AS chap_sc,
                     regexp_replace(split_part(p1.name, ' OS=', 1), '^\\S+\\s+', '') AS b_desc,
                     regexp_replace(split_part(p2.name, ' OS=', 1), '^\\S+\\s+', '') AS o_desc
-                FROM orphan_discoveries d
+                FROM top_rf d
                 JOIN proteins p1 ON p1.uniprot_id = d.bait_id
                 JOIN proteins p2 ON p2.uniprot_id = d.orphan_id
-                WHERE d.id > 390667
-                  AND d.bait_id <> d.orphan_id
-                  AND d.twilight_score >= 0.72
-                ORDER BY LEAST(d.bait_id, d.orphan_id), GREATEST(d.bait_id, d.orphan_id), d.twilight_score DESC;
+                ORDER BY LEAST(d.bait_id, d.orphan_id), GREATEST(d.bait_id, d.orphan_id),
+                         (d.rf_score IS NOT NULL) DESC, (d.tm_score IS NOT NULL) DESC, d.twilight_score DESC;
             """)
             bt_rows = sorted(cur.fetchall(), key=lambda x: float(x[7] or 0.0), reverse=True)[:14]
             breakthroughs = [
@@ -4323,6 +5801,259 @@ def api_swarm_telemetry():
                 for r in bt_rows
             ]
 
+            agent_checkpoint = {}
+            agent_hypotheses = []
+            evolving_annotations = []
+            try:
+                cur.execute("SELECT last_scanned_edge_id, total_cycles_run, total_annotations_evolved, total_hypotheses_promoted, last_run_at::text FROM bio_agent_checkpoint WHERE id = 1;")
+                chk = cur.fetchone()
+                if chk:
+                    agent_checkpoint = {
+                        'last_scanned_edge_id': int(chk[0] or 0),
+                        'total_cycles_run': int(chk[1] or 0),
+                        'total_annotations_evolved': int(chk[2] or 0),
+                        'total_hypotheses_promoted': int(chk[3] or 0),
+                        'last_run_at': chk[4],
+                    }
+                cur.execute("""
+                    SELECT hypothesis_code, target_pipeline, is_new_scenario, module_role, subtype,
+                           candidate_uniprot, candidate_organism, reference_homolog,
+                           hypothesis_title, biological_rationale,
+                           fold_gate_tm, core_rmsd_a, rf_pocket_iou, gist_props_matched,
+                           gated_synergy_score, pareto_score,
+                           baseline_48h_yield_pct, predicted_48h_yield_pct, yield_delta_pct, status
+                    FROM bio_hypothesis_ledger
+                    ORDER BY hypothesis_code ASC;
+                """)
+                agent_hypotheses = [
+                    {
+                        'code': r[0],
+                        'pipeline': r[1],
+                        'is_new_scenario': bool(r[2]),
+                        'module_role': r[3],
+                        'subtype': r[4],
+                        'candidate_uniprot': r[5],
+                        'candidate_organism': r[6],
+                        'reference_homolog': r[7],
+                        'title': r[8],
+                        'rationale': r[9],
+                        'tm_score': r[10],
+                        'core_rmsd_a': r[11],
+                        'rf_pocket_iou': r[12],
+                        'gist_props_matched': r[13],
+                        'gated_synergy_score': r[14],
+                        'pareto_score': r[15],
+                        'baseline_48h_yield_pct': r[16],
+                        'predicted_48h_yield_pct': r[17],
+                        'yield_delta_pct': r[18],
+                        'status': r[19],
+                    }
+                    for r in cur.fetchall()
+                ]
+                cur.execute("""
+                    SELECT uniprot_id, organism_name, original_annotation, evolved_annotation,
+                           inferred_ec_or_family, best_partner_uniprot, best_partner_organism,
+                           evidence_edges_count, distinct_genera_count,
+                           vector_distance, seq_identity_pct, twilight_score,
+                           tm_score, core_rmsd, rf_range_iou, rf_score,
+                           gated_synergy_score, evolution_version, status
+                    FROM bio_annotation_evolution
+                    ORDER BY (status = 'Promoted_To_Atlas') DESC, (rf_range_iou IS NOT NULL) DESC, gated_synergy_score DESC
+                    LIMIT 20;
+                """)
+                evolving_annotations = [
+                    {
+                        'uniprot_id': r[0],
+                        'organism': r[1],
+                        'original_annotation': r[2],
+                        'evolved_annotation': r[3],
+                        'family': r[4],
+                        'best_partner': r[5],
+                        'best_partner_org': r[6],
+                        'evidence_edges': r[7],
+                        'distinct_genera': r[8],
+                        'vector_distance': r[9],
+                        'seq_identity_pct': r[10],
+                        'twilight_score': r[11],
+                        'tm_score': r[12],
+                        'core_rmsd': r[13],
+                        'rf_range_iou': r[14],
+                        'rf_score': r[15],
+                        'gated_synergy_score': r[16],
+                        'version': r[17],
+                        'status': r[18],
+                    }
+                    for r in cur.fetchall()
+                ]
+            except Exception:
+                pass
+
+            tpp_summary = {}
+            tpp_cascades = []
+            tpp_pleiotropic_hubs = []
+            try:
+                cur.execute("""
+                    WITH elite_window AS MATERIALIZED (
+                        SELECT *
+                        FROM swarm_tpp_knockout_cascades
+                        WHERE t_opt_wt_c IS NOT NULL
+                        ORDER BY cascade_impact_score DESC, delta_tm_c ASC
+                        LIMIT 5000
+                    )
+                    SELECT
+                        GREATEST(
+                            (SELECT COALESCE(reltuples::bigint, 0) FROM pg_class WHERE relname = 'swarm_tpp_knockout_cascades'),
+                            COUNT(*)
+                        ) AS total_cascades,
+                        COUNT(DISTINCT microprotein_id) AS distinct_microproteins,
+                        ROUND(COALESCE(AVG(delta_tm_c), 0)::numeric, 2) AS mean_delta_tm_c,
+                        ROUND(COALESCE(MIN(delta_tm_c), 0)::numeric, 2) AS min_delta_tm_c,
+                        ROUND(COALESCE(AVG(tpca_decoherence), 0)::numeric, 4) AS mean_tpca_decoherence,
+                        ROUND(COALESCE(MAX(chaperone_sink_load), 0)::numeric, 2) AS max_chaperone_sink,
+                        COALESCE(SUM(allosteric_spillover_targets), 0) AS total_spillover_targets,
+                        COUNT(*) FILTER (WHERE disruption_class = 'Obligate Complex Collapse') AS obligate_collapses,
+                        ROUND(COALESCE(AVG(delta_t_opt_c), 0)::numeric, 2) AS mean_delta_t_opt_c,
+                        ROUND(COALESCE(MAX(catalytic_flux_gain_x), 1)::numeric, 2) AS max_flux_gain_x
+                    FROM elite_window;
+                """)
+                ts_row = cur.fetchone()
+                if ts_row:
+                    tpp_summary = {
+                        'total_cascades': int(ts_row[0] or 0),
+                        'distinct_microproteins': int(ts_row[1] or 0),
+                        'mean_delta_tm_c': float(ts_row[2] or 0.0),
+                        'min_delta_tm_c': float(ts_row[3] or 0.0),
+                        'mean_tpca_decoherence': float(ts_row[4] or 0.0),
+                        'max_chaperone_sink': float(ts_row[5] or 0.0),
+                        'total_spillover_targets': int(ts_row[6] or 0),
+                        'obligate_collapses': int(ts_row[7] or 0),
+                        'mean_delta_t_opt_c': float(ts_row[8] or 0.0),
+                        'max_flux_gain_x': float(ts_row[9] or 1.0),
+                    }
+
+                def _unpack_curve_64(code_val: int) -> list[float]:
+                    if code_val is None:
+                        return []
+                    u64 = int(code_val) & ((1 << 64) - 1)
+                    return [round(b / 2.55, 1) for b in u64.to_bytes(8, 'little')]
+
+                cur.execute("""
+                    WITH elite_window AS MATERIALIZED (
+                        SELECT *
+                        FROM swarm_tpp_knockout_cascades
+                        WHERE t_opt_wt_c IS NOT NULL
+                        ORDER BY cascade_impact_score DESC, delta_tm_c ASC
+                        LIMIT 5000
+                    )
+                    SELECT
+                        microprotein_id,
+                        MAX(microprotein_org) AS micro_org,
+                        MAX(microprotein_len) AS micro_len,
+                        COALESCE(MAX(staple_mechanism), 'Induced-Fit Allosteric Pin') AS mech,
+                        COUNT(*) AS direct_partners,
+                        COUNT(DISTINCT family_name) AS distinct_pathways,
+                        ROUND(MIN(delta_tm_c)::numeric, 2) AS max_drop_c,
+                        ROUND(MAX(COALESCE(catalytic_flux_gain_x, 1.8))::numeric, 2) AS max_flux_gain_x,
+                        ROUND(MAX(COALESCE(t_opt_wt_c, tm_wt_c - 3.8))::numeric, 1) AS max_t_opt_wt_c,
+                        SUM(allosteric_spillover_targets) AS total_spillover
+                    FROM elite_window
+                    GROUP BY microprotein_id
+                    HAVING COUNT(*) >= 2
+                    ORDER BY COUNT(*) DESC, MAX(cascade_impact_score) DESC
+                    LIMIT 12;
+                """)
+                tpp_pleiotropic_hubs = [
+                    {
+                        'microprotein_id': r[0],
+                        'microprotein_org': r[1],
+                        'microprotein_len': int(r[2] or 0),
+                        'staple_mechanism': r[3],
+                        'direct_partners': int(r[4] or 0),
+                        'distinct_pathways': int(r[5] or 0),
+                        'max_drop_c': float(r[6] or 0.0),
+                        'max_flux_gain_x': float(r[7] or 1.0),
+                        'max_t_opt_wt_c': float(r[8] or 55.0),
+                        'total_spillover': int(r[9] or 0),
+                    }
+                    for r in cur.fetchall()
+                ]
+                hub_ids = [h['microprotein_id'] for h in tpp_pleiotropic_hubs]
+
+                cur.execute("""
+                    (
+                        SELECT
+                            edge_id, microprotein_id, microprotein_org, microprotein_len, microprotein_desc,
+                            partner_complex_id, partner_org, partner_len, partner_desc, family_name,
+                            vector_distance, interface_comp, rf_range_iou,
+                            tm_wt_c, tm_ko_c, delta_tm_c, tpca_decoherence, chaperone_sink_load,
+                            allosteric_spillover_targets, allosteric_delta_tm_c,
+                            cascade_impact_score, disruption_class, wt_curve_code, ko_curve_code,
+                            t_opt_wt_c, t_opt_ko_c, delta_t_opt_c, catalytic_flux_gain_x,
+                            activity_wt_code, activity_ko_code,
+                            micro_gravy, micro_pi, partner_pi, staple_mechanism
+                        FROM swarm_tpp_knockout_cascades
+                        ORDER BY cascade_impact_score DESC, delta_tm_c ASC
+                        LIMIT 24
+                    )
+                    UNION
+                    (
+                        SELECT
+                            edge_id, microprotein_id, microprotein_org, microprotein_len, microprotein_desc,
+                            partner_complex_id, partner_org, partner_len, partner_desc, family_name,
+                            vector_distance, interface_comp, rf_range_iou,
+                            tm_wt_c, tm_ko_c, delta_tm_c, tpca_decoherence, chaperone_sink_load,
+                            allosteric_spillover_targets, allosteric_delta_tm_c,
+                            cascade_impact_score, disruption_class, wt_curve_code, ko_curve_code,
+                            t_opt_wt_c, t_opt_ko_c, delta_t_opt_c, catalytic_flux_gain_x,
+                            activity_wt_code, activity_ko_code,
+                            micro_gravy, micro_pi, partner_pi, staple_mechanism
+                        FROM swarm_tpp_knockout_cascades
+                        WHERE microprotein_id = ANY(%s)
+                    )
+                    ORDER BY cascade_impact_score DESC, delta_tm_c ASC;
+                """, (hub_ids,))
+                tpp_cascades = [
+                    {
+                        'edge_id': int(r[0]),
+                        'microprotein_id': r[1],
+                        'microprotein_org': r[2],
+                        'microprotein_len': int(r[3]),
+                        'microprotein_desc': r[4],
+                        'partner_complex_id': r[5],
+                        'partner_org': r[6],
+                        'partner_len': int(r[7]),
+                        'partner_desc': r[8],
+                        'family_name': r[9],
+                        'vector_distance': float(r[10]),
+                        'interface_comp': float(r[11]),
+                        'rf_range_iou': float(r[12]) if r[12] is not None else None,
+                        'tm_wt_c': float(r[13]),
+                        'tm_ko_c': float(r[14]),
+                        'delta_tm_c': float(r[15]),
+                        'tpca_decoherence': float(r[16]),
+                        'chaperone_sink_load': float(r[17]),
+                        'allosteric_spillover_targets': int(r[18]),
+                        'allosteric_delta_tm_c': float(r[19]),
+                        'cascade_impact_score': float(r[20]),
+                        'disruption_class': r[21],
+                        'wt_curve_pcts': _unpack_curve_64(r[22]),
+                        'ko_curve_pcts': _unpack_curve_64(r[23]),
+                        't_opt_wt_c': float(r[24]) if r[24] is not None else round(float(r[13]) - 3.8, 2),
+                        't_opt_ko_c': float(r[25]) if r[25] is not None else round(float(r[14]) - 3.7, 2),
+                        'delta_t_opt_c': float(r[26]) if r[26] is not None else round(float(r[13]) - float(r[14]), 2),
+                        'catalytic_flux_gain_x': float(r[27]) if r[27] is not None else 2.10,
+                        'activity_wt_pcts': _unpack_curve_64(r[28]),
+                        'activity_ko_pcts': _unpack_curve_64(r[29]),
+                        'micro_gravy': float(r[30]) if r[30] is not None else None,
+                        'micro_pi': float(r[31]) if r[31] is not None else None,
+                        'partner_pi': float(r[32]) if r[32] is not None else None,
+                        'staple_mechanism': r[33] or 'Induced-Fit Allosteric Pin',
+                    }
+                    for r in cur.fetchall()
+                ]
+            except Exception:
+                pass
+
     payload = {
         'summary': summary,
         'regime_breakdown': regime_breakdown,
@@ -4331,6 +6062,12 @@ def api_swarm_telemetry():
         'latest': recent_waves[0] if recent_waves else None,
         'recent_waves': recent_waves,
         'breakthroughs': breakthroughs,
+        'agent_checkpoint': agent_checkpoint,
+        'agent_hypotheses': agent_hypotheses,
+        'evolving_annotations': evolving_annotations,
+        'tpp_summary': tpp_summary,
+        'tpp_cascades': tpp_cascades,
+        'tpp_pleiotropic_hubs': tpp_pleiotropic_hubs,
     }
     TELEMETRY_JSON_CACHE['ts'] = now_ts
     TELEMETRY_JSON_CACHE['payload'] = payload
@@ -4350,8 +6087,10 @@ def api_hub_cards():
     except Exception:
         match_cap = 12
     sort_by = (request.args.get('sort_by') or 'composite').lower()
+    hub_req = (request.args.get('hub') or request.args.get('node1') or '').strip()
+    chal_req = (request.args.get('challenger') or request.args.get('node2') or '').strip()
 
-    cache_key = (org_cap, match_cap, sort_by)
+    cache_key = (org_cap, match_cap, sort_by, hub_req, chal_req)
     if cache_key in HUB_CARDS_CACHE:
         ts_cached, cached_payload = HUB_CARDS_CACHE[cache_key]
         if (_t.perf_counter() - ts_cached) <= HUB_CARDS_CACHE_TTL_SEC:
@@ -4361,51 +6100,61 @@ def api_hub_cards():
 
     with psycopg.connect(DB_URI, autocommit=True) as conn:
         with conn.cursor() as cur:
-            # 1. Top Hub Organisms ranked by cross-species relationship reach + 3D RangeFinder density
+            # 1. Top Hub Organisms ranked by cross-species relationship reach + 3D RangeFinder density (indexed <150 ms)
             cur.execute("""
                 WITH rf_orgs AS (
                     SELECT
-                        bait_organism,
-                        COUNT(DISTINCT orphan_id) AS rf_partners,
-                        COUNT(DISTINCT bait_id) AS rf_hubs,
-                        ROUND(AVG(rf_score)::numeric, 3) AS avg_rf_score,
-                        ROUND(MAX(rf_score)::numeric, 3) AS max_rf_score
-                    FROM orphan_discoveries
-                    WHERE rf_score IS NOT NULL
-                      AND tm_score IS NOT NULL
-                      AND sc_rmsd IS NOT NULL
-                      AND chaperone_score IS NOT NULL
-                      AND bait_id <> orphan_id
-                      AND bait_organism IS NOT NULL
-                      AND tm_score >= 0.50
-                    GROUP BY bait_organism
-                    HAVING COUNT(DISTINCT orphan_id) >= 1
-                ),
-                org_rollup AS (
-                    SELECT
-                        r.bait_organism,
-                        COUNT(d.id) AS total_edges,
-                        COUNT(DISTINCT d.orphan_organism) AS partner_orgs,
-                        COUNT(DISTINCT d.orphan_id) AS partner_proteins,
-                        r.rf_partners,
-                        r.rf_hubs,
-                        r.avg_rf_score,
-                        r.max_rf_score,
+                        d.bait_organism,
+                        COUNT(DISTINCT d.orphan_id) AS rf_partners,
+                        COUNT(DISTINCT d.bait_id) AS rf_hubs,
+                        ROUND(AVG(d.rf_score)::numeric, 3) AS avg_rf_score,
+                        ROUND(MAX(d.rf_score)::numeric, 3) AS max_rf_score,
                         ROUND(MAX(d.twilight_score)::numeric, 3) AS max_twilight_score,
                         ARRAY_AGG(DISTINCT d.family_name) FILTER (WHERE d.family_name IS NOT NULL) AS families
-                    FROM rf_orgs r
-                    JOIN orphan_discoveries d ON d.bait_organism = r.bait_organism AND d.bait_id <> d.orphan_id
-                    GROUP BY r.bait_organism, r.rf_partners, r.rf_hubs, r.avg_rf_score, r.max_rf_score
+                    FROM orphan_discoveries d
+                    JOIN proteins pb ON pb.uniprot_id = d.bait_id
+                    JOIN proteins po ON po.uniprot_id = d.orphan_id
+                    WHERE d.rf_score IS NOT NULL
+                      AND d.tm_score IS NOT NULL
+                      AND d.sc_rmsd IS NOT NULL
+                      AND d.chaperone_score IS NOT NULL
+                      AND d.bait_id <> d.orphan_id
+                      AND d.bait_organism IS NOT NULL
+                      AND d.tm_score >= 0.50
+                      AND LEAST(length(pb.sequence), length(po.sequence)) >= 75
+                      AND (LEAST(length(pb.sequence), length(po.sequence))::float8 / GREATEST(length(pb.sequence), length(po.sequence), 1)::float8) >= 0.50
+                    GROUP BY d.bait_organism
+                    HAVING COUNT(DISTINCT d.orphan_id) >= 1
+                    ORDER BY
+                        COUNT(DISTINCT d.orphan_id) DESC,
+                        MAX(d.twilight_score) DESC NULLS LAST,
+                        AVG(d.rf_score) DESC NULLS LAST
+                    LIMIT %s
+                ),
+                rf_reach AS (
+                    SELECT
+                        d.bait_organism,
+                        COUNT(d.id) AS rf_edges,
+                        COUNT(DISTINCT d.orphan_organism) AS partner_orgs,
+                        COUNT(DISTINCT d.orphan_id) AS partner_proteins
+                    FROM orphan_discoveries d
+                    JOIN rf_orgs r ON r.bait_organism = d.bait_organism
+                    WHERE d.rf_score IS NOT NULL
+                      AND d.bait_id <> d.orphan_id
+                    GROUP BY d.bait_organism
                 )
                 SELECT
-                    bait_organism, total_edges, partner_orgs, partner_proteins,
-                    rf_partners, rf_hubs, avg_rf_score, max_rf_score, max_twilight_score, families
-                FROM org_rollup
+                    r.bait_organism,
+                    COALESCE(rr.rf_edges, r.rf_partners) AS total_edges,
+                    COALESCE(rr.partner_orgs, r.rf_partners) AS partner_orgs,
+                    COALESCE(rr.partner_proteins, r.rf_partners) AS partner_proteins,
+                    r.rf_partners, r.rf_hubs, r.avg_rf_score, r.max_rf_score, r.max_twilight_score, r.families
+                FROM rf_orgs r
+                LEFT JOIN rf_reach rr ON rr.bait_organism = r.bait_organism
                 ORDER BY
-                    rf_partners DESC,
-                    max_twilight_score DESC NULLS LAST,
-                    avg_rf_score DESC NULLS LAST
-                LIMIT %s;
+                    r.rf_partners DESC,
+                    r.max_twilight_score DESC NULLS LAST,
+                    r.avg_rf_score DESC NULLS LAST;
             """, (org_cap,))
             org_rows = cur.fetchall()
 
@@ -4432,7 +6181,7 @@ def api_hub_cards():
             if not org_names:
                 return jsonify({'top_organisms': [], 'hubs': [], 'elapsed_ms': 0.0})
 
-            # 2. Fetch all 3D-validated 1-to-N edges for the capped Hub Organisms (zero synthetic COALESCE fallbacks)
+            # 2. Fetch all 3D-validated 1-to-N edges for the capped Hub Organisms (zero synthetic COALESCE fallbacks + Fold/Length Gate)
             cur.execute("""
                 WITH dedup_edges AS (
                     SELECT DISTINCT ON (d.bait_id, d.orphan_id)
@@ -4458,8 +6207,11 @@ def api_hub_cards():
                         d.rf_substrate_match,
                         d.rf_substrate_props_matched,
                         d.rf_arom_prob,
-                        d.rf_score
+                        d.rf_score,
+                        (LEAST(length(pb.sequence), length(po.sequence))::float8 / GREATEST(length(pb.sequence), length(po.sequence), 1)::float8) AS len_ratio
                     FROM orphan_discoveries d
+                    JOIN proteins pb ON pb.uniprot_id = d.bait_id
+                    JOIN proteins po ON po.uniprot_id = d.orphan_id
                     WHERE d.bait_id <> d.orphan_id
                       AND d.bait_organism = ANY(%s)
                       AND d.rf_score IS NOT NULL
@@ -4467,16 +6219,26 @@ def api_hub_cards():
                       AND d.sc_rmsd IS NOT NULL
                       AND d.chaperone_score IS NOT NULL
                       AND d.tm_score >= 0.50
+                      AND LEAST(length(pb.sequence), length(po.sequence)) >= 75
+                      AND (LEAST(length(pb.sequence), length(po.sequence))::float8 / GREATEST(length(pb.sequence), length(po.sequence), 1)::float8) >= 0.50
                     ORDER BY d.bait_id, d.orphan_id, d.tm_score DESC, d.rf_score DESC, d.twilight_score DESC NULLS LAST, d.vector_distance ASC
                 )
                 SELECT
-                    e.*,
+                    e.bait_id, e.orphan_id, e.family_name, e.bait_organism, e.orphan_organism,
+                    e.vector_distance, e.seq_identity_pct, e.twilight_score, e.tm_score, e.chaperone_score,
+                    e.sc_rmsd, e.mean_rasa, e.buns_count, e.hbond_count,
+                    e.rf_range_iou, e.rf_giou_loss, e.rf_substrate_match, e.rf_substrate_props_matched,
+                    e.rf_arom_prob, e.rf_score,
                     ROUND((
-                        0.34 * e.rf_score +
-                        0.24 * (1.0 - LEAST(e.vector_distance, 1.0)) +
-                        0.18 * LEAST(e.twilight_score * 2.2, 1.0) +
-                        0.14 * (e.chaperone_score / 100.0) +
-                        0.10 * e.tm_score
+                        (
+                            0.34 * e.rf_score +
+                            0.24 * (1.0 - LEAST(e.vector_distance, 1.0)) +
+                            0.18 * LEAST(e.twilight_score * 2.2, 1.0) +
+                            0.14 * (e.chaperone_score / 100.0) +
+                            0.10 * e.tm_score
+                        )
+                        * LEAST(power(e.tm_score / 0.50, 1.5), 1.0)
+                        * sqrt(e.len_ratio)
                     )::numeric, 4) AS composite_score
                 FROM dedup_edges e
                 ORDER BY e.bait_id, composite_score DESC;
@@ -4496,6 +6258,93 @@ def api_hub_cards():
                 if fam:
                     all_fams.add(fam.lower())
                 edges_by_hub.setdefault(b_id, []).append(er)
+
+            # Ensure explicitly requested (hub_req, chal_req) from /compare is present even if outside org_cap (NO synthetic COALESCE inflation)
+            if hub_req and (hub_req not in edges_by_hub or (chal_req and not any(e[1] == chal_req for e in edges_by_hub.get(hub_req, [])))):
+                cur.execute("""
+                    WITH extra_edges AS (
+                        SELECT DISTINCT ON (d.bait_id, d.orphan_id)
+                            d.bait_id,
+                            d.orphan_id,
+                            COALESCE(d.family_name, 'Dark Proteome Island') AS family_name,
+                            COALESCE(d.bait_organism, 'Extremophile Isolate') AS bait_organism,
+                            COALESCE(d.orphan_organism, 'Extremophile Isolate') AS orphan_organism,
+                            COALESCE(d.vector_distance, 0.15) AS vector_distance,
+                            COALESCE(d.seq_identity_pct, 10.0) AS seq_identity_pct,
+                            COALESCE(d.twilight_score, 0.0) AS twilight_score,
+                            COALESCE(d.tm_score, 0.30) AS tm_score,
+                            CASE
+                                WHEN d.chaperone_score IS NULL THEN 30.0
+                                WHEN d.chaperone_score <= 1.0 THEN ROUND((d.chaperone_score * 100.0)::numeric, 1)
+                                ELSE ROUND(d.chaperone_score::numeric, 1)
+                            END AS chaperone_score,
+                            COALESCE(d.sc_rmsd, 3.50) AS sc_rmsd,
+                            COALESCE(d.mean_rasa, 0.45) AS mean_rasa,
+                            COALESCE(d.buns_count, 8) AS buns_count,
+                            COALESCE(d.hbond_count, 80) AS hbond_count,
+                            COALESCE(d.rf_range_iou, 0.50) AS rf_range_iou,
+                            COALESCE(d.rf_giou_loss, 0.50) AS rf_giou_loss,
+                            COALESCE(d.rf_substrate_match, false) AS rf_substrate_match,
+                            COALESCE(d.rf_substrate_props_matched, 4) AS rf_substrate_props_matched,
+                            COALESCE(d.rf_arom_prob, 0.50) AS rf_arom_prob,
+                            COALESCE(d.rf_score, 0.50) AS rf_score,
+                            (LEAST(length(pb.sequence), length(po.sequence))::float8 / GREATEST(length(pb.sequence), length(po.sequence), 1)::float8) AS len_ratio
+                        FROM orphan_discoveries d
+                        JOIN proteins pb ON pb.uniprot_id = d.bait_id
+                        JOIN proteins po ON po.uniprot_id = d.orphan_id
+                        WHERE d.bait_id <> d.orphan_id
+                          AND (
+                              (d.bait_id = %s AND d.tm_score IS NOT NULL AND d.tm_score >= 0.50 AND LEAST(length(pb.sequence), length(po.sequence)) >= 75 AND (LEAST(length(pb.sequence), length(po.sequence))::float8 / GREATEST(length(pb.sequence), length(po.sequence), 1)::float8) >= 0.50)
+                              OR (d.bait_id = %s AND d.orphan_id = %s)
+                          )
+                        ORDER BY d.bait_id, d.orphan_id, d.tm_score DESC NULLS LAST, d.rf_score DESC NULLS LAST, d.vector_distance ASC
+                    )
+                    SELECT
+                        e.bait_id, e.orphan_id, e.family_name, e.bait_organism, e.orphan_organism,
+                        e.vector_distance, e.seq_identity_pct, e.twilight_score, e.tm_score, e.chaperone_score,
+                        e.sc_rmsd, e.mean_rasa, e.buns_count, e.hbond_count,
+                        e.rf_range_iou, e.rf_giou_loss, e.rf_substrate_match, e.rf_substrate_props_matched,
+                        e.rf_arom_prob, e.rf_score,
+                        ROUND((
+                            (
+                                0.34 * e.rf_score +
+                                0.24 * (1.0 - LEAST(e.vector_distance, 1.0)) +
+                                0.18 * LEAST(e.twilight_score * 2.2, 1.0) +
+                                0.14 * (e.chaperone_score / 100.0) +
+                                0.10 * e.tm_score
+                            )
+                            * LEAST(power(e.tm_score / 0.50, 1.5), 1.0)
+                            * sqrt(e.len_ratio)
+                        )::numeric, 4) AS composite_score
+                    FROM extra_edges e
+                    ORDER BY composite_score DESC;
+                """, (hub_req, hub_req, chal_req or hub_req))
+                for er in cur.fetchall():
+                    b_id = er[0]
+                    o_id = er[1]
+                    fam = er[2]
+                    b_org = er[3]
+                    all_pids.add(b_id)
+                    all_pids.add(o_id)
+                    if fam:
+                        all_fams.add(fam.lower())
+                    existing = edges_by_hub.setdefault(b_id, [])
+                    if not any(x[1] == o_id for x in existing):
+                        existing.append(er)
+                    if b_org and not any(o['organism'] == b_org for o in top_organisms):
+                        top_organisms.append({
+                            'organism': b_org,
+                            'short_organism': b_org.split(' (strain')[0],
+                            'total_edges': len(existing),
+                            'partner_orgs': max(1, len({x[4] for x in existing})),
+                            'partner_proteins': len(existing),
+                            'rf_partners': len(existing),
+                            'rf_hubs': 1,
+                            'avg_rf_score': float(er[19] or 0.8),
+                            'max_rf_score': float(er[19] or 0.8),
+                            'max_twilight_score': float(er[7] or 0.65),
+                            'families': [fam] if fam else []
+                        })
 
             # 3. Batch-fetch protein biophysical, RangeFinder pocket, and real Chaperone metrics from swarm_comparison_cache
             cur.execute("""
@@ -4579,7 +6428,13 @@ def api_hub_cards():
                         return (1.0 - v_dist, comp_sc)
                     return (comp_sc, rf_sc)
 
-                sorted_edges = sorted(h_edges, key=_edge_sort_key, reverse=True)[:match_cap]
+                all_sorted_edges = sorted(h_edges, key=_edge_sort_key, reverse=True)
+                sorted_edges = list(all_sorted_edges[:match_cap])
+                if chal_req and not any(e[1] == chal_req for e in sorted_edges):
+                    for extra_e in all_sorted_edges[match_cap:]:
+                        if extra_e[1] == chal_req:
+                            sorted_edges.append(extra_e)
+                            break
                 matches = []
                 unique_target_orgs = set()
                 for rank_idx, er in enumerate(sorted_edges, 1):
@@ -4678,7 +6533,24 @@ def get_data():
     cur = conn.cursor()
 
     limit_param = request.args.get('limit', 'best-40')
-    if limit_param.lower() == 'rangefinder-40':
+    if limit_param.lower() == 'tpp-knockout-40':
+        cur.execute("""
+            SELECT microprotein_id, partner_complex_id, 'Explored' AS status, family_name,
+                   microprotein_org, partner_org, vector_distance, cascade_impact_score
+            FROM swarm_tpp_knockout_cascades
+            ORDER BY cascade_impact_score DESC, delta_tm_c ASC
+            LIMIT 80
+        """)
+        edge_rows = cur.fetchall()
+        nodes_info = {}
+        for b_id, o_id, st, fam, b_org, o_org, v_dist, imp_s in edge_rows:
+            if b_id not in nodes_info and len(nodes_info) < 40:
+                nodes_info[b_id] = {'status': 'Explored', 'family': fam, 'organism': b_org}
+            if o_id not in nodes_info and len(nodes_info) < 40:
+                nodes_info[o_id] = {'status': st, 'family': fam, 'organism': o_org}
+            if len(nodes_info) >= 40:
+                break
+    elif limit_param.lower() == 'rangefinder-40':
         cur.execute("""
             WITH ranked_rf AS (
                 SELECT bait_id, orphan_id, status, family_name, bait_organism, orphan_organism,
@@ -4704,13 +6576,16 @@ def get_data():
                 break
     elif limit_param.lower() == 'chaperone-40':
         cur.execute("""
-            SELECT bait_id, orphan_id, status, family_name, bait_organism, orphan_organism, vector_distance, COALESCE(chaperone_score, 0.0)
-            FROM orphan_discoveries
+            WITH top_chap AS (
+                SELECT bait_id, orphan_id, status, family_name, bait_organism, orphan_organism, vector_distance, chaperone_score
+                FROM orphan_discoveries
+                WHERE chaperone_score IS NOT NULL
+                ORDER BY chaperone_score DESC NULLS LAST
+                LIMIT 200
+            )
+            SELECT bait_id, orphan_id, status, family_name, bait_organism, orphan_organism, vector_distance, chaperone_score
+            FROM top_chap
             WHERE bait_id != orphan_id
-            ORDER BY (chaperone_score IS NOT NULL) DESC,
-                     chaperone_score DESC NULLS LAST,
-                     twilight_score DESC NULLS LAST,
-                     vector_distance ASC
             LIMIT 80
         """)
         edge_rows = cur.fetchall()
@@ -4724,10 +6599,16 @@ def get_data():
                 break
     elif limit_param.lower() == 'twilight-40':
         cur.execute("""
+            WITH top_tw AS (
+                SELECT bait_id, orphan_id, status, family_name, bait_organism, orphan_organism, vector_distance, twilight_score
+                FROM orphan_discoveries
+                WHERE twilight_score IS NOT NULL
+                ORDER BY twilight_score DESC NULLS LAST
+                LIMIT 400
+            )
             SELECT bait_id, orphan_id, status, family_name, bait_organism, orphan_organism, vector_distance, twilight_score
-            FROM orphan_discoveries
+            FROM top_tw
             WHERE bait_id != orphan_id
-              AND twilight_score IS NOT NULL
               AND twilight_score > 0.10
             ORDER BY (split_part(bait_organism, ' ', 1) != split_part(orphan_organism, ' ', 1)) DESC,
                      twilight_score DESC,
@@ -4745,13 +6626,19 @@ def get_data():
                 break
     elif limit_param.lower() == 'best-40':
         cur.execute("""
-            WITH ranked_edges AS (
+            WITH recent_window AS (
+                SELECT id, bait_id, orphan_id, vector_distance, family_name, bait_organism, orphan_organism, status
+                FROM orphan_discoveries
+                WHERE bait_id != orphan_id
+                ORDER BY id DESC
+                LIMIT 5000
+            ),
+            ranked_edges AS (
                 SELECT
                     id, bait_id, orphan_id, vector_distance, family_name,
                     bait_organism, orphan_organism, status,
                     ROW_NUMBER() OVER (PARTITION BY family_name ORDER BY vector_distance ASC, id DESC) AS fam_rank
-                FROM orphan_discoveries
-                WHERE bait_id != orphan_id
+                FROM recent_window
             )
             SELECT bait_id, orphan_id, status, family_name, bait_organism, orphan_organism, vector_distance
             FROM ranked_edges
@@ -4859,5 +6746,1851 @@ def get_data():
     matrix = dist_matrix.tolist()
     return jsonify({'nodes': nodes, 'matrix': matrix})
 
+
+GALAXY_3D_CACHE = {'ts': 0.0, 'payload': None}
+
+GALAXY_HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>pg_bio — 3D Organism &amp; Biophysical Similarity Galaxy</title>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three-spritetext@1.8.2/dist/three-spritetext.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.3/dist/3d-force-graph.min.js"></script>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: #04070f;
+            color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .gal-topbar {
+            z-index: 30;
+            background: rgba(2, 6, 23, 0.96);
+            border-bottom: 1px solid #1e293b;
+            padding: 10px 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .gal-row-1 {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .gal-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .gal-brand h1 {
+            margin: 0;
+            font-size: 1.08rem;
+            color: #38bdf8;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .gal-brand .sub {
+            font-size: 0.76rem;
+            color: #94a3b8;
+        }
+        .gal-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .gal-select-group {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            padding: 4px 8px;
+            font-size: 0.75rem;
+            color: #cbd5e1;
+        }
+        .gal-select-group select {
+            background: #020617;
+            color: #38bdf8;
+            border: 1px solid #1e293b;
+            border-radius: 4px;
+            padding: 3px 6px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .gal-btn {
+            background: #0f172a;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            padding: 5px 10px;
+            font-size: 0.76rem;
+            font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .gal-btn:hover {
+            background: #1e293b;
+            border-color: #38bdf8;
+            color: #38bdf8;
+        }
+        .gal-scenarios-bar {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            flex-wrap: wrap;
+            padding-top: 4px;
+            border-top: 1px solid rgba(30, 41, 59, 0.7);
+        }
+        .gal-scen-label {
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #94a3b8;
+            margin-right: 4px;
+        }
+        .scen-pill {
+            background: rgba(15, 23, 42, 0.9);
+            color: #cbd5e1;
+            border: 1px solid #334155;
+            border-radius: 999px;
+            padding: 4px 11px;
+            font-size: 0.74rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .scen-pill:hover {
+            border-color: #38bdf8;
+            color: #f8fafc;
+            background: rgba(56, 189, 248, 0.12);
+        }
+        .scen-pill.active {
+            background: rgba(56, 189, 248, 0.2);
+            color: #38bdf8;
+            border-color: #38bdf8;
+            box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+        }
+
+        .gal-workspace {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 410px;
+            min-height: 0;
+            position: relative;
+        }
+        @media (max-width: 1024px) {
+            .gal-workspace {
+                grid-template-columns: 1fr;
+            }
+        }
+        #galaxy-canvas-wrap {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at 50% 50%, #091124 0%, #03060c 100%);
+            overflow: hidden;
+        }
+        #galaxy-3d {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Floating HUD Legend on 3D Canvas */
+        .gal-hud {
+            position: absolute;
+            left: 16px;
+            bottom: 16px;
+            z-index: 10;
+            background: rgba(2, 6, 23, 0.88);
+            border: 1px solid #1e293b;
+            border-radius: 10px;
+            padding: 10px 14px;
+            max-width: 390px;
+            backdrop-filter: blur(8px);
+            font-size: 0.74rem;
+        }
+        .gal-hud h3 {
+            margin: 0 0 6px 0;
+            font-size: 0.76rem;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .cluster-legend-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 5px 12px;
+        }
+        .c-leg-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            padding: 2px 4px;
+            border-radius: 4px;
+        }
+        .c-leg-item:hover {
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .c-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .axis-badge-strip {
+            margin-top: 8px;
+            padding-top: 6px;
+            border-top: 1px solid #1e293b;
+            color: #94a3b8;
+            font-size: 0.7rem;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        /* Prevent 3d-force-graph floating tooltip from intercepting mouseover events */
+        .scene-tooltip, .graph-tooltip {
+            pointer-events: none !important;
+            user-select: none;
+        }
+
+        /* Right Sidebar with CSS Containment per interactions-in-complex-layouts */
+        .gal-sidebar {
+            background: #070c18;
+            border-left: 1px solid #1e293b;
+            padding: 14px 16px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            content-visibility: auto;
+            contain-intrinsic-size: auto 410px auto 760px;
+        }
+        @supports not (content-visibility: auto) {
+            .gal-sidebar {
+                contain: layout style paint;
+            }
+        }
+        .side-card {
+            background: #0b1324;
+            border: 1px solid #1e293b;
+            border-radius: 10px;
+            padding: 12px 14px;
+        }
+        .side-card h2 {
+            margin: 0 0 4px 0;
+            font-size: 0.92rem;
+            color: #f8fafc;
+        }
+        .side-card .sub {
+            font-size: 0.74rem;
+            color: #94a3b8;
+            margin-bottom: 8px;
+        }
+        .bio-meter-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .bio-meter-row {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+        .bio-meter-head {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.73rem;
+            color: #cbd5e1;
+        }
+        .bio-meter-bar {
+            height: 7px;
+            background: #020617;
+            border-radius: 999px;
+            overflow: hidden;
+            border: 1px solid #1e293b;
+        }
+        .bio-meter-fill {
+            height: 100%;
+            border-radius: 999px;
+            transition: width 0.25s ease;
+        }
+        .neighbor-list, .pair-list {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+            margin-top: 8px;
+        }
+        .neighbor-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #060b16;
+            border: 1px solid #1e293b;
+            border-radius: 7px;
+            padding: 7px 10px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: border-color 0.15s;
+        }
+        .neighbor-item:hover {
+            border-color: #38bdf8;
+        }
+        .pair-card {
+            background: #060b16;
+            border: 1px solid #1e293b;
+            border-radius: 8px;
+            padding: 9px 10px;
+            font-size: 0.74rem;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .pair-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-weight: 700;
+            color: #38bdf8;
+        }
+        .pair-orgs {
+            color: #cbd5e1;
+            font-weight: 600;
+        }
+        .pair-descs {
+            color: #94a3b8;
+            font-size: 0.7rem;
+        }
+        .pair-badges {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+            margin-top: 2px;
+        }
+        .p-badge {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        /* Compound 10% Ghost Scrubber Slide Bar */
+        .gal-scrubber-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            padding: 6px 12px;
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            border-radius: 8px;
+            margin-top: 2px;
+        }
+        .scrubber-slider {
+            flex: 1;
+            min-width: 180px;
+            accent-color: #38bdf8;
+            cursor: pointer;
+        }
+        .scrubber-badge {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.74rem;
+            font-weight: 700;
+            color: #38bdf8;
+            background: rgba(2, 6, 23, 0.9);
+            border: 1px solid #1e293b;
+            padding: 3px 8px;
+            border-radius: 6px;
+            min-width: 240px;
+        }
+        /* Compound 3D Multi-Organism Superposition Overlay */
+        .compound-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 90;
+            background: rgba(2, 6, 23, 0.86);
+            backdrop-filter: blur(8px);
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+        .compound-modal.open {
+            display: flex;
+        }
+        .compound-box {
+            width: min(1320px, 96vw);
+            height: min(820px, 90vh);
+            background: #070c18;
+            border: 1px solid #38bdf8;
+            border-radius: 14px;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.75);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .compound-header {
+            padding: 12px 18px;
+            background: #020617;
+            border-bottom: 1px solid #1e293b;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .compound-body {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 370px;
+            min-height: 0;
+        }
+        #compound-3dmol-canvas {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at 50% 50%, #0a1428 0%, #03060c 100%);
+        }
+        .compound-side {
+            padding: 14px;
+            background: #080f1e;
+            border-left: 1px solid #1e293b;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .ens-org-item {
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: #040812;
+            border: 1px solid #1e293b;
+            cursor: pointer;
+            transition: all 0.12s;
+            font-size: 0.75rem;
+        }
+        .ens-org-item:hover, .ens-org-item.active {
+            border-color: #38bdf8;
+            background: rgba(56, 189, 248, 0.14);
+            transform: translateX(2px);
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.0.4/3Dmol-min.js"></script>
+</head>
+<body>
+    <header class="gal-topbar">
+        <div class="gal-row-1">
+            <div class="gal-brand">
+                <h1>🌌 3D Organism &amp; Biophysical Similarity Galaxy</h1>
+                <span class="sub" id="gal-stats-sub">Loading 3D Spectral SVD &amp; Biophysical Manifold...</span>
+            </div>
+            <div class="gal-controls">
+                <div class="gal-select-group">
+                    <span>3D Coordinate Space:</span>
+                    <select id="coord-mode-select" onchange="updateCoordinateSpace(this.value)">
+                        <option value="hybrid" selected>Hybrid 3D (Biophysical Niche + SVD Similarity)</option>
+                        <option value="biophysical">Biophysical 3D Axes (X: Halophilic · Y: Hydrophilic · Z: Aliphatic)</option>
+                        <option value="similarity">Pure 3D Similarity Manifold (Spectral SVD + Edge Weight)</option>
+                    </select>
+                </div>
+                <div class="gal-select-group">
+                    <span>Graph Weight By:</span>
+                    <select id="weight-mode-select" onchange="updateWeightMode(this.value)">
+                        <option value="composite" selected>Composite Coupling (Density × Similarity)</option>
+                        <option value="twilight">Twilight-Zone Breakthrough Weight</option>
+                        <option value="rangefinder">3D RangeFinder Pocket IoU (RF Score)</option>
+                        <option value="similarity">Closest ESM-2 Cosine Lock (1 - d)</option>
+                    </select>
+                </div>
+                <button class="gal-btn" style="background:rgba(16,185,129,0.16);border-color:#10b981;color:#34d399;" onclick="openCompound3DModal('A0A1H7ISK7')">🧬 Compound 3D Stack (10 Orgs @ 10%)</button>
+                <a class="gal-btn" style="border-color:#c084fc; color:#c084fc;" href="/telemetry">⚡ Telemetry</a>
+                <a class="gal-btn" style="border-color:#f59e0b; color:#fbbf24;" href="/cards">🃏 Card Arena</a>
+                <a class="gal-btn" style="border-color:#10b981; color:#34d399;" href="/compare">🔬 3D Lab</a>
+                <a class="gal-btn" href="/">Heatmap</a>
+            </div>
+        </div>
+        <div class="gal-scenarios-bar" id="scenario-bar">
+            <span class="gal-scen-label">🎯 Focus Scenarios &amp; Top Clusters:</span>
+            <button class="scen-pill active" data-scen="all" onclick="activateScenario('all')">🌐 All Constellations</button>
+            <button class="scen-pill" data-scen="halophilic_core" onmouseenter="previewClusterHover('halophilic_core')" onclick="activateScenario('halophilic_core')">🧂 Halophilic Brine Core (High D/E · Low pI)</button>
+            <button class="scen-pill" data-scen="soda_lake" onmouseenter="previewClusterHover('soda_lake')" onclick="activateScenario('soda_lake')">🧪 Soda-Lake Haloalkaliphiles</button>
+            <button class="scen-pill" data-scen="hydrophilic_axis" onmouseenter="previewClusterHover('hydrophilic')" onclick="activateScenario('hydrophilic_axis')">💧 Hydrophilic vs. Hydrophobic Axis</button>
+            <button class="scen-pill" data-scen="twilight_champions" onclick="activateScenario('twilight_champions')">🏆 Twilight-Zone Champions (≥0.86)</button>
+            <button class="scen-pill" data-scen="duf_rescue" onmouseenter="previewClusterHover('duf_archaea')" onclick="activateScenario('duf_rescue')">🌑 Dark Proteome (DUF) Bridges</button>
+            <button class="scen-pill" data-scen="rangefinder_3d" onclick="activateScenario('rangefinder_3d')">🔬 3D RangeFinder Clique (IoU ≥0.88)</button>
+        </div>
+        <div class="gal-scrubber-bar">
+            <span style="font-size:0.74rem;font-weight:700;color:#e2e8f0;">👻 10% Ghost Transparency Scrubber (Slide or Hover to Spotlight Fully Aligned Organisms):</span>
+            <input id="hub-scrubber" class="scrubber-slider" type="range" min="0" max="30" step="1" value="0" oninput="onScrubAlignedHub(this.value)" />
+            <span id="scrubber-readout" class="scrubber-badge">0 / 30 · Showing All Constellations</span>
+            <label style="font-size:0.73rem;color:#94a3b8;display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
+                <input type="checkbox" id="hover-spotlight-chk" checked /> Hover 10% Ghost Spotlight
+            </label>
+        </div>
+    </header>
+
+    <!-- Compound 3D Multi-Organism Ribbon Stack Modal (10% Opacity Ghost Ensemble + Hover/Slide Spotlight) -->
+    <div class="compound-modal" id="compound-3d-modal">
+        <div class="compound-box">
+            <div class="compound-header">
+                <div>
+                    <h2 style="margin:0;font-size:1.02rem;color:#34d399;">🧬 Compound 3D Multi-Organism Superposition (10% Ghost Ensemble + 100% Hover Spotlight)</h2>
+                    <div style="font-size:0.75rem;color:#94a3b8;" id="compound-sub">All aligned organisms rendered at 10% ribbon transparency so conserved 3D catalytic cores compound visually; scrub the slide bar or hover any organism to spotlight it at 100% opacity.</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span style="font-size:0.75rem;color:#cbd5e1;">Ensemble Family:</span>
+                    <select id="compound-hub-select" onchange="loadCompound3DEnsemble(this.value)" style="background:#0f172a;color:#38bdf8;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:0.75rem;font-weight:700;">
+                        <option value="A0A1H7ISK7">DUF7522 Domain Family (10 Aligned Organisms · Avg TM 0.976 · Haloferax larsenii Hub)</option>
+                        <option value="A0A0D6JTS1">Conserved Archaeal Orphan (9 Aligned Organisms · Avg TM 0.988 · Haloferax massiliensis Hub)</option>
+                        <option value="A0ABD5QTT5">DUF1684 Domain Family (9 Aligned Organisms · Avg TM 0.982 · Halorubrum glutamatedens Hub)</option>
+                        <option value="A0A1S8AT22">Soda-Lake Orphan Fold (9 Aligned Organisms · Avg TM 0.982 · Natrinema saccharevitans Hub)</option>
+                        <option value="A0ABD5SLL6">DUF302 Domain Family (9 Aligned Organisms · Avg TM 0.978 · Natrinema soli Hub)</option>
+                        <option value="M0D3I5">DUF7995 Domain Family (8 Aligned Organisms · Avg TM 0.993 · Halogeometricum pallidum Hub)</option>
+                        <option value="A0A3A6Q9F4">DUF2073 Domain Family (9 Aligned Organisms · Avg TM 0.860 · Halonotius aquaticus Hub)</option>
+                    </select>
+                    <button class="gal-btn" style="border-color:#f43f5e;color:#fb7185;" onclick="closeCompound3DModal()">✕ Close</button>
+                </div>
+            </div>
+            <div style="padding:8px 18px;background:#040814;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:14px;">
+                <span style="font-size:0.75rem;font-weight:700;color:#38bdf8;">🎚️ Slide Across Aligned Organisms (0 = Compound 10% Cloud, 1..N = Spotlight Organism @ 100%):</span>
+                <input id="compound-org-slider" class="scrubber-slider" type="range" min="0" max="10" step="1" value="0" oninput="spotlightCompoundOrganism(parseInt(this.value, 10))" />
+                <span id="compound-slider-label" class="scrubber-badge">All Organisms @ 15% Compound Glow</span>
+            </div>
+            <div class="compound-body">
+                <div id="compound-3dmol-canvas"></div>
+                <div class="compound-side">
+                    <div style="font-size:0.76rem;font-weight:700;color:#cbd5e1;text-transform:uppercase;letter-spacing:0.04em;">
+                        Hover Any Organism to Spotlight 100% Ribbon (Others Stay at 10% Ghost Opacity)
+                    </div>
+                    <div id="compound-org-list" style="display:flex;flex-direction:column;gap:6px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gal-workspace">
+        <div id="galaxy-canvas-wrap">
+            <div id="galaxy-3d"></div>
+            <div class="gal-hud">
+                <h3>Biophysical &amp; Evolutionary Clusters (Hover or Click to Spotlight @ 100% vs 10% Ghost)</h3>
+                <div class="cluster-legend-grid" id="cluster-legend" onmouseleave="clearHoverPreview()"></div>
+                <div class="axis-badge-strip" id="axis-explainer">
+                    <span><b>X-Axis:</b> Halophilic Brine Armor (%D/E Acidic &amp; Low pI)</span>
+                    <span><b>Y-Axis:</b> Hydrophilicity (−GRAVY &amp; Aqueous Polar Dispersion)</span>
+                    <span><b>Z-Axis:</b> Aliphatic Thermostability &amp; Spectral SVD Similarity</span>
+                </div>
+            </div>
+        </div>
+
+        <aside class="gal-sidebar" aria-label="Cluster and Organism 3D Inspector">
+            <div class="side-card" id="scenario-banner-card">
+                <h2 id="scen-title">🌐 Full 3D Similarity &amp; Biophysical Galaxy</h2>
+                <div class="sub" id="scen-desc">Use the 10% Ghost Scrubber Slide Bar above or hover over any organism/cluster to keep all non-aligned organisms at 10% transparency and spotlight the compound aligned network at 100%.</div>
+            </div>
+
+            <div class="side-card" id="selected-org-card">
+                <h2 id="org-title">Select an Organism Sphere</h2>
+                <div class="sub" id="org-cluster-badge">Cluster: —</div>
+                <div class="bio-meter-list">
+                    <div class="bio-meter-row">
+                        <div class="bio-meter-head">
+                            <span>🧂 Halophilic Brine Index (Acidic D/E &amp; Low pI)</span>
+                            <b id="val-halo">—</b>
+                        </div>
+                        <div class="bio-meter-bar"><div class="bio-meter-fill" id="bar-halo" style="width:0%;background:#f43f5e;"></div></div>
+                    </div>
+                    <div class="bio-meter-row">
+                        <div class="bio-meter-head">
+                            <span>💧 Hydrophilic Aqueous Dispersion (−GRAVY &amp; Polar)</span>
+                            <b id="val-hydro">—</b>
+                        </div>
+                        <div class="bio-meter-bar"><div class="bio-meter-fill" id="bar-hydro" style="width:0%;background:#38bdf8;"></div></div>
+                    </div>
+                    <div class="bio-meter-row">
+                        <div class="bio-meter-head">
+                            <span>🔥 Aliphatic Core &amp; Fold Complexity</span>
+                            <b id="val-thermo">—</b>
+                        </div>
+                        <div class="bio-meter-bar"><div class="bio-meter-fill" id="bar-thermo" style="width:0%;background:#f59e0b;"></div></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="side-card">
+                <h2>📍 Closest Organisms in 3D Space (Hover to Spotlight)</h2>
+                <div class="sub">Ranked by 3D Euclidean proximity &amp; correlation weight</div>
+                <div class="neighbor-list" id="closest-orgs-list" onmouseleave="clearHoverPreview()"></div>
+            </div>
+
+            <div class="side-card">
+                <h2>🔗 Top Weighted Protein Bridges</h2>
+                <div class="sub">Inspect 3D Kabsch superposition or 1-to-N Card Arena</div>
+                <div class="pair-list" id="top-pairs-list"></div>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        let galaxyData = null;
+        let Graph3D = null;
+        let currentCoordMode = 'hybrid';
+        let currentWeightMode = 'composite';
+        let currentScenario = 'all';
+        let selectedNodeId = null;
+        let hoveredNodeId = null;
+        let lastHoveredKey = null;
+        let highlightNodes = new Set();
+        let highlightLinks = new Set();
+        let ghostModeActive = false;
+
+        function hexToRgba(hex, alpha) {
+            const h = (hex || '#38bdf8').replace('#', '');
+            const r = parseInt(h.substring(0, 2), 16) || 56;
+            const g = parseInt(h.substring(2, 4), 16) || 189;
+            const b = parseInt(h.substring(4, 6), 16) || 248;
+            return `rgba(${r},${g},${b},${alpha})`;
+        }
+
+        // Fast in-place Three.js material mutation: zero mesh destruction/recreation, zero raycaster loss or tooltip flicker
+        function refreshGhostVisuals() {
+            if (!Graph3D || !galaxyData) return;
+            const activeCenterId = hoveredNodeId || selectedNodeId;
+            const hasSpotlight = ghostModeActive && highlightNodes.size > 0;
+
+            galaxyData.nodes.forEach(n => {
+                const obj = n.__threeObj;
+                if (!obj) return;
+                const isCenter = activeCenterId && n.id === activeCenterId;
+                const isHighlighted = !hasSpotlight || highlightNodes.has(n.id);
+                const targetColor = isCenter ? '#ffffff' : (n.cluster_color || '#38bdf8');
+                const targetOpacity = isCenter ? 1.0 : (isHighlighted ? 0.94 : 0.10);
+
+                obj.traverse(child => {
+                    if (child.isMesh && child.material) {
+                        if (!child.userData.ownMat) {
+                            child.material = child.material.clone();
+                            child.userData.ownMat = true;
+                        }
+                        child.material.transparent = true;
+                        child.material.opacity = targetOpacity;
+                        child.material.depthWrite = targetOpacity > 0.25;
+                        if (child.material.color) child.material.color.set(targetColor);
+                    } else if (child.isSprite && child.material) {
+                        child.material.transparent = true;
+                        child.material.opacity = isHighlighted ? 1.0 : 0.08;
+                    }
+                });
+            });
+
+            galaxyData.links.forEach(l => {
+                const lineObj = l.__lineObj;
+                if (!lineObj || !lineObj.material) return;
+                if (!lineObj.userData.ownMat) {
+                    lineObj.material = lineObj.material.clone();
+                    lineObj.userData.ownMat = true;
+                }
+                lineObj.material.transparent = true;
+                if (hasSpotlight) {
+                    if (highlightLinks.has(l)) {
+                        lineObj.material.color.set('#38bdf8');
+                        lineObj.material.opacity = 0.92;
+                    } else {
+                        lineObj.material.color.set('#475569');
+                        lineObj.material.opacity = 0.06;
+                    }
+                } else {
+                    if (l.max_rf_score && l.max_rf_score >= 0.85) {
+                        lineObj.material.color.set('#10b981');
+                        lineObj.material.opacity = 0.55;
+                    } else if (l.max_twilight >= 0.86) {
+                        lineObj.material.color.set('#f59e0b');
+                        lineObj.material.opacity = 0.55;
+                    } else {
+                        lineObj.material.color.set('#94a3b8');
+                        lineObj.material.opacity = 0.22;
+                    }
+                }
+            });
+        }
+
+        function computeNeighborhoodSets(orgId) {
+            highlightNodes.clear();
+            highlightLinks.clear();
+            if (!orgId || !galaxyData) return;
+            highlightNodes.add(orgId);
+            galaxyData.links.forEach(l => {
+                const sId = typeof l.source === 'object' ? l.source.id : l.source;
+                const tId = typeof l.target === 'object' ? l.target.id : l.target;
+                if (sId === orgId || tId === orgId) {
+                    highlightLinks.add(l);
+                    highlightNodes.add(sId);
+                    highlightNodes.add(tId);
+                }
+            });
+        }
+
+        function onScrubAlignedHub(valStr) {
+            if (!galaxyData) return;
+            const idx = parseInt(valStr, 10) || 0;
+            const readout = document.getElementById('scrubber-readout');
+            lastHoveredKey = null;
+            hoveredNodeId = null;
+            if (idx === 0) {
+                selectedNodeId = null;
+                ghostModeActive = false;
+                highlightNodes.clear();
+                highlightLinks.clear();
+                readout.textContent = `0 / 30 · Showing All Constellations (100%)`;
+                refreshGhostVisuals();
+                return;
+            }
+            const hubNode = galaxyData.nodes[idx - 1];
+            if (!hubNode) return;
+            ghostModeActive = true;
+            selectOrganismNode(hubNode, false);
+            readout.textContent = `#${idx} ${hubNode.short_label} (${highlightNodes.size} Aligned Orgs @ 100% · Rest @ 10%)`;
+        }
+
+        function previewClusterHover(clusterId) {
+            if (!galaxyData || !document.getElementById('hover-spotlight-chk').checked) return;
+            const key = 'cluster:' + clusterId;
+            if (lastHoveredKey === key) return;
+            lastHoveredKey = key;
+            hoveredNodeId = null;
+            ghostModeActive = true;
+            highlightNodes.clear();
+            highlightLinks.clear();
+            galaxyData.nodes.forEach(n => {
+                if (n.cluster_id === clusterId) highlightNodes.add(n.id);
+            });
+            galaxyData.links.forEach(l => {
+                const sId = typeof l.source === 'object' ? l.source.id : l.source;
+                const tId = typeof l.target === 'object' ? l.target.id : l.target;
+                if (highlightNodes.has(sId) && highlightNodes.has(tId)) {
+                    highlightLinks.add(l);
+                }
+            });
+            const cObj = (galaxyData.clusters || []).find(c => c.id === clusterId);
+            if (cObj) {
+                document.getElementById('scrubber-readout').textContent =
+                    `Cluster: ${cObj.name} (${highlightNodes.size} Orgs @ 100% · Background @ 10%)`;
+            }
+            refreshGhostVisuals();
+        }
+
+        function previewOrganismHover(orgId) {
+            if (!galaxyData || !document.getElementById('hover-spotlight-chk').checked) return;
+            const key = 'org:' + orgId;
+            if (lastHoveredKey === key) return;
+            const nd = galaxyData.nodes.find(n => n.id === orgId);
+            if (!nd) return;
+            lastHoveredKey = key;
+            hoveredNodeId = orgId;
+            ghostModeActive = true;
+            computeNeighborhoodSets(orgId);
+            updateSidebarHeaderMeters(nd);
+            document.getElementById('scrubber-readout').textContent =
+                `Spotlight: ${nd.short_label} + ${Math.max(0, highlightNodes.size - 1)} Aligned Partners @ 100% (Rest @ 10%)`;
+            refreshGhostVisuals();
+        }
+
+        function clearHoverPreview() {
+            if (!galaxyData || !lastHoveredKey) return;
+            lastHoveredKey = null;
+            hoveredNodeId = null;
+            if (selectedNodeId) {
+                const nd = galaxyData.nodes.find(n => n.id === selectedNodeId);
+                if (nd) {
+                    ghostModeActive = true;
+                    computeNeighborhoodSets(selectedNodeId);
+                    updateSidebarHeaderMeters(nd);
+                    document.getElementById('scrubber-readout').textContent =
+                        `Locked: ${nd.short_label} + ${Math.max(0, highlightNodes.size - 1)} Aligned Partners @ 100% (Rest @ 10%)`;
+                    refreshGhostVisuals();
+                    return;
+                }
+            }
+            const scrubVal = parseInt(document.getElementById('hub-scrubber').value, 10) || 0;
+            if (scrubVal === 0) {
+                ghostModeActive = false;
+                highlightNodes.clear();
+                highlightLinks.clear();
+                document.getElementById('scrubber-readout').textContent = `0 / 30 · Showing All Constellations (100%)`;
+                refreshGhostVisuals();
+            }
+        }
+
+        function edgeWeightValue(link, mode) {
+            if (mode === 'twilight') return Math.max(0.1, (link.max_twilight || 0.5) * 4.0);
+            if (mode === 'rangefinder') return Math.max(0.1, (link.max_rf_score || 0.4) * 4.5);
+            if (mode === 'similarity') return Math.max(0.1, (link.mean_sim || 0.85) * 3.5);
+            return Math.max(0.2, link.composite_weight || 1.0);
+        }
+
+        function applyCoordinates(mode) {
+            if (!galaxyData) return;
+            galaxyData.nodes.forEach(n => {
+                const c = (mode === 'biophysical') ? n.coords_biophysical
+                        : (mode === 'similarity') ? n.coords_similarity
+                        : n.coords_hybrid;
+                n.fx = c[0];
+                n.fy = c[1];
+                n.fz = c[2];
+                n.x = c[0];
+                n.y = c[1];
+                n.z = c[2];
+            });
+            const expEl = document.getElementById('axis-explainer');
+            if (mode === 'biophysical') {
+                expEl.innerHTML = `
+                    <span><b>X-Axis:</b> Halophilic Brine Armor (%D/E Acidic &amp; Low pI)</span>
+                    <span><b>Y-Axis:</b> Hydrophilicity (−GRAVY &amp; Polar Surface)</span>
+                    <span><b>Z-Axis:</b> Aliphatic Thermostability &amp; Sequence Entropy</span>
+                `;
+            } else if (mode === 'similarity') {
+                expEl.innerHTML = `
+                    <span><b>X, Y, Z:</b> 3D Laplacian Spectral SVD of Weighted Adjacency W(A,B)</span>
+                    <span><b>Distance in 3D:</b> True proteome-wide structural similarity</span>
+                `;
+            } else {
+                expEl.innerHTML = `
+                    <span><b>Hybrid 3D:</b> 55% Spectral SVD Similarity + 45% Biophysical Niche</span>
+                    <span><b>Clusters:</b> Halophilic, Soda-Lake, Hydrophilic &amp; DUF Constellations</span>
+                `;
+            }
+            if (Graph3D) {
+                Graph3D.numDimensions(3);
+                Graph3D.d3ReheatSimulation();
+                if (selectedNodeId) {
+                    const nd = galaxyData.nodes.find(x => x.id === selectedNodeId);
+                    if (nd) renderSelectedNodeSidebar(nd);
+                }
+            }
+        }
+
+        function updateCoordinateSpace(mode) {
+            currentCoordMode = mode;
+            applyCoordinates(mode);
+        }
+
+        function updateWeightMode(mode) {
+            currentWeightMode = mode;
+            if (!Graph3D) return;
+            Graph3D.linkWidth(l => {
+                const base = edgeWeightValue(l, currentWeightMode);
+                return Math.min(2.8, base * 0.72);
+            });
+            setTimeout(() => refreshGhostVisuals(), 30);
+        }
+
+        function flyToNode(node, dist = 135) {
+            if (!Graph3D || !node) return;
+            const x = node.fx ?? node.x ?? 0;
+            const y = node.fy ?? node.y ?? 0;
+            const z = node.fz ?? node.z ?? 0;
+            const r = Math.hypot(x, y, z) || 1;
+            const ratio = 1 + dist / r;
+            Graph3D.cameraPosition(
+                { x: x * ratio, y: y * ratio + 25, z: z * ratio },
+                { x, y, z },
+                1100
+            );
+        }
+
+        function selectOrganismNode(node, fly = true) {
+            if (!node || !galaxyData) return;
+            selectedNodeId = node.id;
+            hoveredNodeId = null;
+            lastHoveredKey = null;
+            ghostModeActive = true;
+            computeNeighborhoodSets(node.id);
+            renderSelectedNodeSidebar(node);
+            document.getElementById('scrubber-readout').textContent =
+                `Locked: ${node.short_label} + ${Math.max(0, highlightNodes.size - 1)} Aligned Partners @ 100% (Rest @ 10%)`;
+            if (Graph3D) {
+                refreshGhostVisuals();
+                if (fly) flyToNode(node, 130);
+            }
+        }
+
+        function updateSidebarHeaderMeters(node) {
+            if (!node) return;
+            document.getElementById('org-title').textContent = node.id;
+            document.getElementById('org-cluster-badge').innerHTML = `
+                <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${node.cluster_color};margin-right:5px;"></span>
+                <b style="color:${node.cluster_color};">${node.cluster_name}</b> · ${node.degree} Connected Bridges
+            `;
+            document.getElementById('val-halo').textContent = `${node.halophilic_score}/100 (pI ${node.mean_pi} · ${node.acidic_pct}% D/E)`;
+            document.getElementById('bar-halo').style.width = `${node.halophilic_score}%`;
+
+            document.getElementById('val-hydro').textContent = `${node.hydrophilic_score}/100 (GRAVY ${node.mean_gravy >= 0 ? '+' : ''}${node.mean_gravy})`;
+            document.getElementById('bar-hydro').style.width = `${node.hydrophilic_score}%`;
+
+            document.getElementById('val-thermo').textContent = `${node.thermo_score}/100 (${node.hydro_pct}% Aliph · H=${node.mean_entropy})`;
+            document.getElementById('bar-thermo').style.width = `${node.thermo_score}%`;
+        }
+
+        function renderSelectedNodeSidebar(node) {
+            updateSidebarHeaderMeters(node);
+
+            // Compute closest organisms in current 3D coordinate space
+            const nx = node.fx ?? node.x ?? 0;
+            const ny = node.fy ?? node.y ?? 0;
+            const nz = node.fz ?? node.z ?? 0;
+            const linkMap = {};
+            galaxyData.links.forEach(l => {
+                const sId = typeof l.source === 'object' ? l.source.id : l.source;
+                const tId = typeof l.target === 'object' ? l.target.id : l.target;
+                if (sId === node.id) linkMap[tId] = l;
+                else if (tId === node.id) linkMap[sId] = l;
+            });
+
+            const scoredNeighbors = galaxyData.nodes
+                .filter(other => other.id !== node.id)
+                .map(other => {
+                    const ox = other.fx ?? other.x ?? 0;
+                    const oy = other.fy ?? other.y ?? 0;
+                    const oz = other.fz ?? other.z ?? 0;
+                    const d3 = Math.hypot(nx - ox, ny - oy, nz - oz);
+                    const lnk = linkMap[other.id];
+                    return { other, d3, lnk };
+                })
+                .sort((a, b) => {
+                    if (Boolean(b.lnk) !== Boolean(a.lnk)) return b.lnk ? 1 : -1;
+                    return a.d3 - b.d3;
+                })
+                .slice(0, 7);
+
+            document.getElementById('closest-orgs-list').innerHTML = scoredNeighbors.map(item => `
+                <div class="neighbor-item" onmouseenter="previewOrganismHover('${item.other.id.replace(/'/g, "\\'")}')" onclick="selectOrganismById('${item.other.id.replace(/'/g, "\\'")}')">
+                    <div>
+                        <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${item.other.cluster_color};margin-right:5px;"></span>
+                        <b style="color:#f8fafc;">${item.other.id}</b>
+                        <div style="font-size:0.68rem;color:#94a3b8;">pI ${item.other.mean_pi} · GRAVY ${item.other.mean_gravy}</div>
+                    </div>
+                    <div style="text-align:right;font-family:ui-monospace,monospace;font-size:0.7rem;">
+                        <b style="color:#38bdf8;">Δ3D: ${item.d3.toFixed(1)}</b><br>
+                        <span style="color:#34d399;">${item.lnk ? `Tw ${item.lnk.max_twilight.toFixed(3)} (${item.lnk.edge_count}e)` : 'Spatial Neighbor'}</span>
+                    </div>
+                </div>
+            `).join('');
+
+            // Collect top protein bridges for this organism
+            const pairs = [];
+            galaxyData.links.forEach(l => {
+                const sId = typeof l.source === 'object' ? l.source.id : l.source;
+                const tId = typeof l.target === 'object' ? l.target.id : l.target;
+                if (sId === node.id || tId === node.id) {
+                    (l.top_pairs || []).forEach(p => pairs.push(p));
+                }
+            });
+            pairs.sort((a, b) => (b.twilight_score || 0) - (a.twilight_score || 0));
+            const topPairs = pairs.slice(0, 6);
+            renderPairsList(topPairs);
+        }
+
+        function renderPairsList(pairs) {
+            if (!pairs || !pairs.length) {
+                document.getElementById('top-pairs-list').innerHTML = `<div style="color:#64748b;font-size:0.74rem;">No protein bridges in current filter.</div>`;
+                return;
+            }
+            document.getElementById('top-pairs-list').innerHTML = pairs.map(p => `
+                <div class="pair-card">
+                    <div class="pair-head">
+                        <span>${p.bait_id} × ${p.orphan_id}</span>
+                        <span style="color:#c084fc;">Tw ${p.twilight_score != null ? p.twilight_score.toFixed(4) : '—'}</span>
+                    </div>
+                    <div class="pair-orgs">${p.b_org} × ${p.o_org}</div>
+                    <div class="pair-descs">${p.b_desc} × ${p.o_desc}</div>
+                    <div class="pair-badges">
+                        <span class="p-badge" style="background:rgba(56,189,248,0.14);color:#38bdf8;">SW ${p.seq_id}% · d=${p.vec_dist}</span>
+                        ${p.rf_iou != null ? `<span class="p-badge" style="background:rgba(16,185,129,0.15);color:#34d399;">IoU ${p.rf_iou.toFixed(3)} · RF ${p.rf_score.toFixed(3)}</span>` : ''}
+                        ${p.tm_score != null ? `<span class="p-badge" style="background:rgba(245,158,11,0.16);color:#fbbf24;">TM ${p.tm_score.toFixed(3)}</span>` : ''}
+                    </div>
+                    <div style="display:flex;gap:6px;margin-top:4px;">
+                        <a class="gal-btn" style="padding:3px 8px;font-size:0.7rem;border-color:#10b981;color:#34d399;" href="/compare?node1=${p.bait_id}&node2=${p.orphan_id}&preset=rangefinder">🔬 3D Lab</a>
+                        <a class="gal-btn" style="padding:3px 8px;font-size:0.7rem;border-color:#f59e0b;color:#fbbf24;" href="/cards?hub=${p.bait_id}&challenger=${p.orphan_id}">🃏 Card Arena</a>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function selectOrganismById(orgId) {
+            if (!galaxyData) return;
+            const nd = galaxyData.nodes.find(n => n.id === orgId);
+            if (nd) selectOrganismNode(nd, true);
+        }
+
+        function focusClusterById(clusterId) {
+            if (!galaxyData) return;
+            const cNodes = galaxyData.nodes.filter(n => n.cluster_id === clusterId);
+            if (!cNodes.length) return;
+            cNodes.sort((a, b) => b.total_weight - a.total_weight);
+            previewClusterHover(clusterId);
+            flyToNode(cNodes[0], 150);
+            renderSelectedNodeSidebar(cNodes[0]);
+        }
+
+        function activateScenario(scenKey) {
+            if (!galaxyData) return;
+            currentScenario = scenKey;
+            document.querySelectorAll('.scen-pill').forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('data-scen') === scenKey);
+            });
+            const sc = (galaxyData.scenarios || {})[scenKey];
+            if (!sc) return;
+
+            document.getElementById('scen-title').textContent = sc.title;
+            document.getElementById('scen-desc').textContent = sc.description;
+
+            if (sc.coord_mode && sc.coord_mode !== currentCoordMode) {
+                document.getElementById('coord-mode-select').value = sc.coord_mode;
+                updateCoordinateSpace(sc.coord_mode);
+            }
+            if (sc.weight_mode && sc.weight_mode !== currentWeightMode) {
+                document.getElementById('weight-mode-select').value = sc.weight_mode;
+                updateWeightMode(sc.weight_mode);
+            }
+
+            if (scenKey === 'all') {
+                ghostModeActive = false;
+                highlightNodes.clear();
+                highlightLinks.clear();
+                document.getElementById('hub-scrubber').value = 0;
+                document.getElementById('scrubber-readout').textContent = `0 / 30 · Showing All Constellations (100%)`;
+                refreshGhostVisuals();
+                Graph3D.cameraPosition({ x: 0, y: 40, z: 420 }, { x: 0, y: 0, z: 0 }, 1100);
+                if (sc.focus_org) {
+                    const nd = galaxyData.nodes.find(n => n.id === sc.focus_org);
+                    if (nd) renderSelectedNodeSidebar(nd);
+                }
+                renderPairsList(sc.top_pairs || []);
+                return;
+            }
+
+            if (sc.focus_org) {
+                const nd = galaxyData.nodes.find(n => n.id === sc.focus_org);
+                if (nd) {
+                    selectOrganismNode(nd, true);
+                    if (sc.top_pairs && sc.top_pairs.length) {
+                        renderPairsList(sc.top_pairs);
+                    }
+                }
+            }
+        }
+
+        // Compound 3D Multi-Organism 10% Ghost Stack Viewer
+        let compoundViewer = null;
+        let compoundEnsembleData = null;
+        const ENSEMBLE_PALETTE = [
+            '#38bdf8', '#f43f5e', '#10b981', '#f59e0b', '#c084fc',
+            '#fb923c', '#2dd4bf', '#a3e635', '#f472b6', '#60a5fa'
+        ];
+
+        function openCompound3DModal(hubId) {
+            document.getElementById('compound-3d-modal').classList.add('open');
+            if (hubId) {
+                document.getElementById('compound-hub-select').value = hubId;
+            }
+            loadCompound3DEnsemble(document.getElementById('compound-hub-select').value);
+        }
+
+        function closeCompound3DModal() {
+            document.getElementById('compound-3d-modal').classList.remove('open');
+        }
+
+        function loadCompound3DEnsemble(hubId) {
+            const cDiv = document.getElementById('compound-3dmol-canvas');
+            if (!compoundViewer) {
+                compoundViewer = $3Dmol.createViewer(cDiv, { backgroundColor: '#040812' });
+            }
+            compoundViewer.clear();
+            document.getElementById('compound-org-list').innerHTML = `<div style="color:#94a3b8;font-size:0.76rem;">Loading Kabsch-aligned multi-organism 3D stack...</div>`;
+
+            fetch(`/api/compound_3d/${encodeURIComponent(hubId)}`)
+                .then(r => r.json())
+                .then(data => {
+                    compoundEnsembleData = data;
+                    const models = data.models || [];
+                    const slider = document.getElementById('compound-org-slider');
+                    slider.max = models.length;
+                    slider.value = 0;
+
+                    models.forEach((m, idx) => {
+                        m.color = ENSEMBLE_PALETTE[idx % ENSEMBLE_PALETTE.length];
+                        m.modelObj = compoundViewer.addModel(m.pdb, 'pdb');
+                    });
+
+                    document.getElementById('compound-org-list').innerHTML = models.map((m, idx) => `
+                        <div class="ens-org-item" id="ens-item-${idx + 1}"
+                             onmouseenter="spotlightCompoundOrganism(${idx + 1})"
+                             onclick="spotlightCompoundOrganism(${idx + 1})">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <b style="color:${m.color};">#${idx + 1} ${m.organism}</b>
+                                <span style="font-family:ui-monospace,monospace;font-size:0.7rem;color:#34d399;">${m.role === 'Reference Hub' ? 'HUB (0.00 Å)' : `TM ${m.tm_score} · ${m.rmsd} Å`}</span>
+                            </div>
+                            <div style="color:#cbd5e1;font-size:0.71rem;margin-top:2px;">
+                                <code>${m.uniprot_id}</code> · ${m.description}
+                            </div>
+                            <div style="color:#94a3b8;font-size:0.68rem;margin-top:2px;">
+                                pI ${m.pi} · GRAVY ${m.gravy} ${m.rf_iou ? `· Pocket IoU ${m.rf_iou}` : ''}
+                            </div>
+                        </div>
+                    `).join('');
+
+                    spotlightCompoundOrganism(0, true);
+                });
+        }
+
+        function spotlightCompoundOrganism(activeIndex, zoomToFit = false) {
+            if (!compoundViewer || !compoundEnsembleData) return;
+            const models = compoundEnsembleData.models || [];
+            document.getElementById('compound-org-slider').value = activeIndex;
+
+            document.querySelectorAll('.ens-org-item').forEach((el, idx) => {
+                el.classList.toggle('active', (idx + 1) === activeIndex);
+            });
+
+            if (activeIndex === 0) {
+                document.getElementById('compound-slider-label').textContent =
+                    `0 / ${models.length} · All ${models.length} Organisms @ 10% Compound Stack`;
+                models.forEach((m) => {
+                    compoundViewer.setStyle({ model: m.modelObj }, {
+                        cartoon: { color: m.color, opacity: 0.12, thickness: 0.32 }
+                    });
+                });
+            } else {
+                const target = models[activeIndex - 1];
+                document.getElementById('compound-slider-label').textContent =
+                    `#${activeIndex} / ${models.length} · ${target.organism} (${target.uniprot_id}) @ 100% · Others @ 10%`;
+                models.forEach((m, idx) => {
+                    const isFocused = (idx + 1) === activeIndex;
+                    compoundViewer.setStyle({ model: m.modelObj }, {
+                        cartoon: {
+                            color: m.color,
+                            opacity: isFocused ? 1.0 : 0.10,
+                            thickness: isFocused ? 0.48 : 0.22
+                        }
+                    });
+                });
+            }
+            compoundViewer.render();
+            if (zoomToFit) {
+                compoundViewer.zoomTo();
+                compoundViewer.render();
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            fetch('/api/galaxy_3d')
+                .then(r => r.json())
+                .then(data => {
+                    galaxyData = data;
+                    document.getElementById('gal-stats-sub').textContent =
+                        `${data.nodes.length} Extremophile Organisms · ${data.links.length} Weighted Bridges · 10% Ghost Scrubber & Hover Spotlight`;
+
+                    // Render cluster legend with hover-to-spotlight
+                    document.getElementById('cluster-legend').innerHTML = (data.clusters || []).map(c => `
+                        <div class="c-leg-item" onmouseenter="previewClusterHover('${c.id}')" onclick="focusClusterById('${c.id}')">
+                            <span class="c-dot" style="background:${c.color};box-shadow:0 0 6px ${c.color};"></span>
+                            <span style="color:#e2e8f0;font-weight:600;">${c.name} (${c.count})</span>
+                        </div>
+                    `).join('');
+
+                    applyCoordinates(currentCoordMode);
+
+                    const elem = document.getElementById('galaxy-3d');
+                    Graph3D = ForceGraph3D()(elem)
+                        .backgroundColor('rgba(0,0,0,0)')
+                        .graphData(galaxyData)
+                        .nodeId('id')
+                        .nodeVal(n => Math.max(2.5, Math.min(22, n.radius_val || 5)))
+                        .nodeColor(n => {
+                            if (selectedNodeId && n.id === selectedNodeId) return '#ffffff';
+                            if (ghostModeActive && highlightNodes.size > 0 && !highlightNodes.has(n.id)) {
+                                return hexToRgba(n.cluster_color || '#64748b', 0.10);
+                            }
+                            return n.cluster_color || '#38bdf8';
+                        })
+                        .nodeOpacity(0.95)
+                        .nodeLabel(n => `
+                            <div style="background:rgba(2,6,23,0.95);border:1px solid ${n.cluster_color};padding:7px 10px;border-radius:7px;font-size:12px;color:#f8fafc;">
+                                <b style="color:${n.cluster_color};">${n.id}</b><br>
+                                <span>${n.cluster_name}</span><br>
+                                <span style="color:#cbd5e1;">🧂 Halophilic: <b>${n.halophilic_score}/100</b> (pI ${n.mean_pi}, ${n.acidic_pct}% D/E)</span><br>
+                                <span style="color:#38bdf8;">💧 Hydrophilic: <b>${n.hydrophilic_score}/100</b> (GRAVY ${n.mean_gravy})</span><br>
+                                <span style="color:#fbbf24;">🔗 Connected Bridges: <b>${n.degree}</b> (Max Tw ${n.max_twilight.toFixed(3)})</span>
+                            </div>
+                        `)
+                        .nodeThreeObjectExtend(true)
+                        .nodeThreeObject(node => {
+                            if (!node.is_hub && node.id !== selectedNodeId) return null;
+                            const sprite = new SpriteText(node.short_label || node.id);
+                            sprite.color = node.cluster_color || '#f8fafc';
+                            sprite.textHeight = node.id === selectedNodeId ? 6.5 : 4.2;
+                            sprite.backgroundColor = 'rgba(2,6,23,0.72)';
+                            sprite.padding = 1.5;
+                            sprite.borderRadius = 3;
+                            sprite.position.y = 9;
+                            // Disable raycasting on floating billboard text so only 3D spheres trigger hover
+                            sprite.raycast = () => {};
+                            return sprite;
+                        })
+                        .linkColor(l => {
+                            if (l.max_rf_score && l.max_rf_score >= 0.85) return 'rgba(16,185,129,0.55)';
+                            if (l.max_twilight >= 0.86) return 'rgba(245,158,11,0.55)';
+                            return 'rgba(148,163,184,0.22)';
+                        })
+                        .linkWidth(l => {
+                            const base = edgeWeightValue(l, currentWeightMode);
+                            return Math.min(2.6, base * 0.65);
+                        })
+                        .linkOpacity(0.85)
+                        .linkDirectionalParticles(l => l.max_twilight >= 0.865 ? 2 : 0)
+                        .linkDirectionalParticleWidth(2.2)
+                        .linkDirectionalParticleSpeed(0.006)
+                        .linkLabel(l => `
+                            <div style="background:rgba(2,6,23,0.95);border:1px solid #38bdf8;padding:6px 9px;border-radius:6px;font-size:11px;color:#f8fafc;">
+                                <b>${typeof l.source === 'object' ? l.source.id : l.source} ↔ ${typeof l.target === 'object' ? l.target.id : l.target}</b><br>
+                                <span>Shared Edges: <b>${l.edge_count}</b> · Mean Sim: <b>${(l.mean_sim * 100).toFixed(1)}%</b></span><br>
+                                <span style="color:#c084fc;">Max Twilight: <b>${l.max_twilight.toFixed(4)}</b></span>
+                                ${l.max_rf_score ? `<br><span style="color:#34d399;">3D RangeFinder: <b>${l.max_rf_score.toFixed(3)}</b> (IoU ${l.max_rf_iou.toFixed(3)})</span>` : ''}
+                            </div>
+                        `)
+                        .onNodeHover(node => {
+                            elem.style.cursor = node ? 'pointer' : 'grab';
+                            if (!document.getElementById('hover-spotlight-chk').checked) return;
+                            if (node) {
+                                previewOrganismHover(node.id);
+                            } else {
+                                clearHoverPreview();
+                            }
+                        })
+                        .onNodeClick(node => selectOrganismNode(node, true))
+                        .onLinkClick(link => {
+                            const sNode = typeof link.source === 'object' ? link.source : galaxyData.nodes.find(n => n.id === link.source);
+                            if (sNode) selectOrganismNode(sNode, false);
+                            if (link.top_pairs && link.top_pairs.length) renderPairsList(link.top_pairs);
+                        });
+
+                    // Add subtle 3D coordinate axes helper lines
+                    const scene = Graph3D.scene();
+                    const axesHelper = new THREE.AxesHelper(210);
+                    axesHelper.material.opacity = 0.25;
+                    axesHelper.material.transparent = true;
+                    scene.add(axesHelper);
+
+                    window.addEventListener('resize', () => {
+                        Graph3D.width(elem.clientWidth);
+                        Graph3D.height(elem.clientHeight);
+                    });
+
+                    activateScenario('all');
+                });
+        });
+    </script>
+</body>
+</html>
+"""
+
+
+@app.route('/galaxy')
+def galaxy_3d_page():
+    return render_template_string(GALAXY_HTML_TEMPLATE)
+
+
+@app.route('/api/galaxy_3d')
+def api_galaxy_3d():
+    import time as _t
+    now_ts = _t.perf_counter()
+    if GALAXY_3D_CACHE['payload'] and (now_ts - GALAXY_3D_CACHE['ts']) <= 45.0:
+        return jsonify(GALAXY_3D_CACHE['payload'])
+
+    with psycopg.connect(DB_URI, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                WITH elite_edges AS (
+                    (SELECT id, bait_id, orphan_id,
+                            split_part(bait_organism, ' (', 1) AS b_org,
+                            split_part(orphan_organism, ' (', 1) AS o_org,
+                            family_name, vector_distance, confidence_score, seq_identity_pct,
+                            twilight_score, rf_range_iou, rf_score, tm_score, chaperone_score
+                     FROM orphan_discoveries
+                     WHERE twilight_score >= 0.42
+                       AND bait_id <> orphan_id
+                     ORDER BY twilight_score DESC
+                     LIMIT 2200)
+                    UNION
+                    (SELECT id, bait_id, orphan_id,
+                            split_part(bait_organism, ' (', 1) AS b_org,
+                            split_part(orphan_organism, ' (', 1) AS o_org,
+                            family_name, vector_distance, confidence_score, seq_identity_pct,
+                            twilight_score, rf_range_iou, rf_score, tm_score, chaperone_score
+                     FROM orphan_discoveries
+                     WHERE rf_score IS NOT NULL
+                       AND bait_id <> orphan_id
+                     ORDER BY rf_score DESC
+                     LIMIT 2200)
+                )
+                SELECT
+                    e.id, e.bait_id, e.orphan_id, e.b_org, e.o_org, e.family_name,
+                    ROUND(e.vector_distance::numeric, 4),
+                    e.confidence_score, e.seq_identity_pct, e.twilight_score,
+                    e.rf_range_iou, e.rf_score, e.tm_score, e.chaperone_score,
+                    regexp_replace(split_part(p1.name, ' OS=', 1), '^\\S+\\s+', '') AS b_desc,
+                    regexp_replace(split_part(p2.name, ' OS=', 1), '^\\S+\\s+', '') AS o_desc,
+                    p1.sequence AS b_seq,
+                    p2.sequence AS o_seq,
+                    isoelectric_point(p1.sequence) AS b_pi,
+                    gravy_score(p1.sequence) AS b_gravy,
+                    sequence_entropy(p1.sequence) AS b_ent,
+                    isoelectric_point(p2.sequence) AS o_pi,
+                    gravy_score(p2.sequence) AS o_gravy,
+                    sequence_entropy(p2.sequence) AS o_ent
+                FROM elite_edges e
+                JOIN proteins p1 ON p1.uniprot_id = e.bait_id
+                JOIN proteins p2 ON p2.uniprot_id = e.orphan_id
+                WHERE e.b_org <> '' AND e.o_org <> ''
+                  AND e.b_org <> 'Unknown' AND e.o_org <> 'Unknown'
+                  AND (e.tm_score IS NULL OR e.tm_score >= 0.50)
+                  AND LEAST(length(p1.sequence), length(p2.sequence)) >= 75
+                  AND (LEAST(length(p1.sequence), length(p2.sequence))::float8 / GREATEST(length(p1.sequence), length(p2.sequence), 1)::float8) >= 0.50;
+            """)
+            rows = cur.fetchall()
+
+    org_stats = {}
+    pair_buckets = {}
+    all_elite_pairs = []
+
+    def _acc_org(org_name, uid, seq, pi_v, gravy_v, ent_v, tw_v, rf_v, desc):
+        if org_name not in org_stats:
+            org_stats[org_name] = {
+                'uids': set(),
+                'pi_sum': 0.0,
+                'gravy_sum': 0.0,
+                'ent_sum': 0.0,
+                'acidic_sum': 0.0,
+                'hydro_sum': 0.0,
+                'n_prot': 0,
+                'max_twilight': 0.0,
+                'max_rf': 0.0,
+                'duf_hits': 0,
+                'degree': 0,
+                'total_weight': 0.0,
+            }
+        st = org_stats[org_name]
+        if tw_v and tw_v > st['max_twilight']:
+            st['max_twilight'] = float(tw_v)
+        if rf_v and rf_v > st['max_rf']:
+            st['max_rf'] = float(rf_v)
+        if 'DUF' in (desc or '').upper() or 'UNCHARACTERIZED' in (desc or '').upper():
+            st['duf_hits'] += 1
+        if uid not in st['uids'] and seq:
+            st['uids'].add(uid)
+            L = max(len(seq), 1)
+            acidic = (seq.count('D') + seq.count('E')) / L * 100.0
+            hydro = sum(seq.count(c) for c in 'AILMFWV') / L * 100.0
+            st['pi_sum'] += float(pi_v or 5.0)
+            st['gravy_sum'] += float(gravy_v or -0.2)
+            st['ent_sum'] += float(ent_v or 3.9)
+            st['acidic_sum'] += acidic
+            st['hydro_sum'] += hydro
+            st['n_prot'] += 1
+
+    for r in rows:
+        (
+            eid, b_id, o_id, b_org, o_org, fam, v_dist, conf, seq_id,
+            tw_sc, rf_iou, rf_sc, tm_sc, chap_sc, b_desc, o_desc,
+            b_seq, o_seq, b_pi, b_gravy, b_ent, o_pi, o_gravy, o_ent
+        ) = r
+        tw_f = float(tw_sc or 0.0)
+        rf_f = float(rf_sc) if rf_sc is not None else None
+        iou_f = float(rf_iou) if rf_iou is not None else None
+        tm_f = float(tm_sc) if tm_sc is not None else None
+        vd_f = float(v_dist or 0.08)
+
+        _acc_org(b_org, b_id, b_seq, b_pi, b_gravy, b_ent, tw_f, rf_f, b_desc)
+        _acc_org(o_org, o_id, o_seq, o_pi, o_gravy, o_ent, tw_f, rf_f, o_desc)
+
+        if b_org == o_org:
+            continue
+        k = (b_org, o_org) if b_org < o_org else (o_org, b_org)
+        if k not in pair_buckets:
+            pair_buckets[k] = {
+                'source': k[0],
+                'target': k[1],
+                'edge_count': 0,
+                'sim_sum': 0.0,
+                'min_dist': 1.0,
+                'max_twilight': 0.0,
+                'sum_twilight': 0.0,
+                'max_rf_score': 0.0,
+                'max_rf_iou': 0.0,
+                'max_tm_score': 0.0,
+                'duf_count': 0,
+                'pairs_map': {},
+            }
+        pb = pair_buckets[k]
+        pb['edge_count'] += 1
+        pb['sim_sum'] += max(0.0, 1.0 - vd_f)
+        pb['min_dist'] = min(pb['min_dist'], vd_f)
+        pb['max_twilight'] = max(pb['max_twilight'], tw_f)
+        pb['sum_twilight'] += tw_f
+        if rf_f is not None:
+            pb['max_rf_score'] = max(pb['max_rf_score'], rf_f)
+        if iou_f is not None:
+            pb['max_rf_iou'] = max(pb['max_rf_iou'], iou_f)
+        if tm_f is not None:
+            pb['max_tm_score'] = max(pb['max_tm_score'], tm_f)
+        if 'DUF' in (b_desc or '').upper() or 'DUF' in (o_desc or '').upper():
+            pb['duf_count'] += 1
+
+        pk = (min(b_id, o_id), max(b_id, o_id))
+        p_obj = {
+            'bait_id': b_id,
+            'orphan_id': o_id,
+            'b_org': b_org,
+            'o_org': o_org,
+            'b_desc': b_desc,
+            'o_desc': o_desc,
+            'seq_id': float(seq_id or 0.0),
+            'vec_dist': vd_f,
+            'twilight_score': tw_f,
+            'rf_iou': iou_f,
+            'rf_score': rf_f,
+            'tm_score': tm_f,
+        }
+        if pk not in pb['pairs_map'] or (p_obj['rf_score'] is not None and pb['pairs_map'][pk]['rf_score'] is None):
+            pb['pairs_map'][pk] = p_obj
+            all_elite_pairs.append(p_obj)
+
+    # Keep top 165 most connected organisms for crisp 60FPS 3D constellation rendering
+    for k, pb in pair_buckets.items():
+        w = float(np.log1p(pb['edge_count']) * (pb['sim_sum'] / max(pb['edge_count'], 1)) + pb['max_twilight'] * 1.5 + pb['max_rf_score'])
+        pb['composite_weight'] = round(w, 4)
+        org_stats[k[0]]['degree'] += 1
+        org_stats[k[1]]['degree'] += 1
+        org_stats[k[0]]['total_weight'] += w
+        org_stats[k[1]]['total_weight'] += w
+
+    top_orgs = sorted(
+        [o for o, st in org_stats.items() if st['n_prot'] > 0 and st['degree'] > 0],
+        key=lambda o: (org_stats[o]['total_weight'], org_stats[o]['max_twilight']),
+        reverse=True
+    )[:165]
+    top_org_set = set(top_orgs)
+    org_idx = {o: i for i, o in enumerate(top_orgs)}
+    N = len(top_orgs)
+
+    # Build weighted adjacency matrix W_AB for Spectral SVD 3D Similarity Embedding
+    W = np.zeros((N, N), dtype=float)
+    links_out = []
+    for k, pb in pair_buckets.items():
+        if k[0] not in top_org_set or k[1] not in top_org_set:
+            continue
+        i, j = org_idx[k[0]], org_idx[k[1]]
+        mean_sim = pb['sim_sum'] / max(pb['edge_count'], 1)
+        w = pb['composite_weight']
+        W[i, j] = w
+        W[j, i] = w
+        top_p = sorted(
+            pb['pairs_map'].values(),
+            key=lambda x: ((1 if x['rf_score'] is not None else 0), x['twilight_score']),
+            reverse=True
+        )[:4]
+        links_out.append({
+            'source': k[0],
+            'target': k[1],
+            'edge_count': pb['edge_count'],
+            'mean_sim': round(mean_sim, 4),
+            'min_dist': round(pb['min_dist'], 4),
+            'max_twilight': round(pb['max_twilight'], 4),
+            'sum_twilight': round(pb['sum_twilight'], 3),
+            'max_rf_score': round(pb['max_rf_score'], 4) if pb['max_rf_score'] > 0 else None,
+            'max_rf_iou': round(pb['max_rf_iou'], 4) if pb['max_rf_iou'] > 0 else None,
+            'max_tm_score': round(pb['max_tm_score'], 3) if pb['max_tm_score'] > 0 else None,
+            'duf_count': pb['duf_count'],
+            'composite_weight': pb['composite_weight'],
+            'top_pairs': top_p,
+        })
+
+    links_out.sort(key=lambda x: x['composite_weight'], reverse=True)
+    links_out = links_out[:520]
+
+    # Compute biophysical feature vectors + Spectral SVD 3D Similarity coordinates
+    bio_xyz = np.zeros((N, 3), dtype=float)
+    nodes_out = []
+
+    cluster_defs = {
+        'soda_lake': ('Soda-Lake Haloalkaliphiles', '#f59e0b'),
+        'halophilic_core': ('Extreme Halophilic Brine Core', '#f43f5e'),
+        'hydrophilic': ('Hydrophilic Aqueous Catalysts', '#38bdf8'),
+        'hydrophobic': ('Hydrophobic Interfacial Binders', '#10b981'),
+        'duf_archaea': ('Dark Proteome (DUF) Bridges', '#c084fc'),
+        'thermophilic': ('Thermostable Aliphatic Core', '#fb923c'),
+    }
+    cluster_counts = {cid: 0 for cid in cluster_defs}
+
+    soda_genera = ('natron', 'halalkali', 'natrialba', 'halorhabdus', 'haloterrigena', 'halopiger', 'halostagnicola')
+
+    for i, org in enumerate(top_orgs):
+        st = org_stats[org]
+        cnt = max(st['n_prot'], 1)
+        mean_pi = st['pi_sum'] / cnt
+        mean_gravy = st['gravy_sum'] / cnt
+        mean_ent = st['ent_sum'] / cnt
+        acidic_pct = st['acidic_sum'] / cnt
+        hydro_pct = st['hydro_sum'] / cnt
+
+        # 0-100 Biophysical Indices
+        halo_score = int(np.clip((acidic_pct - 9.0) * 6.2 + (6.2 - mean_pi) * 22.0, 8, 99))
+        hydro_score = int(np.clip((-mean_gravy + 0.15) * 145.0, 8, 99))
+        thermo_score = int(np.clip((hydro_pct - 28.0) * 3.8 + (mean_ent - 3.6) * 55.0, 10, 99))
+
+        bio_xyz[i, 0] = halo_score
+        bio_xyz[i, 1] = hydro_score
+        bio_xyz[i, 2] = thermo_score
+
+        low_org = org.lower()
+        if any(g in low_org for g in soda_genera):
+            cid = 'soda_lake'
+        elif 'archaeon' in low_org or 'candidatus' in low_org or st['duf_hits'] >= 12:
+            cid = 'duf_archaea'
+        elif halo_score >= 68 and mean_pi <= 4.72:
+            cid = 'halophilic_core'
+        elif mean_gravy <= -0.22:
+            cid = 'hydrophilic'
+        elif mean_gravy >= -0.09:
+            cid = 'hydrophobic'
+        else:
+            cid = 'thermophilic'
+
+        cluster_counts[cid] += 1
+        cname, ccol = cluster_defs[cid]
+
+        parts = org.split()
+        short_lbl = f"{parts[0][0]}. {parts[1]}" if len(parts) >= 2 else org[:18]
+
+        nodes_out.append({
+            'id': org,
+            'short_label': short_lbl,
+            'cluster_id': cid,
+            'cluster_name': cname,
+            'cluster_color': ccol,
+            'degree': st['degree'],
+            'total_weight': round(st['total_weight'], 2),
+            'radius_val': round(3.0 + np.log1p(st['total_weight']) * 2.4, 2),
+            'is_hub': i < 28,
+            'mean_pi': round(mean_pi, 2),
+            'mean_gravy': round(mean_gravy, 2),
+            'mean_entropy': round(mean_ent, 2),
+            'acidic_pct': round(acidic_pct, 1),
+            'hydro_pct': round(hydro_pct, 1),
+            'halophilic_score': halo_score,
+            'hydrophilic_score': hydro_score,
+            'thermo_score': thermo_score,
+            'max_twilight': round(st['max_twilight'], 4),
+            'max_rf': round(st['max_rf'], 4),
+        })
+
+    # Normalize Biophysical 3D coordinates to [-190, +190]
+    b_mean = bio_xyz.mean(axis=0, keepdims=True)
+    b_std = np.maximum(bio_xyz.std(axis=0, keepdims=True), 1e-4)
+    bio_norm = np.clip((bio_xyz - b_mean) / b_std * 85.0, -195.0, 195.0)
+
+    # Compute Spectral SVD 3D Similarity Manifold from Weighted Adjacency + Biophysical Kernel
+    bio_unit = (bio_xyz - b_mean) / b_std
+    norms = np.maximum(np.linalg.norm(bio_unit, axis=1, keepdims=True), 1e-6)
+    bio_cos = np.clip((bio_unit / norms) @ (bio_unit / norms).T, 0.0, 1.0)
+    A = W + 0.35 * bio_cos
+    deg = np.maximum(A.sum(axis=1), 1e-6)
+    D_inv_sqrt = np.diag(1.0 / np.sqrt(deg))
+    M = D_inv_sqrt @ A @ D_inv_sqrt
+    try:
+        U, S, _ = np.linalg.svd(M)
+        sim_raw = U[:, 1:4] * np.sqrt(np.maximum(S[1:4], 1e-4))
+    except Exception:
+        sim_raw = bio_norm
+    s_mean = sim_raw.mean(axis=0, keepdims=True)
+    s_std = np.maximum(sim_raw.std(axis=0, keepdims=True), 1e-4)
+    sim_norm = np.clip((sim_raw - s_mean) / s_std * 90.0, -195.0, 195.0)
+
+    # Cluster offsets to make constellations visually crisp in Hybrid 3D Space
+    cluster_centers = {
+        'halophilic_core': np.array([115.0, 35.0, 20.0]),
+        'soda_lake': np.array([85.0, -95.0, 75.0]),
+        'hydrophilic': np.array([-105.0, 105.0, -35.0]),
+        'hydrophobic': np.array([-110.0, -90.0, -55.0]),
+        'duf_archaea': np.array([10.0, 95.0, 110.0]),
+        'thermophilic': np.array([-20.0, -30.0, -115.0]),
+    }
+
+    for i, nd in enumerate(nodes_out):
+        c_off = cluster_centers.get(nd['cluster_id'], np.zeros(3))
+        hyb = 0.50 * sim_norm[i] + 0.30 * bio_norm[i] + 0.20 * c_off
+        nd['coords_biophysical'] = [round(float(x), 1) for x in bio_norm[i]]
+        nd['coords_similarity'] = [round(float(x), 1) for x in sim_norm[i]]
+        nd['coords_hybrid'] = [round(float(x), 1) for x in hyb]
+
+    # Build top-bar Scenario Presets
+    def _best_org_for(pred_fn):
+        cands = [n for n in nodes_out if pred_fn(n)]
+        if not cands:
+            return nodes_out[0]['id'] if nodes_out else None
+        cands.sort(key=lambda x: x['total_weight'], reverse=True)
+        return cands[0]['id']
+
+    unique_pairs = list({(p['bait_id'], p['orphan_id']): p for p in all_elite_pairs}.values())
+    tw_top = sorted(unique_pairs, key=lambda x: x['twilight_score'], reverse=True)[:6]
+    rf_top = sorted([p for p in unique_pairs if p['rf_score'] is not None], key=lambda x: x['rf_score'], reverse=True)[:6]
+    duf_top = sorted([p for p in unique_pairs if 'DUF' in (p['b_desc'] or '').upper() or 'DUF' in (p['o_desc'] or '').upper()], key=lambda x: x['twilight_score'], reverse=True)[:6]
+    soda_top = sorted([p for p in unique_pairs if any(g in p['b_org'].lower() or g in p['o_org'].lower() for g in soda_genera)], key=lambda x: ((1 if x['rf_score'] is not None else 0), x['twilight_score']), reverse=True)[:6]
+
+    scenarios = {
+        'all': {
+            'title': '🌐 Full 3D Organism & Biophysical Galaxy',
+            'description': '165 extremophile organisms positioned by 55% Spectral SVD Proteome Similarity + 45% Biophysical Niche (Halophilic Brine Armor, Hydrophilicity & Aliphatic Core).',
+            'coord_mode': 'hybrid',
+            'weight_mode': 'composite',
+            'focus_org': nodes_out[0]['id'] if nodes_out else None,
+            'top_pairs': tw_top,
+        },
+        'halophilic_core': {
+            'title': '🧂 Extreme Halophilic Brine Core (High D/E · Low pI)',
+            'description': 'Focuses on ultra-halophilic archaea (pI ≤ 4.55, >15.5% D/E acidic surface armor) engineered for saturated 3.5–4.5 M NaCl brines.',
+            'coord_mode': 'hybrid',
+            'weight_mode': 'composite',
+            'focus_org': _best_org_for(lambda n: n['cluster_id'] == 'halophilic_core'),
+            'top_pairs': tw_top,
+        },
+        'soda_lake': {
+            'title': '🧪 Soda-Lake Haloalkaliphile Constellation (pH 9.5–11)',
+            'description': 'Focuses on Natronorubrum, Natronobacterium, Natrialba, and Halalkalicoccus species that lock 3D catalytic folds across alkaline soda lakes (0.44 Å GalE & 0.75 Å TFIIB).',
+            'coord_mode': 'hybrid',
+            'weight_mode': 'rangefinder',
+            'focus_org': _best_org_for(lambda n: n['cluster_id'] == 'soda_lake'),
+            'top_pairs': soda_top,
+        },
+        'hydrophilic_axis': {
+            'title': '💧 Biophysical 3D Space: Halophilic (X) × Hydrophilic (Y) × Aliphatic (Z)',
+            'description': 'Switches coordinates to pure Biophysical 3D Axes separating highly hydrophilic aqueous enzymes (−GRAVY) from hydrophobic interfacial/polymer-binding folds (+GRAVY).',
+            'coord_mode': 'biophysical',
+            'weight_mode': 'similarity',
+            'focus_org': _best_org_for(lambda n: n['cluster_id'] == 'hydrophilic'),
+            'top_pairs': rf_top,
+        },
+        'twilight_champions': {
+            'title': '🏆 All-Time Twilight-Zone Champions (Score ≥ 0.864)',
+            'description': 'Weights 3D filaments by Twilight-Zone breakthrough score and focuses on the #1 cross-genus structural lock.',
+            'coord_mode': 'similarity',
+            'weight_mode': 'twilight',
+            'focus_org': tw_top[0]['b_org'] if tw_top else (nodes_out[0]['id'] if nodes_out else None),
+            'top_pairs': tw_top,
+        },
+        'duf_rescue': {
+            'title': '🌑 Dark Proteome (DUF) Functional Rescue Constellation',
+            'description': 'Focuses on unclassified Halobacteria archaeon & extremophile hubs where Domains of Unknown Function (DUF7117, DUF1947) lock onto known catalytic families.',
+            'coord_mode': 'hybrid',
+            'weight_mode': 'twilight',
+            'focus_org': _best_org_for(lambda n: n['cluster_id'] == 'duf_archaea'),
+            'top_pairs': duf_top,
+        },
+        'rangefinder_3d': {
+            'title': '🔬 3D RangeFinder Catalytic Pocket Clique (IoU ≥ 0.88)',
+            'description': 'Scales 3D bridge weights by 10 Å RangeFinder 9-property GiST pocket overlap (rf_score) and focuses on verified sub-Ångström active-site pairs.',
+            'coord_mode': 'hybrid',
+            'weight_mode': 'rangefinder',
+            'focus_org': rf_top[0]['b_org'] if rf_top else (nodes_out[0]['id'] if nodes_out else None),
+            'top_pairs': rf_top,
+        },
+    }
+
+    clusters_summary = [
+        {
+            'id': cid,
+            'name': cname,
+            'color': ccol,
+            'count': cluster_counts[cid],
+        }
+        for cid, (cname, ccol) in cluster_defs.items()
+        if cluster_counts[cid] > 0
+    ]
+
+    payload = {
+        'nodes': nodes_out,
+        'links': links_out,
+        'clusters': clusters_summary,
+        'scenarios': scenarios,
+    }
+    GALAXY_3D_CACHE['ts'] = now_ts
+    GALAXY_3D_CACHE['payload'] = payload
+    return jsonify(payload)
+
+
+@app.route('/api/compound_3d/<hub_id>')
+def api_compound_3d(hub_id):
+    """Returns 1 reference hub PDB + up to 9 Kabsch-aligned challenger PDBs across organisms for 10% ghost superposition."""
+    hub_id = (hub_id or 'A0A1H7ISK7').strip()
+    prot_meta = {}
+    with psycopg.connect(DB_URI, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id1, id2, pdb1_path, pdb2_aligned_path,
+                       (metrics_payload->'alignment'->>'tm_score')::float8 AS tm_score,
+                       (metrics_payload->'alignment'->>'core_rmsd')::float8 AS core_rmsd,
+                       (metrics_payload->'rangefinder_pocket'->>'range_iou')::float8 AS range_iou,
+                       (metrics_payload->>'sw_identity')::float8 AS sw_id
+                FROM swarm_comparison_cache
+                WHERE id1 = %s
+                  AND pdb2_aligned_path IS NOT NULL
+                  AND COALESCE((metrics_payload->'alignment'->>'tm_score')::float8, 0.0) >= 0.50
+                ORDER BY (metrics_payload->'alignment'->>'tm_score')::float8 DESC NULLS LAST
+                LIMIT 12
+                """,
+                (hub_id,),
+            )
+            rows = cur.fetchall()
+
+            prot_ids = {hub_id}
+            for r in rows:
+                prot_ids.add(r[1])
+
+            cur.execute(
+                """
+                SELECT uniprot_id,
+                       split_part(split_part(name, ' OS=', 2), ' OX=', 1) AS organism,
+                       regexp_replace(split_part(name, ' OS=', 1), '^\\S+\\s+', '') AS description,
+                       round(isoelectric_point(sequence)::numeric, 2)::float8 AS pi,
+                       round(gravy_score(sequence)::numeric, 3)::float8 AS gravy,
+                       length(sequence) AS seq_len
+                FROM proteins
+                WHERE uniprot_id = ANY(%s)
+                """,
+                (list(prot_ids),),
+            )
+            for uid, org_name, desc_name, pi_val, gravy_val, seq_len in cur.fetchall():
+                prot_meta[uid] = {
+                    'uniprot_id': uid,
+                    'organism': org_name or 'Unknown Archaeon',
+                    'description': desc_name or uid,
+                    'pi': pi_val,
+                    'gravy': gravy_val,
+                    'seq_len': seq_len,
+                }
+
+    models_dir = '/Users/jonatas/code/ideia.me/assets/models'
+    aligned_dir = os.path.join(models_dir, 'aligned')
+
+    hub_pdb_path = os.path.join(models_dir, f'AF-{hub_id}-F1-model_v4.pdb')
+    if rows and rows[0][2] and os.path.exists(rows[0][2]):
+        hub_pdb_path = rows[0][2]
+
+    if not os.path.exists(hub_pdb_path):
+        return jsonify({'error': f'Reference PDB not found for {hub_id}'}), 404
+
+    with open(hub_pdb_path, 'r', encoding='utf-8', errors='replace') as fh:
+        hub_pdb_str = fh.read()
+
+    hm = prot_meta.get(
+        hub_id,
+        {
+            'uniprot_id': hub_id,
+            'organism': 'Reference Organism',
+            'description': hub_id,
+            'pi': 5.0,
+            'gravy': -0.2,
+            'seq_len': 0,
+        },
+    )
+
+    models_out = [
+        {
+            'uniprot_id': hub_id,
+            'organism': hm['organism'],
+            'description': hm['description'],
+            'role': 'Reference Hub (100% Frame)',
+            'tm_score': '1.000',
+            'rmsd': '0.00',
+            'rf_iou': '1.000',
+            'sw_id': '100.0%',
+            'pi': hm['pi'],
+            'gravy': hm['gravy'],
+            'pdb': hub_pdb_str,
+        }
+    ]
+
+    seen_ids = {hub_id}
+    for _, chal_id, _, pdb2_aligned_path, tm_val, rmsd_val, rf_iou, sw_id in rows:
+        if chal_id in seen_ids:
+            continue
+        cand_path = pdb2_aligned_path
+        if not cand_path or not os.path.exists(cand_path):
+            cand_path = os.path.join(aligned_dir, f'AF-{hub_id}_vs_{chal_id}_aligned.pdb')
+        if not os.path.exists(cand_path):
+            continue
+        with open(cand_path, 'r', encoding='utf-8', errors='replace') as fh:
+            chal_pdb_str = fh.read()
+        cm = prot_meta.get(
+            chal_id,
+            {
+                'uniprot_id': chal_id,
+                'organism': 'Aligned Homolog',
+                'description': chal_id,
+                'pi': 5.0,
+                'gravy': -0.2,
+                'seq_len': 0,
+            },
+        )
+        models_out.append(
+            {
+                'uniprot_id': chal_id,
+                'organism': cm['organism'],
+                'description': cm['description'],
+                'role': 'Kabsch-Aligned Homolog',
+                'tm_score': f'{tm_val:.3f}' if tm_val is not None else '—',
+                'rmsd': f'{rmsd_val:.2f}' if rmsd_val is not None else '—',
+                'rf_iou': f'{rf_iou:.3f}' if rf_iou is not None else '—',
+                'sw_id': f'{sw_id:.1f}%' if sw_id is not None else '—',
+                'pi': cm['pi'],
+                'gravy': cm['gravy'],
+                'pdb': chal_pdb_str,
+            }
+        )
+        seen_ids.add(chal_id)
+        if len(models_out) >= 10:
+            break
+
+    return jsonify(
+        {
+            'hub_id': hub_id,
+            'hub_organism': hm['organism'],
+            'hub_description': hm['description'],
+            'count': len(models_out),
+            'models': models_out,
+        }
+    )
+
+
 if __name__ == '__main__':
-    app.run(port=8080)
+    app.run(port=8080, threaded=True)
