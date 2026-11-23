@@ -1,6 +1,6 @@
 FROM postgres:18-bookworm
 
-# Install build dependencies
+# Install build dependencies (including meson, ninja-build, and libopenblas-dev for pg_vectorsearch)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -8,11 +8,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libclang-dev \
     clang \
     libssl-dev \
+    libopenblas-dev \
+    meson \
+    ninja-build \
     postgresql-server-dev-18 \
     postgresql-18-pgvector \
     pkg-config \
     git \
     && rm -rf /var/lib/apt/lists/*
+
+# Build and install Tiger Data's pg_vectorsearch (PRISM + RaBitQ) for PostgreSQL 18
+RUN git clone --depth 1 https://github.com/timescale/pg_vectorsearch.git /usr/src/pg_vectorsearch \
+    && make -C /usr/src/pg_vectorsearch install PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config \
+    && rm -rf /usr/src/pg_vectorsearch
 
 # Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
