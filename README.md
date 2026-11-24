@@ -293,6 +293,47 @@ Supporting [**RosettaCommons Chaperone**](https://rosettacommons.org/2026/10/19/
   ORDER BY eval.design_composite_score DESC;
   ```
 
+### Layer 19: PocketVina Multi-Pocket SAS Conditioning & 21-Check PoseBusters Physical Validity Gate
+Inspired by [**PocketVina Atlas**](https://pocketvina-atlas.mdc-berlin.de/about/) ([Sarigun et al., *arXiv:2506.20043*](https://arxiv.org/abs/2506.20043)) and [**PoseBusters**](https://doi.org/10.1039/D3SC04185A) (Buttenschoen et al., *Chem. Sci.* 2024), proteome-scale virtual screening requires moving beyond single guessed docking boxes to **Multi-Pocket Conditioning** (`pk1..pk5`) while verifying that top poses pass **21 physical, geometric, steric, and salt-hygiene checks**—without silently hiding salted vendor entries (`[Na+].O=C([O-])...`) or teleporting sterically clashing poses into false positives.
+
+* **The Engine:** `pg_bio` implements three native Rust functions directly inside PostgreSQL (**`197.92 ms` for 120 complexes (`1.65 ms/complex`) — `20.96×` faster than Python pull**):
+  1. **`bio_detect_top_pockets(pdb_text, max_pockets DEFAULT 5)`:** Probes the protein surface with 24-ray Fibonacci Connolly Solvent Accessible Surface (SAS) spheres ($r_{\text{probe}} = 1.40\,\text{\AA}$) accelerated by a $5.0\,\text{\AA}$ 3D spatial voxel hash grid, filters for buried concave clefts, clusters SAS points via $4.0\,\text{\AA}$ BFS flood-fill ($\ge 7.5\,\text{\AA}$ inter-pocket separation), and emits `pk1..pk5` along with their 64-bit Morton `z_order_center`, 3D SAS coordinates (`sas_coords_flat`), 9D `RangeFinderPocket` intervals, and 16-byte CPU register Fastscan sketch (`fastscan_16b`).
+  2. **`bio_posebusters_audit(protein_pdb, ligand_sdf_or_smiles, cx, cy, cz)` & `bio_posebusters_audit_row(...)`:** Audits all **21 PoseBusters & chemical hygiene checks** (valence, connectivity, charge, salt counterion exclusion, covalent bond lengths/angles, internal clash, $3\times 3$ Jacobi SVD aromatic ring flatness $\le 0.25\,\text{\AA}$, $sp^2$ flatness, $sp^3$ tetrahedral volume, pairwise protein–ligand VdW ratio $d_{ij}/(r_{\text{vdW},i}+r_{\text{vdW},j}) \ge 0.75$, volume overlap, pocket burial, cofactor clearance, H-bond geometry, BUNS, RangeFinder compatibility, and PAINS/aggregator hygiene) with a **Strict Non-Hiding Dual-Ledger Provenance** contract (`raw_passes_all_21`, `was_desalted`, `rescue_possible` $\le 1.25\,\text{\AA}$, `rescue_rmsd_shift_a`, `provenance_tag`).
+  3. **`bio_multipocket_posebusters_screen(protein_pdb, ligand_smiles_or_sdf, max_pockets DEFAULT 5)`:** Fuses top-$K$ pocket detection, 9D RangeFinder selectivity, and 21-check PoseBusters validation across all candidate pockets of a protein in a single SQL query, flagging the winning pocket with `is_best_pocket = TRUE` (`★`).
+* **Reference Documentation & Benchmark:** [`docs/19_pocketvina_multipocket_and_posebusters.md`](docs/19_pocketvina_multipocket_and_posebusters.md) | [`scripts/benchmark_pocketvina_posebusters.py`](scripts/benchmark_pocketvina_posebusters.py) | [`experiments/16_pocketvina_multipocket_posebusters.ipynb`](experiments/16_pocketvina_multipocket_posebusters.ipynb)
+* **SQL Example:**
+  ```sql
+  -- 1. Detect the Top 5 P2Rank-style SAS pockets of an enzyme and emit 9D RangeFinder + 16-byte Fastscan sketches:
+  SELECT pocket_rank, pocket_id, p2rank_score, probability,
+         center_x, center_y, center_z, sas_points_count, residue_count,
+         mean_plddt, residue_ids[1:4] AS top_residues,
+         octet_length(fastscan_16b) AS fastscan_bytes
+  FROM bio_detect_top_pockets(protein_pdb, 5);
+
+  -- 2. Audit a salted vendor drug SMILES with Strict Non-Hiding Dual-Ledger Provenance:
+  --    (passes_all_21 = TRUE on the desalted drug, while raw_passes_all_21 = FALSE and was_desalted = TRUE)
+  SELECT passes_all_21, raw_passes_all_21, was_desalted,
+         rescue_possible, rescue_rmsd_shift_a, provenance_tag,
+         passed_count, total_checks, failed_checks,
+         min_vdw_ratio, max_ring_rmsd_a
+  FROM bio_posebusters_audit_row(
+      protein_pdb,
+      '[Na+].O=C([O-])c1ccccc1O', -- Sodium salicylate salt -> desalted to Salicylic acid
+      10.0, 10.0, 10.0
+  );
+
+  -- 3. Multi-Pocket Conditioning + 21-Check PoseBusters Screen for Diclofenac (Pipeline #6 feedstock):
+  SELECT pocket_rank,
+         CASE WHEN is_best_pocket THEN '★ ' || pocket_id ELSE pocket_id END AS pocket_badge,
+         p2rank_score, pocket_probability, estimated_vina_kcal_mol,
+         rangefinder_compatibility, posebusters_valid, posebusters_passed_checks
+  FROM bio_multipocket_posebusters_screen(
+      protein_pdb,
+      'O=C(O)Cc1ccccc1Nc2c(Cl)cccc2Cl',
+      5
+  );
+  ```
+
 ---
 ## 🛠️ Scale & Optimization Infrastructure
 
@@ -375,6 +416,7 @@ Below is the complete reference of correlation engines built into [`src/lib.rs`]
 | **13** | **Layer 14 Industrial Bioprocess Cascade Kinetics (RK4), Pareto Domain Scoring & Biomass Stoichiometry**<br>*(Multi-Feedstock Upcycling & Equilibrium Sinks)* | Ranks `(Anchor × Scissor)` domain pairs across hydropathy, pI, and sequence entropy, integrates 48-hour two-stage enzymatic cascades with competitive product inhibition ($K_i$) and surface adsorption boost via 4th-order Runge-Kutta (RK4), and solves 3-enzyme biomass stoichiometry ($w_1+w_2+w_3=1.0$). | [`pareto_score_domain_pair`](src/lib.rs#L5482-L5501), [`simulate_cascade_kinetics`](src/lib.rs#L5343-L5410), [`optimize_consortium_stoichiometry`](src/lib.rs#L5414-L5478), and [`translate_and_merge_pdb_chains`](src/lib.rs#L5506-L5558) execute natively inside PostgreSQL 18. | **In-Database RK4 & Simplex Grid in < 1 ms:** Eliminates shipping thousands of candidate pairs and ODE time-series arrays to Python/SciPy; evaluates 12 full 97-step RK4 trajectories in ~24 ms directly inside SQL. | 🚀 [**`jonatas/bio-pipelines`**](https://github.com/jonatas/bio-pipelines)<br>🧪 [**`jonatas/teaflon`**](https://github.com/jonatas/teaflon) |
 | **14** | **Layer 15 RangeFinder Pocket-Interval GiST & B-Tree Virtual Screening**<br>*(100M+ Ligand Filtering & Reverse Target Fishing, `arXiv:2611.03379v1`)* | Predicts 9 compatible ligand property intervals ($\hat{I}_{pj} = [\hat{\mu}_{pj} - 2|\hat{\sigma}_{pj}|, \hat{\mu}_{pj} + 2|\hat{\sigma}_{pj}|]$) from a $10\text{ \AA}$ protein pocket point cloud to filter 100M+ molecules via B-Tree or reverse-screen 20,000+ pockets via Multi-Column `numrange` GiST before touching a GPU. | [`predict_pocket_ranges`](src/lib.rs#L6057-L6269), [`compute_ligand_properties_row`](src/lib.rs#L6497-L6525), [`pocket_numranges`](src/lib.rs#L6590-L6619), [`pocket_matches_ligand_8prop`](src/lib.rs#L6410-L6427), and [`evaluate_rangefinder_screening`](src/lib.rs#L6433-L6492). | **0.167 ms/pocket Inference + 94.9x B-Tree & 16.6x GiST Speedup:** Screens 250,000 ligands in **3.78 ms** (94.9x faster than Python) and reverse-fishes 20,000 pockets via 8-column `numrange` GiST (`@>`) in **0.68 ms**. | 📖 [`RANGEFINDER_GIST_INDEXING.md`](docs/RANGEFINDER_GIST_INDEXING.md)<br>🐝 [`rangefinder_pocket_screening/`](examples/rangefinder_pocket_screening/)<br>⚡ [`benchmark_rangefinder_gist.py`](scripts/benchmark_rangefinder_gist.py)<br>📓 [`rangefinder_pocket_gist_screening.ipynb`](experiments/rangefinder_pocket_gist_screening.ipynb) |
 | **15** | **Anisotropy Whitening (`Know Thy Neighbour`), Inline `BioVecInt8G128` Varlena, Structure/PAINS Hygiene & Stage-2.5 (`EnzRef` / `STORM`) Re-Rankers** | Eliminates `ESM-2`/`ProstT5` SwiGLU cone anisotropy (`0.9963 -> -0.0151`) to tighten RaBitQ error bounds (`eps_bound`) by **2.78×**, keeps 1280-D Stage-2 reranking vectors 100% inline on the Postgres heap (`1,304 B < 2,000 B` TOAST threshold), repairs missing PDB/mmCIF atoms via Kabsch SVD + `< 2.2 Å` `CYX` disulfides + `HID`/`HIE`/`HIP` tautomers, filters PAINS/aggregators at **11,995 mols/s**, and re-ranks enzyme/ligand candidates via `EnzRef` SIMD role-contrast and `STORM` 64-hot `ID128` + Tanimoto cliff-preserving smoothing. | [`bio_fit_whitening_stats`](src/lib.rs#L8372-L8380), [`bio_whiten_embedding`](src/lib.rs#L8392-L8465), [`BioVecInt8G128`](src/lib.rs#L8657-L8963), [`bio_sanitize_structure`](src/lib.rs#L9615-L9638), [`bio_is_pains_or_aggregator`](src/lib.rs#L9640-L9935), [`bio_enzref_role_contrast`](src/lib.rs#L9941-L10075), [`bio_id128_hash`](src/lib.rs#L10077-L10122), [`bio_smooth_assay_series`](src/lib.rs#L10124-L10265). | **2.78× Tighter RaBitQ Bound, Zero TOAST Reads (`1,304 B` Inline Varlena), 2.00× Faster SIMD `i32` Reranking & 52,970 rows/s `EnzRef` SIMD:** Fuses ARM64 NEON / x86_64 AVX2 whitening, 128-channel group `i8+f16` `i32` accumulation, and 3-vector role-contrast inside Postgres buffer pages. | 📖 [`18_whitening_inline_reranking_and_hygiene.md`](docs/18_whitening_inline_reranking_and_hygiene.md)<br>📖 [`17_layered_centroids_multi_index_experiments.md`](docs/17_layered_centroids_multi_index_experiments.md) |
+| **16** | **Layer 19 PocketVina Multi-Pocket SAS Conditioning & 21-Check PoseBusters Physical Validity Gate**<br>*(Multi-Pocket `pk1..pk5` Concavity + 21-Check Steric/Chemical Audit)* | Detects and ranks the **Top 5 binding pockets** per protein using 24-ray Fibonacci Connolly SAS probes + $5.0\text{ \AA}$ voxel hashing (`P2Rank`-inspired), emits 9D `RangeFinderPocket` intervals + 16-byte register Fastscan sketches per pocket, and audits any ligand pose (SDF, PDBQT, or desalted SMILES) across all **21 PoseBusters physical, geometric, salt-hygiene, and steric clash checks** inside SQL. | [`bio_detect_top_pockets`](src/lib.rs#L10964-L11362), [`bio_posebusters_audit`](src/lib.rs#L12084-L12545), [`bio_posebusters_audit_row`](src/lib.rs#L12547-L12595), and [`bio_multipocket_posebusters_screen`](src/lib.rs#L12597-L12735). | **Zero Python/RDKit IPC + Fused Salt Rescue & $3\times 3$ Jacobi SVD Ring Planarity:** Automatically rescues salted vendor SMILES (`[Na+].O=C([O-])...`), rejects bare salt counterions (`[Na+]`) and PAINS motifs, and audits VdW clashes ($d/r_{\text{vdW}} \ge 0.75$) and ring flatness ($\le 0.25\text{ \AA}$) in single-digit milliseconds in SQL. | 📖 [`19_pocketvina_multipocket_and_posebusters.md`](docs/19_pocketvina_multipocket_and_posebusters.md)<br>⚡ [`benchmark_pocketvina_posebusters.py`](scripts/benchmark_pocketvina_posebusters.py)<br>📓 [`16_pocketvina_multipocket_posebusters.ipynb`](experiments/16_pocketvina_multipocket_posebusters.ipynb) |
 
 ---
 
