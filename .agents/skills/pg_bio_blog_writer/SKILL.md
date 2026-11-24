@@ -60,8 +60,8 @@ Use this skill whenever documenting a new protein discovery made via `pg_bio` in
 * Synthesize what this means for computational biology and remind the reader of the immense power of native PostgreSQL multiomics engines scanning millions of vectors in milliseconds.
 
 ### 7. Interactive 3Dmol.js Features (Built-in)
-* Mention to the user that the blog features an interactive 3D plugin (`pg_bio_sync.js`).
-* The user can double-click either 3D viewer to lock their cameras together (synchronized rotation/tilt).
+* Mention to the user that the blog features an interactive 3D plugin (`pg_bio_sync.js`) loaded globally in `_layouts/post.html`.
+* Both side-by-side 3D viewers mirror each other's camera motion (rotate, pan, and zoom/scroll together) automatically by default—no double-click required.
 * The user can click any fragment on one protein, and it will automatically highlight the matching residue (across all complex chains!) on the opposite protein by swapping colors.
 
 ### 8. MANDATORY POST-CREATION LINKING (Chat Response, Unified UI & Shared Footer)
