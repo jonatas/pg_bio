@@ -17,6 +17,7 @@ from .models import (
     RangeFinderPocket,
     RangeFinderEvaluation,
     VectorIndexRecommendation,
+    PoseBustersAudit,
 )
 
 class PgBioClient:
@@ -823,6 +824,114 @@ class PgBioClient:
                 row = cur.fetchone()
                 data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
                 return VectorIndexRecommendation(**data)
+
+    def detect_top_pockets(
+        self,
+        pdb_text: str,
+        max_pockets: int = 5,
+    ) -> List[dict]:
+        """
+        Detects and ranks the Top-K binding pockets on a protein structure using pg_bio's
+        P2Rank-inspired Solvent Accessible Surface (SAS) concavity detector (bio_detect_top_pockets).
+        """
+        query = """
+            SELECT pocket_rank, pocket_id, p2rank_score, probability,
+                   center_x, center_y, center_z, z_order_center,
+                   sas_points_count, residue_count, mean_plddt,
+                   residue_ids, sas_coords_flat, pocket_ranges::text
+            FROM bio_detect_top_pockets(%s, %s);
+        """
+        results = []
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (pdb_text, max_pockets))
+                for r in cur.fetchall():
+                    rf_data = json.loads(r[13]) if isinstance(r[13], str) else r[13]
+                    results.append({
+                        "pocket_rank": r[0],
+                        "pocket_id": r[1],
+                        "p2rank_score": float(r[2]),
+                        "probability": float(r[3]),
+                        "center_x": float(r[4]),
+                        "center_y": float(r[5]),
+                        "center_z": float(r[6]),
+                        "z_order_center": int(r[7]),
+                        "sas_points_count": int(r[8]),
+                        "residue_count": int(r[9]),
+                        "mean_plddt": float(r[10]),
+                        "residue_ids": r[11],
+                        "sas_coords_flat": r[12],
+                        "pocket_ranges": RangeFinderPocket(**rf_data),
+                    })
+        return results
+
+    def posebusters_audit(
+        self,
+        protein_pdb: str,
+        ligand_sdf_or_smiles: str,
+        pocket_center_x: float = 0.0,
+        pocket_center_y: float = 0.0,
+        pocket_center_z: float = 0.0,
+    ) -> PoseBustersAudit:
+        """
+        Runs the 21-check PoseBusters physical, chemical, geometric, and steric validity gate
+        natively inside PostgreSQL (bio_posebusters_audit).
+        """
+        query = "SELECT bio_posebusters_audit(%s, %s, %s, %s, %s)::text;"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (
+                        protein_pdb,
+                        ligand_sdf_or_smiles,
+                        pocket_center_x,
+                        pocket_center_y,
+                        pocket_center_z,
+                    ),
+                )
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return PoseBustersAudit(**data)
+
+    def multipocket_posebusters_screen(
+        self,
+        protein_pdb: str,
+        ligand_smiles_or_sdf: str,
+        max_pockets: int = 5,
+    ) -> List[dict]:
+        """
+        Executes multi-pocket conditioning across the top predicted pockets of a protein
+        paired with 21-check PoseBusters validation and RangeFinder compatibility scoring.
+        """
+        query = """
+            SELECT pocket_rank, pocket_id, is_best_pocket, p2rank_score,
+                   pocket_probability, estimated_vina_kcal_mol, rangefinder_compatibility,
+                   posebusters_valid, posebusters_passed_checks, failed_checks,
+                   min_vdw_ratio, contact_residues
+            FROM bio_multipocket_posebusters_screen(%s, %s, %s);
+        """
+        results = []
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (protein_pdb, ligand_smiles_or_sdf, max_pockets))
+                for r in cur.fetchall():
+                    results.append({
+                        "pocket_rank": int(r[0]),
+                        "pocket_id": r[1],
+                        "is_best_pocket": bool(r[2]),
+                        "p2rank_score": float(r[3]),
+                        "pocket_probability": float(r[4]),
+                        "estimated_vina_kcal_mol": float(r[5]),
+                        "rangefinder_compatibility": float(r[6]),
+                        "posebusters_valid": bool(r[7]),
+                        "posebusters_passed_checks": int(r[8]),
+                        "failed_checks": r[9],
+                        "min_vdw_ratio": float(r[10]),
+                        "contact_residues": r[11],
+                    })
+        return results
+
 
 
 

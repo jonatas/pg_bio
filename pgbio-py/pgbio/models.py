@@ -206,6 +206,46 @@ class VectorIndexRecommendation:
     recommended_nprobe: int
 
 
+@dataclass
+class PoseBustersAudit:
+    passes_all_21: bool
+    raw_passes_all_21: bool
+    was_desalted: bool
+    rescue_possible: bool
+    rescue_rmsd_shift_a: float
+    provenance_tag: str
+    passed_count: int
+    total_checks: int
+    failed_checks: List[str]
+    mol_pred_loaded: bool
+    sanitized_valid: bool
+    inchi_convertible: bool
+    all_atoms_connected: bool
+    no_radicals_or_wild_charge: bool
+    salt_stripped_drug: bool
+    bond_lengths_ok: bool
+    bond_angles_ok: bool
+    internal_steric_clash_ok: bool
+    aromatic_ring_flatness_ok: bool
+    double_bond_flatness_ok: bool
+    sp3_tetrahedral_chirality_ok: bool
+    internal_energy_strain_ok: bool
+    protein_steric_clash_ok: bool
+    volume_overlap_ok: bool
+    pocket_burial_ok: bool
+    cofactor_clash_ok: bool
+    hbond_geometry_ok: bool
+    zero_new_buns_ok: bool
+    rangefinder_8prop_compatible: bool
+    pains_aggregator_clean: bool
+    min_protein_ligand_dist_a: float
+    min_vdw_ratio: float
+    max_ring_rmsd_a: float
+    pocket_contact_atoms: int
+    ligand_heavy_atoms: int
+
+
+
 
 
 
