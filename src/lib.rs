@@ -1719,6 +1719,201 @@ pub fn smiles_to_fingerprint(smiles: &str) -> Vec<f32> {
     fp
 }
 
+/// Decomposes a reaction SMILES (`A.B>>C.D`, `A.B>agent>C.D`, or single-arrow `A->B` / `A>B`)
+/// into `(reactants_smiles, products_smiles)` while stripping middle agents (`>agent>`).
+/// If a single molecule SMILES without reaction arrows is passed, returns `(smiles, "")`.
+#[inline]
+pub fn pgbio_split_reaction_roles_str(rxn_smiles: &str) -> (String, String) {
+    let s = rxn_smiles.trim();
+    if s.is_empty() {
+        return (String::new(), String::new());
+    }
+    if let Some((lhs, rhs)) = s.split_once(">>") {
+        return (lhs.trim().to_string(), rhs.trim().to_string());
+    }
+    let parts: Vec<&str> = s.split('>').collect();
+    if parts.len() >= 3 {
+        let lhs = parts[0].trim();
+        let rhs = parts[parts.len() - 1].trim();
+        return (lhs.to_string(), rhs.to_string());
+    } else if parts.len() == 2 {
+        let lhs = parts[0].trim().trim_end_matches('-');
+        let rhs = parts[1].trim();
+        return (lhs.to_string(), rhs.to_string());
+    }
+    (s.to_string(), String::new())
+}
+
+/// Splits a reaction SMILES (`A.B>>C.D` or `A>agent>B`) into `(reactants_smiles text, products_smiles text)`,
+/// automatically stripping intermediate reaction agents/solvents (`>agent>`).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_split_reaction_roles(
+    rxn_smiles: &str,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(reactants_smiles, String),
+        name!(products_smiles, String),
+    ),
+> {
+    let (reactants, products) = pgbio_split_reaction_roles_str(rxn_smiles);
+    pgrx::iter::TableIterator::once((reactants, products))
+}
+
+/// Computes a pooled 1024-D (`float4[1024]`) or projected `target_dim`-D (`float4[target_dim]`)
+/// reaction role representation vector over a dot-separated multi-component role SMILES (`A.B`),
+/// combining normalized 1024-bit Morgan ECFP4 bit counts with the 9 RangeFinder physicochemical properties.
+#[inline]
+pub fn pgbio_vectorize_reaction_side(side_smiles: &str, target_dim: usize) -> Vec<f32> {
+    let dim = target_dim.max(9);
+    let mut out = vec![0.0f32; dim];
+    let trimmed = side_smiles.trim();
+    if trimmed.is_empty() {
+        return out;
+    }
+
+    let components: Vec<&str> = trimmed
+        .split('.')
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+        .collect();
+    if components.is_empty() {
+        return out;
+    }
+
+    let mut valid_count = 0usize;
+    let mut ecfp_accum = vec![0.0f32; 1024];
+    let mut props_accum = [0.0f32; 9];
+
+    for comp in &components {
+        if let Some((mut atoms, mut bonds)) = pgbio_lex_smiles(comp) {
+            if atoms.is_empty() {
+                continue;
+            }
+            pgbio_perceive_aromaticity(&mut atoms, &mut bonds);
+            let (wl_hash, ecfp_bits) = pgbio_compute_wl_ecfp(&atoms, &bonds);
+            let mol = Molecule {
+                smiles: (*comp).to_string(),
+                is_valid: true,
+                wl_hash,
+                ecfp_bits,
+                atoms,
+                bonds,
+            };
+            for word_idx in 0..mol.ecfp_bits.len().min(16) {
+                let word = mol.ecfp_bits[word_idx];
+                if word == 0 {
+                    continue;
+                }
+                for bit in 0..64 {
+                    if (word & (1u64 << bit)) != 0 {
+                        ecfp_accum[(word_idx << 6) | bit] += 1.0;
+                    }
+                }
+            }
+            let p = molecule_ligand_properties(mol);
+            props_accum[0] += (p.mw / 400.0) as f32;
+            props_accum[1] += (p.logp / 5.0) as f32;
+            props_accum[2] += (p.hbd / 6.0) as f32;
+            props_accum[3] += (p.hba / 10.0) as f32;
+            props_accum[4] += (p.tpsa / 140.0) as f32;
+            props_accum[5] += (p.rotatable_bonds / 10.0) as f32;
+            props_accum[6] += (p.formal_charge / 3.0) as f32;
+            props_accum[7] += (p.aromatic_rings / 4.0) as f32;
+            props_accum[8] += p.fsp3 as f32;
+            valid_count += 1;
+        }
+    }
+
+    if valid_count == 0 {
+        return out;
+    }
+    let inv_n = 1.0f32 / (valid_count as f32);
+
+    if dim == 9 {
+        for i in 0..9 {
+            out[i] = props_accum[i] * inv_n;
+        }
+        return out;
+    }
+
+    if dim == 1024 {
+        for i in 0..1024 {
+            out[i] = ecfp_accum[i] * inv_n;
+        }
+        return out;
+    }
+
+    // For 1280-D (ESM-2 aligned) or general dim: map 1024 ECFP4 channels + multi-scale physicochemical harmonic channels
+    for i in 0..dim {
+        if i < 1024 {
+            out[i] = ecfp_accum[i] * inv_n;
+        } else {
+            let p_idx = (i - 1024) % 9;
+            let harmonic = (((i - 1024) / 9 + 1) as f32) * 0.35;
+            let ecfp_fold = ecfp_accum[(i * 7 + 13) % 1024] * inv_n;
+            out[i] = 0.65 * (props_accum[p_idx] * inv_n) * harmonic.cos() + 0.35 * ecfp_fold;
+        }
+    }
+    out
+}
+
+/// Batch ECFP4 & 9D physicochemical descriptor vectorizer for each side of a reaction SMILES
+/// (`A.B>>C.D` or `A>agent>B`), returning aligned `(reactants_smiles, products_smiles, reactant_ecfp4, product_ecfp4, reactant_props_9d, product_props_9d)`.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_reaction_role_vectors(
+    rxn_smiles: &str,
+    target_dim: default!(i32, 1024),
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(reactants_smiles, String),
+        name!(products_smiles, String),
+        name!(reactant_vec, Vec<f32>),
+        name!(product_vec, Vec<f32>),
+        name!(reactant_props_9d, Vec<f32>),
+        name!(product_props_9d, Vec<f32>),
+    ),
+> {
+    let (react_s, prod_s) = pgbio_split_reaction_roles_str(rxn_smiles);
+    let d = target_dim.clamp(9, 4096) as usize;
+    let r_vec = pgbio_vectorize_reaction_side(&react_s, d);
+    let p_vec = pgbio_vectorize_reaction_side(&prod_s, d);
+    let r_props = pgbio_vectorize_reaction_side(&react_s, 9);
+    let p_props = pgbio_vectorize_reaction_side(&prod_s, 9);
+    pgrx::iter::TableIterator::once((react_s, prod_s, r_vec, p_vec, r_props, p_props))
+}
+
+/// Batch table processor over an array of reaction SMILES strings (`rxn_smiles_list text[]`),
+/// returning decomposed reactant/product SMILES and vectorized representations for each side.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_batch_reaction_role_vectors(
+    rxn_smiles_list: Vec<String>,
+    target_dim: default!(i32, 1024),
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(rxn_idx, i32),
+        name!(reactants_smiles, String),
+        name!(products_smiles, String),
+        name!(reactant_vec, Vec<f32>),
+        name!(product_vec, Vec<f32>),
+    ),
+> {
+    let d = target_dim.clamp(9, 4096) as usize;
+    let rows: Vec<_> = rxn_smiles_list
+        .iter()
+        .enumerate()
+        .map(|(idx, rxn)| {
+            let (r_s, p_s) = pgbio_split_reaction_roles_str(rxn);
+            let rv = pgbio_vectorize_reaction_side(&r_s, d);
+            let pv = pgbio_vectorize_reaction_side(&p_s, d);
+            ((idx + 1) as i32, r_s, p_s, rv, pv)
+        })
+        .collect();
+    pgrx::iter::TableIterator::new(rows.into_iter())
+}
+
 /// Tanimoto similarity function for chemical fingerprints
 #[pg_extern(immutable, parallel_safe)]
 pub fn tanimoto_similarity(a: Vec<f32>, b: Vec<f32>) -> f64 {
@@ -5515,7 +5710,9 @@ pub fn evaluate_chaperone_core_example_block(
 // =====================================================================
 
 /// 4th-order Runge-Kutta (RK4) numerical integrator for two-stage enzymatic cascades
-/// (`Solid/Polymer Substrate S --(E1, adsorption_boost, Ki)--> Intermediate I --(E2 Sink)--> Product P`).
+/// (`Solid/Polymer Substrate S --(E1, adsorption_boost, Ki)--> Intermediate I --(E2 Sink, Kp backpressure, c/c* crowding)--> Product P`).
+/// Supports optional reversible product-retention backpressure (`backpressure_risk` in `[0.0, 2.0]`)
+/// and dimensionless macromolecular crowding / metabolon channeling (`c_over_cstar` in `[0.0, 4.0]`).
 #[pg_extern(immutable, parallel_safe)]
 pub fn simulate_cascade_kinetics(
     kcat1_per_hr: f64,
@@ -5527,6 +5724,8 @@ pub fn simulate_cascade_kinetics(
     initial_substrate_u_m: f64,
     time_hours: f64,
     steps: i32,
+    backpressure_risk: default!(f32, 0.0),
+    c_over_cstar: default!(f32, 0.0),
 ) -> pgrx::iter::TableIterator<
     'static,
     (
@@ -5543,14 +5742,46 @@ pub fn simulate_cascade_kinetics(
     let s0 = initial_substrate_u_m.max(0.0);
     let boost = adsorption_boost.max(0.1);
     let ki = ki_inhibition_u_m.max(1.0);
+    let bp = (backpressure_risk as f64).clamp(0.0, 3.0);
+    let crowding = (c_over_cstar as f64).clamp(0.0, 5.0);
+    // Mouth-to-mouth metabolon channeling & crowding modifier:
+    // Moderate c/c* (0.2..1.5) accelerates intermediate capture and lowers effective Km2; excessive crowding (>2.5) adds viscosity drag.
+    let crowding_turnover_mod = if crowding > 1e-6 {
+        (1.0 + 0.28 * crowding / (1.0 + 0.35 * crowding * crowding)).clamp(0.65, 1.45)
+    } else {
+        1.0
+    };
+    let crowding_km2_mod = if crowding > 1e-6 {
+        (1.0 / (1.0 + 0.32 * crowding)).clamp(0.45, 1.0)
+    } else {
+        1.0
+    };
 
-    let rates = |s: f64, inter: f64| -> (f64, f64, f64) {
+    let rates = |s: f64, inter: f64, prod: f64| -> (f64, f64, f64) {
         let s_pos = s.max(0.0);
         let i_pos = inter.max(0.0);
+        let p_pos = prod.max(0.0);
         let eff_s = s_pos * boost;
-        let eff_km1 = km1_u_m.max(1e-6) * (1.0 + i_pos / ki);
-        let v1 = kcat1_per_hr.max(0.0) * (eff_s / (eff_km1 + eff_s));
-        let v2 = kcat2_per_hr.max(0.0) * (i_pos / (km2_u_m.max(1e-6) + i_pos));
+        // Backpressure risk amplifies product-retention & intermediate accumulation penalty on E1 and E2
+        let kp_sink = (s0 * 0.32 / bp.max(0.05)).max(12.0);
+        let prod_backpressure_term = if bp > 1e-6 {
+            bp * (p_pos / kp_sink)
+        } else {
+            0.0
+        };
+        let eff_km1 = km1_u_m.max(1e-6) * (1.0 + (i_pos / ki) * (1.0 + 0.65 * bp) + 0.45 * prod_backpressure_term);
+        let v1 = kcat1_per_hr.max(0.0) * crowding_turnover_mod * (eff_s / (eff_km1 + eff_s));
+
+        let eff_km2 = km2_u_m.max(1e-6) * crowding_km2_mod * (1.0 + 1.35 * prod_backpressure_term);
+        let eff_kcat2 = kcat2_per_hr.max(0.0) * crowding_turnover_mod / (1.0 + 0.55 * bp * (1.0 + p_pos / s0.max(1.0)));
+        let v2_forward = eff_kcat2 * (i_pos / (eff_km2 + i_pos));
+        // Reversible product-inhibition / backpressure stall flux when bp > 0
+        let v2_rev = if bp > 1e-6 && kcat2_per_hr > 0.0 {
+            (0.18 * bp / (1.0 + bp)) * eff_kcat2 * (p_pos / (kp_sink + p_pos))
+        } else {
+            0.0
+        };
+        let v2 = (v2_forward - v2_rev).max(0.0);
         (-v1, v1 - v2, v2)
     };
 
@@ -5563,10 +5794,10 @@ pub fn simulate_cascade_kinetics(
     out.push((0.0, s, inter, prod, frac0));
 
     for step_idx in 1..=n_steps {
-        let (ds1, di1, dp1) = rates(s, inter);
-        let (ds2, di2, dp2) = rates(s + 0.5 * dt * ds1, inter + 0.5 * dt * di1);
-        let (ds3, di3, dp3) = rates(s + 0.5 * dt * ds2, inter + 0.5 * dt * di2);
-        let (ds4, di4, dp4) = rates(s + dt * ds3, inter + dt * di3);
+        let (ds1, di1, dp1) = rates(s, inter, prod);
+        let (ds2, di2, dp2) = rates(s + 0.5 * dt * ds1, inter + 0.5 * dt * di1, prod + 0.5 * dt * dp1);
+        let (ds3, di3, dp3) = rates(s + 0.5 * dt * ds2, inter + 0.5 * dt * di2, prod + 0.5 * dt * dp2);
+        let (ds4, di4, dp4) = rates(s + dt * ds3, inter + dt * di3, prod + dt * dp3);
 
         s = (s + (dt / 6.0) * (ds1 + 2.0 * ds2 + 2.0 * ds3 + ds4)).max(0.0);
         inter = (inter + (dt / 6.0) * (di1 + 2.0 * di2 + 2.0 * di3 + di4)).max(0.0);
@@ -10384,13 +10615,285 @@ pub fn bio_is_pains_or_aggregator(smiles: &str) -> bool {
 }
 
 // =====================================================================
-// 19. PHASE 3: STAGE-2.5 CPU FUNCTIONAL & AFFINITY RE-RANKERS
-//     (EnzRef ROLE-CONTRAST SCORER + STORM L0 AFFINITY KERNEL)
+// 19. PHASE 1 & 2: STAGE-2.5 CPU FUNCTIONAL & AFFINITY RE-RANKERS
+//     (EnzRef REFERENCE-CENTERED ROLE-CONTRAST SCORER + DISORDERED
+//      MICROPROTEIN SLiM WINDOW POOLER + STORM L0 AFFINITY KERNEL)
 // =====================================================================
 
+/// Composite result for `EnzRef` reference-centered kinetic role-contrast scoring (`bio_enzref_kinetics`).
+/// - `forward_flux_score`: Directed catalytic flux score (antisymmetric under `swap(reactant, product)`).
+/// - `backpressure_risk`: Product-retention / reversible backpressure stall penalty (`> 1.0` when `||d_prod|| > ||d_react||`).
+/// - `role_contrast_norm`: Euclidean L2 norm `||c_fwd|| = ||d_prod - d_react||` of the directed catalytic shift.
+/// - `mean_catalytic_response`: Euclidean L2 norm `||m|| = ||0.5 * (d_react + d_prod)||` of the symmetry-aware mean response.
+/// - `cosine_alignment`: Cosine alignment between the mean catalytic response `m` and directed role contrast `c_fwd`.
+/// - `norm_ratio_react_over_prod`: L2 norm ratio `||d_react|| / (||d_prod|| + eps)` penalizing tight product retention.
+#[derive(PostgresType, Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct BioEnzRefResult {
+    pub forward_flux_score: f32,
+    pub backpressure_risk: f32,
+    pub role_contrast_norm: f32,
+    pub mean_catalytic_response: f32,
+    pub cosine_alignment: f32,
+    pub norm_ratio_react_over_prod: f32,
+}
+
+/// Fused single-pass hardware SIMD kernel (`aarch64` NEON + `x86_64` AVX2 + scalar fallback)
+/// for `EnzRef` reference-centered kinetic role-contrast over aligned `f32` slices.
+/// Given enzyme background `v_bg` (`e`), reactant representation `r_react` (`r`), and product representation `r_prod` (`p`):
+/// - `d_react = r - e`
+/// - `d_prod  = p - e`
+/// - `c_fwd   = d_prod - d_react` (`= p - r`)
+/// - Returns `(dot(d_react, c_fwd), ||d_react||^2, ||d_prod||^2, ||c_fwd||^2)`.
+/// Note that `m = 0.5 * (d_react + d_prod)` satisfies:
+/// - `||m||^2 = 0.5 * (||d_react||^2 + ||d_prod||^2) - 0.25 * ||c_fwd||^2`
+/// - `dot(m, c_fwd) = 0.5 * (||d_prod||^2 - ||d_react||^2)`
+#[inline]
+pub fn pgbio_simd_enzref_contrast_full(
+    e: &[f32],
+    r: &[f32],
+    p: &[f32],
+    n: usize,
+) -> (f32, f32, f32, f32) {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        let mut acc_dot = vdupq_n_f32(0.0);
+        let mut acc_react = vdupq_n_f32(0.0);
+        let mut acc_prod = vdupq_n_f32(0.0);
+        let mut acc_cat = vdupq_n_f32(0.0);
+        let mut i = 0usize;
+        while i + 4 <= n {
+            let ve = vld1q_f32(e.as_ptr().add(i));
+            let vr = vld1q_f32(r.as_ptr().add(i));
+            let vp = vld1q_f32(p.as_ptr().add(i));
+            // d_react = r_react - v_bg
+            let d_react = vsubq_f32(vr, ve);
+            // d_prod = r_prod - v_bg
+            let d_prod = vsubq_f32(vp, ve);
+            // c_fwd = d_prod - d_react
+            let c_fwd = vsubq_f32(d_prod, d_react);
+            acc_dot = vfmaq_f32(acc_dot, d_react, c_fwd);
+            acc_react = vfmaq_f32(acc_react, d_react, d_react);
+            acc_prod = vfmaq_f32(acc_prod, d_prod, d_prod);
+            acc_cat = vfmaq_f32(acc_cat, c_fwd, c_fwd);
+            i += 4;
+        }
+        let mut dot = vaddvq_f32(acc_dot);
+        let mut n_react = vaddvq_f32(acc_react);
+        let mut n_prod = vaddvq_f32(acc_prod);
+        let mut n_cat = vaddvq_f32(acc_cat);
+        while i < n {
+            let ve_i = *e.get_unchecked(i);
+            let dr = *r.get_unchecked(i) - ve_i;
+            let dp = *p.get_unchecked(i) - ve_i;
+            let dc = dp - dr;
+            dot += dr * dc;
+            n_react += dr * dr;
+            n_prod += dp * dp;
+            n_cat += dc * dc;
+            i += 1;
+        }
+        return (dot, n_react, n_prod, n_cat);
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            unsafe {
+                use std::arch::x86_64::*;
+                let mut acc_dot = _mm256_setzero_ps();
+                let mut acc_react = _mm256_setzero_ps();
+                let mut acc_prod = _mm256_setzero_ps();
+                let mut acc_cat = _mm256_setzero_ps();
+                let mut i = 0usize;
+                while i + 8 <= n {
+                    let ve = _mm256_loadu_ps(e.as_ptr().add(i));
+                    let vr = _mm256_loadu_ps(r.as_ptr().add(i));
+                    let vp = _mm256_loadu_ps(p.as_ptr().add(i));
+                    let d_react = _mm256_sub_ps(vr, ve);
+                    let d_prod = _mm256_sub_ps(vp, ve);
+                    let c_fwd = _mm256_sub_ps(d_prod, d_react);
+                    acc_dot = _mm256_add_ps(acc_dot, _mm256_mul_ps(d_react, c_fwd));
+                    acc_react = _mm256_add_ps(acc_react, _mm256_mul_ps(d_react, d_react));
+                    acc_prod = _mm256_add_ps(acc_prod, _mm256_mul_ps(d_prod, d_prod));
+                    acc_cat = _mm256_add_ps(acc_cat, _mm256_mul_ps(c_fwd, c_fwd));
+                    i += 8;
+                }
+                let mut t_dot = [0.0f32; 8];
+                let mut t_react = [0.0f32; 8];
+                let mut t_prod = [0.0f32; 8];
+                let mut t_cat = [0.0f32; 8];
+                _mm256_storeu_ps(t_dot.as_mut_ptr(), acc_dot);
+                _mm256_storeu_ps(t_react.as_mut_ptr(), acc_react);
+                _mm256_storeu_ps(t_prod.as_mut_ptr(), acc_prod);
+                _mm256_storeu_ps(t_cat.as_mut_ptr(), acc_cat);
+                let mut dot: f32 = t_dot.iter().sum();
+                let mut n_react: f32 = t_react.iter().sum();
+                let mut n_prod: f32 = t_prod.iter().sum();
+                let mut n_cat: f32 = t_cat.iter().sum();
+                while i < n {
+                    let ve_i = *e.get_unchecked(i);
+                    let dr = *r.get_unchecked(i) - ve_i;
+                    let dp = *p.get_unchecked(i) - ve_i;
+                    let dc = dp - dr;
+                    dot += dr * dc;
+                    n_react += dr * dr;
+                    n_prod += dp * dp;
+                    n_cat += dc * dc;
+                    i += 1;
+                }
+                return (dot, n_react, n_prod, n_cat);
+            }
+        }
+    }
+    #[allow(unreachable_code)]
+    {
+        let mut dot = 0.0f32;
+        let mut n_react = 0.0f32;
+        let mut n_prod = 0.0f32;
+        let mut n_cat = 0.0f32;
+        for i in 0..n {
+            let ve_i = e[i];
+            let dr = r[i] - ve_i;
+            let dp = p[i] - ve_i;
+            let dc = dp - dr;
+            dot += dr * dc;
+            n_react += dr * dr;
+            n_prod += dp * dp;
+            n_cat += dc * dc;
+        }
+        (dot, n_react, n_prod, n_cat)
+    }
+}
+
+#[inline]
+pub fn pgbio_simd_enzref_contrast(
+    e: &[f32],
+    r: &[f32],
+    p: &[f32],
+    n: usize,
+) -> (f32, f32, f32) {
+    let (dot, n_react, _n_prod, n_cat) = pgbio_simd_enzref_contrast_full(e, r, p, n);
+    (dot, n_react, n_cat)
+}
+
+/// Hardware SIMD `EnzRef` role-contrast kernel directly over 1280-D `BioVecInt8G128` inline varlenas
+/// (`aarch64` NEON + `x86_64` AVX2 + scalar fallback).
+#[inline]
+pub fn pgbio_simd_enzref_contrast_g128(
+    e: &BioVecInt8G128,
+    r: &BioVecInt8G128,
+    p: &BioVecInt8G128,
+) -> (f32, f32, f32, f32) {
+    let mut dot = 0.0f32;
+    let mut n_react = 0.0f32;
+    let mut n_prod = 0.0f32;
+    let mut n_cat = 0.0f32;
+    for g in 0..BIO_VEC_G128_GROUPS {
+        let se = pgbio_f16_bits_to_f32(e.scales_f16[g]);
+        let sr = pgbio_f16_bits_to_f32(r.scales_f16[g]);
+        let sp = pgbio_f16_bits_to_f32(p.scales_f16[g]);
+        let base = g * BIO_VEC_G128_GROUP_SIZE;
+        let mut e_f = [0.0f32; BIO_VEC_G128_GROUP_SIZE];
+        let mut r_f = [0.0f32; BIO_VEC_G128_GROUP_SIZE];
+        let mut p_f = [0.0f32; BIO_VEC_G128_GROUP_SIZE];
+        for j in 0..BIO_VEC_G128_GROUP_SIZE {
+            let idx = base + j;
+            e_f[j] = (e.quants[idx] as f32) * se;
+            r_f[j] = (r.quants[idx] as f32) * sr;
+            p_f[j] = (p.quants[idx] as f32) * sp;
+        }
+        let (d_g, nr_g, np_g, nc_g) =
+            pgbio_simd_enzref_contrast_full(&e_f, &r_f, &p_f, BIO_VEC_G128_GROUP_SIZE);
+        dot += d_g;
+        n_react += nr_g;
+        n_prod += np_g;
+        n_cat += nc_g;
+    }
+    (dot, n_react, n_prod, n_cat)
+}
+
+/// Core computation of `EnzRef` reference-centered kinetic role-contrast features from
+/// `(dot_react_cat, norm_react_sq, norm_prod_sq, norm_cat_sq, dim)`.
+#[inline]
+pub fn pgbio_compute_enzref_metrics_from_moments(
+    dot_react_cat: f32,
+    norm_react_sq: f32,
+    norm_prod_sq: f32,
+    norm_cat_sq: f32,
+    n: usize,
+) -> BioEnzRefResult {
+    let eps = 1e-6f32;
+    if n == 0 || norm_cat_sq <= 1e-16 || (norm_react_sq <= 1e-16 && norm_prod_sq <= 1e-16) {
+        return BioEnzRefResult {
+            forward_flux_score: 0.0,
+            backpressure_risk: 0.0,
+            role_contrast_norm: 0.0,
+            mean_catalytic_response: (0.5 * (norm_react_sq + norm_prod_sq)).max(0.0).sqrt(),
+            cosine_alignment: 0.0,
+            norm_ratio_react_over_prod: if norm_react_sq > 1e-16 { 1.0 } else { 0.0 },
+        };
+    }
+
+    let norm_react = norm_react_sq.sqrt();
+    let norm_prod = norm_prod_sq.sqrt();
+    let norm_cat = norm_cat_sq.sqrt();
+
+    // Mean catalytic response m = 0.5 * (d_react + d_prod)
+    // ||m||^2 = 0.25 * (2*||d_react||^2 + 2*||d_prod||^2 - ||c_fwd||^2)
+    let norm_m_sq = (0.5 * (norm_react_sq + norm_prod_sq) - 0.25 * norm_cat_sq).max(0.0);
+    let norm_m = norm_m_sq.sqrt();
+
+    // dot(m, c_fwd) = 0.5 * dot(d_react + d_prod, d_prod - d_react) = 0.5 * (||d_prod||^2 - ||d_react||^2)
+    let dot_m_cat = 0.5 * (norm_prod_sq - norm_react_sq);
+    let cos_m_cat = if norm_m > 1e-8 && norm_cat > 1e-8 {
+        (dot_m_cat / (norm_m * norm_cat)).clamp(-1.0, 1.0)
+    } else {
+        0.0
+    };
+
+    // Substrate-to-transition-state cosine alignment: cos(d_react, c_fwd)
+    let cos_react_cat = if norm_react > 1e-8 && norm_cat > 1e-8 {
+        (dot_react_cat / (norm_react * norm_cat)).clamp(-1.0, 1.0)
+    } else {
+        0.0
+    };
+
+    // L2 norm ratio: ||d_react|| / (||d_prod|| + eps)
+    // When product binds more tightly to enzyme background than reactant (||d_prod|| >> ||d_react||)
+    // or reaction opposes the enzyme's polarization gradient, product retention / backpressure increases.
+    let norm_ratio = norm_react / (norm_prod + eps);
+
+    // Strictly antisymmetric directed forward flux score:
+    // Note that dot(m, c_fwd) = 0.5 * (||d_prod||^2 - ||d_react||^2) and ||m|| * ||c_fwd|| are strictly invariant
+    // under swap(reactant, product) up to an exact sign flip!
+    // We combine antisymmetric mean-response alignment `cos_m_cat` with antisymmetric log-norm ratio `ln((||d_prod|| + eps)/(||d_react|| + eps))`
+    // and transition-state amplitude `ln(1 + ||m|| * ||c_fwd|| / sqrt(n))` so that:
+    //   bio_enzref_flux_rank(e, p, r) == -bio_enzref_flux_rank(e, r, p) (exact antisymmetry!)
+    //   and when p == r, forward_flux_score == 0.0!
+    let scale_amp = (1.0 + (norm_m * norm_cat) / (n as f32).sqrt()).ln();
+    let antisym_dir = 0.72 * cos_m_cat + 0.28 * ((norm_prod + eps) / (norm_react + eps)).ln().tanh();
+    let forward_flux_score = antisym_dir * scale_amp;
+
+    // Backpressure risk in [0.0, 2.5]:
+    // Penalizes tight product retention on the static enzyme background (`||d_prod|| < ||d_react||`, i.e., `norm_ratio > 1.0`)
+    // and opposing directed role contrast (`cos_react_cat < 0.0` or `cos_m_cat < 0.0`) where product accumulation stalls M3_Sink -> M2_Scissor.
+    let retention_excess = (norm_ratio - 1.0).max(0.0).min(2.5);
+    let reverse_stall = (-cos_react_cat).max(0.0) * 0.65 + (-cos_m_cat).max(0.0) * 0.55;
+    let backpressure_risk = (0.45 * retention_excess + 0.55 * reverse_stall).clamp(0.0, 2.5);
+
+    BioEnzRefResult {
+        forward_flux_score,
+        backpressure_risk,
+        role_contrast_norm: norm_cat,
+        mean_catalytic_response: norm_m,
+        cosine_alignment: cos_react_cat,
+        norm_ratio_react_over_prod: norm_ratio,
+    }
+}
+
 /// Stage-2.5 `EnzRef` Role-Contrast Scorer for pairwise `log10(kcat)` catalytic ranking.
-/// Computes reference-centered substrate deviation `d_ref = (reactant - enzyme_bg)` and
-/// directed catalytic reaction contrast `d_cat = (product - reactant)` in a single fused hardware SIMD pass
+/// Computes reference-centered substrate deviation `d_react = (reactant - enzyme_bg)` and
+/// directed catalytic reaction contrast `c_fwd = (product - reactant)` in a single fused hardware SIMD pass
 /// (`aarch64` NEON + `x86_64` AVX2 + scalar fallback).
 /// Eliminates non-catalytic binder false positives (`product == reactant` -> `0.0`) and distinguishes
 /// forward vs. reverse turnover directionality.
@@ -10408,8 +10911,8 @@ pub fn bio_enzref_role_contrast(
         return 0.0;
     }
 
-    let (dot_ref_cat, norm_ref_sq, norm_cat_sq) =
-        pgbio_simd_enzref_contrast(&enzyme_bg_vec, &reactant_vec, &product_vec, n);
+    let (dot_ref_cat, norm_ref_sq, _norm_prod_sq, norm_cat_sq) =
+        pgbio_simd_enzref_contrast_full(&enzyme_bg_vec, &reactant_vec, &product_vec, n);
 
     if norm_ref_sq <= 1e-16 || norm_cat_sq <= 1e-16 {
         return 0.0;
@@ -10422,101 +10925,699 @@ pub fn bio_enzref_role_contrast(
     cos_role * scale_amp
 }
 
+/// Reference-centered kinetic role-contrast decomposition (`bio_enzref_kinetics(enz_bg_vec, reactant_vec, product_vec) -> TABLE(...)`).
+/// Computes centered deviations `d_react = r_react - v_bg` and `d_prod = r_prod - v_bg`,
+/// symmetry-aware mean catalytic response `m = 0.5 * (d_react + d_prod)`, directed forward role contrast `c_fwd = d_prod - d_react`,
+/// cosine alignment, and L2 norm ratio `||d_react|| / (||d_prod|| + eps)` in a single fused SIMD pass.
 #[inline]
-fn pgbio_simd_enzref_contrast(
-    e: &[f32],
-    r: &[f32],
-    p: &[f32],
-    n: usize,
-) -> (f32, f32, f32) {
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        use std::arch::aarch64::*;
-        let mut acc_dot = vdupq_n_f32(0.0);
-        let mut acc_ref = vdupq_n_f32(0.0);
-        let mut acc_cat = vdupq_n_f32(0.0);
-        let mut i = 0usize;
-        while i + 4 <= n {
-            let ve = vld1q_f32(e.as_ptr().add(i));
-            let vr = vld1q_f32(r.as_ptr().add(i));
-            let vp = vld1q_f32(p.as_ptr().add(i));
-            // d_ref = reactant - enzyme_bg
-            let d_ref = vsubq_f32(vr, ve);
-            // d_cat = product - reactant
-            let d_cat = vsubq_f32(vp, vr);
-            acc_dot = vfmaq_f32(acc_dot, d_ref, d_cat);
-            acc_ref = vfmaq_f32(acc_ref, d_ref, d_ref);
-            acc_cat = vfmaq_f32(acc_cat, d_cat, d_cat);
-            i += 4;
-        }
-        let mut dot = vaddvq_f32(acc_dot);
-        let mut n_ref = vaddvq_f32(acc_ref);
-        let mut n_cat = vaddvq_f32(acc_cat);
-        while i < n {
-            let dr = *r.get_unchecked(i) - *e.get_unchecked(i);
-            let dc = *p.get_unchecked(i) - *r.get_unchecked(i);
-            dot += dr * dc;
-            n_ref += dr * dr;
-            n_cat += dc * dc;
-            i += 1;
-        }
-        return (dot, n_ref, n_cat);
+pub fn pgbio_enzref_kinetics_struct(
+    enz_bg_vec: &[f32],
+    reactant_vec: &[f32],
+    product_vec: &[f32],
+) -> BioEnzRefResult {
+    let n = enz_bg_vec
+        .len()
+        .min(reactant_vec.len())
+        .min(product_vec.len());
+    if n == 0 {
+        return pgbio_compute_enzref_metrics_from_moments(0.0, 0.0, 0.0, 0.0, 0);
     }
-    #[cfg(target_arch = "x86_64")]
-    {
-        if is_x86_feature_detected!("avx2") {
-            unsafe {
-                use std::arch::x86_64::*;
-                let mut acc_dot = _mm256_setzero_ps();
-                let mut acc_ref = _mm256_setzero_ps();
-                let mut acc_cat = _mm256_setzero_ps();
-                let mut i = 0usize;
-                while i + 8 <= n {
-                    let ve = _mm256_loadu_ps(e.as_ptr().add(i));
-                    let vr = _mm256_loadu_ps(r.as_ptr().add(i));
-                    let vp = _mm256_loadu_ps(p.as_ptr().add(i));
-                    let d_ref = _mm256_sub_ps(vr, ve);
-                    let d_cat = _mm256_sub_ps(vp, vr);
-                    acc_dot = _mm256_add_ps(acc_dot, _mm256_mul_ps(d_ref, d_cat));
-                    acc_ref = _mm256_add_ps(acc_ref, _mm256_mul_ps(d_ref, d_ref));
-                    acc_cat = _mm256_add_ps(acc_cat, _mm256_mul_ps(d_cat, d_cat));
-                    i += 8;
+    let (dot, nr, np, nc) =
+        pgbio_simd_enzref_contrast_full(enz_bg_vec, reactant_vec, product_vec, n);
+    pgbio_compute_enzref_metrics_from_moments(dot, nr, np, nc, n)
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_enzref_kinetics(
+    enz_bg_vec: Vec<f32>,
+    reactant_vec: Vec<f32>,
+    product_vec: Vec<f32>,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(forward_flux_score, f32),
+        name!(backpressure_risk, f32),
+        name!(role_contrast_norm, f32),
+        name!(mean_catalytic_response, f32),
+        name!(cosine_alignment, f32),
+        name!(norm_ratio_react_over_prod, f32),
+    ),
+> {
+    let res = pgbio_enzref_kinetics_struct(&enz_bg_vec, &reactant_vec, &product_vec);
+    pgrx::iter::TableIterator::once((
+        res.forward_flux_score,
+        res.backpressure_risk,
+        res.role_contrast_norm,
+        res.mean_catalytic_response,
+        res.cosine_alignment,
+        res.norm_ratio_react_over_prod,
+    ))
+}
+
+/// Fast `ORDER BY` scalar ranker (`bio_enzref_flux_rank(enz_bg_vec, reactant_vec, product_vec) -> float4`, `IMMUTABLE PARALLEL SAFE STRICT`)
+/// for Stage-2.5 candidate ranking after `RangeFinder` GiST filtering.
+/// Strictly antisymmetric under reactant/product reversal (`bio_enzref_flux_rank(e, p, r) == -bio_enzref_flux_rank(e, r, p)`).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_enzref_flux_rank(
+    enz_bg_vec: Vec<f32>,
+    reactant_vec: Vec<f32>,
+    product_vec: Vec<f32>,
+) -> f32 {
+    pgbio_enzref_kinetics_struct(&enz_bg_vec, &reactant_vec, &product_vec).forward_flux_score
+}
+
+/// `BioVecInt8G128` inline-varlena variant of `bio_enzref_kinetics` (zero TOAST reads on 1280-D embeddings).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_enzref_kinetics_g128(
+    enz_bg_vec: PgVarlena<BioVecInt8G128>,
+    reactant_vec: PgVarlena<BioVecInt8G128>,
+    product_vec: PgVarlena<BioVecInt8G128>,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(forward_flux_score, f32),
+        name!(backpressure_risk, f32),
+        name!(role_contrast_norm, f32),
+        name!(mean_catalytic_response, f32),
+        name!(cosine_alignment, f32),
+        name!(norm_ratio_react_over_prod, f32),
+    ),
+> {
+    let (dot, nr, np, nc) = pgbio_simd_enzref_contrast_g128(&enz_bg_vec, &reactant_vec, &product_vec);
+    let res = pgbio_compute_enzref_metrics_from_moments(dot, nr, np, nc, BIO_VEC_G128_DIM);
+    pgrx::iter::TableIterator::once((
+        res.forward_flux_score,
+        res.backpressure_risk,
+        res.role_contrast_norm,
+        res.mean_catalytic_response,
+        res.cosine_alignment,
+        res.norm_ratio_react_over_prod,
+    ))
+}
+
+/// `BioVecInt8G128` inline-varlena variant of `bio_enzref_flux_rank` (`IMMUTABLE PARALLEL SAFE STRICT`).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_enzref_flux_rank_g128(
+    enz_bg_vec: PgVarlena<BioVecInt8G128>,
+    reactant_vec: PgVarlena<BioVecInt8G128>,
+    product_vec: PgVarlena<BioVecInt8G128>,
+) -> f32 {
+    let (dot, nr, np, nc) = pgbio_simd_enzref_contrast_g128(&enz_bg_vec, &reactant_vec, &product_vec);
+    pgbio_compute_enzref_metrics_from_moments(dot, nr, np, nc, BIO_VEC_G128_DIM).forward_flux_score
+}
+
+/// End-to-end reaction-SMILES convenience wrapper (`bio_enzref_kinetics_smiles(enz_bg_vec, rxn_smiles) -> TABLE(...)`)
+/// that decomposes `rxn_smiles` (`A.B>>C.D` or `A>agent>B`) via `bio_split_reaction_roles`, vectorizes reactant and product
+/// roles into the enzyme's dimension `D`, and evaluates `bio_enzref_kinetics` in a single Rust call.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_enzref_kinetics_smiles(
+    enz_bg_vec: Vec<f32>,
+    rxn_smiles: &str,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(reactants_smiles, String),
+        name!(products_smiles, String),
+        name!(forward_flux_score, f32),
+        name!(backpressure_risk, f32),
+        name!(role_contrast_norm, f32),
+        name!(mean_catalytic_response, f32),
+        name!(cosine_alignment, f32),
+        name!(norm_ratio_react_over_prod, f32),
+    ),
+> {
+    let (react_s, prod_s) = pgbio_split_reaction_roles_str(rxn_smiles);
+    let dim = if enz_bg_vec.is_empty() { 1024 } else { enz_bg_vec.len() };
+    let r_vec = pgbio_vectorize_reaction_side(&react_s, dim);
+    let p_vec = if prod_s.is_empty() {
+        r_vec.clone()
+    } else {
+        pgbio_vectorize_reaction_side(&prod_s, dim)
+    };
+    let res = pgbio_enzref_kinetics_struct(&enz_bg_vec, &r_vec, &p_vec);
+    pgrx::iter::TableIterator::once((
+        react_s,
+        prod_s,
+        res.forward_flux_score,
+        res.backpressure_risk,
+        res.role_contrast_norm,
+        res.mean_catalytic_response,
+        res.cosine_alignment,
+        res.norm_ratio_react_over_prod,
+    ))
+}
+
+// =====================================================================
+// 19B. PHASE 2: DISORDERED MICROPROTEIN SLiM WINDOW INDEXING
+//      (`bio_pslim_window_pool` & `bio_match_dual_slim_tether`)
+// =====================================================================
+
+/// Compact 16-D ZCA-whitened and L2-normalized Short Linear Motif (SLiM) window vector (`vec16`, 68 bytes on disk).
+/// Compatible with `pg_vectorsearch` `vec16` and `pg_bio` 2-level layered-centroid `fastscan` tables.
+pub const BIO_SLIM_VEC16_DIM: usize = 16;
+
+/// Unpacks per-residue embeddings from `per_residue_vecs: &[u8]` (`L * D * 4` little-endian `f32` bytes
+/// or `L * D * 2` little-endian `f16` bytes) into a `L x 16` matrix of 16-D residue vectors.
+/// If `per_residue_vecs` is empty or shorter than `seq_len`, deterministically synthesizes 16-D biophysical
+/// & tri-peptide PLM residue embeddings from `seq` so `bio_pslim_window_pool` operates seamlessly on both
+/// pre-computed residue tensors and raw microprotein sequences (`sORFs <= 110 aa`).
+#[inline]
+pub fn pgbio_unpack_or_synthesize_residue_vecs16(
+    per_residue_vecs: &[u8],
+    seq_bytes: &[u8],
+) -> Vec<[f32; BIO_SLIM_VEC16_DIM]> {
+    let l = seq_bytes.len();
+    if l == 0 {
+        return Vec::new();
+    }
+
+    // Case 1: Exact L * D * 4 bytes (f32 per-residue tensor, e.g. D = 16, 32, 64, 128, 256, 320, 640, 1280)
+    if !per_residue_vecs.is_empty() && per_residue_vecs.len() % (l * 4) == 0 {
+        let d = per_residue_vecs.len() / (l * 4);
+        if d >= 1 {
+            let mut out = Vec::with_capacity(l);
+            for r_idx in 0..l {
+                let mut v16 = [0.0f32; BIO_SLIM_VEC16_DIM];
+                let row_off = r_idx * d * 4;
+                for c in 0..d {
+                    let val = pgbio_read_f32_le(per_residue_vecs, row_off + c * 4);
+                    v16[(c * BIO_SLIM_VEC16_DIM) / d.max(BIO_SLIM_VEC16_DIM)] += val;
                 }
-                let mut t_dot = [0.0f32; 8];
-                let mut t_ref = [0.0f32; 8];
-                let mut t_cat = [0.0f32; 8];
-                _mm256_storeu_ps(t_dot.as_mut_ptr(), acc_dot);
-                _mm256_storeu_ps(t_ref.as_mut_ptr(), acc_ref);
-                _mm256_storeu_ps(t_cat.as_mut_ptr(), acc_cat);
-                let mut dot: f32 = t_dot.iter().sum();
-                let mut n_ref: f32 = t_ref.iter().sum();
-                let mut n_cat: f32 = t_cat.iter().sum();
-                while i < n {
-                    let dr = *r.get_unchecked(i) - *e.get_unchecked(i);
-                    let dc = *p.get_unchecked(i) - *r.get_unchecked(i);
-                    dot += dr * dc;
-                    n_ref += dr * dr;
-                    n_cat += dc * dc;
-                    i += 1;
+                let scale = ((BIO_SLIM_VEC16_DIM as f32) / (d.max(BIO_SLIM_VEC16_DIM) as f32)).sqrt();
+                for k in 0..BIO_SLIM_VEC16_DIM {
+                    v16[k] *= scale;
                 }
-                return (dot, n_ref, n_cat);
+                out.push(v16);
+            }
+            return out;
+        }
+    }
+
+    // Case 2: Exact L * D * 2 bytes (f16 per-residue tensor)
+    if !per_residue_vecs.is_empty() && per_residue_vecs.len() % (l * 2) == 0 {
+        let d = per_residue_vecs.len() / (l * 2);
+        if d >= 1 {
+            let mut out = Vec::with_capacity(l);
+            for r_idx in 0..l {
+                let mut v16 = [0.0f32; BIO_SLIM_VEC16_DIM];
+                let row_off = r_idx * d * 2;
+                for c in 0..d {
+                    let bits = u16::from_le_bytes([
+                        per_residue_vecs[row_off + c * 2],
+                        per_residue_vecs[row_off + c * 2 + 1],
+                    ]);
+                    let val = pgbio_f16_bits_to_f32(bits);
+                    v16[(c * BIO_SLIM_VEC16_DIM) / d.max(BIO_SLIM_VEC16_DIM)] += val;
+                }
+                let scale = ((BIO_SLIM_VEC16_DIM as f32) / (d.max(BIO_SLIM_VEC16_DIM) as f32)).sqrt();
+                for k in 0..BIO_SLIM_VEC16_DIM {
+                    v16[k] *= scale;
+                }
+                out.push(v16);
+            }
+            return out;
+        }
+    }
+
+    // Case 3: Single protein-level vector passed in `per_residue_vecs` (e.g. 1280 * 4 bytes) or empty `bytea`:
+    // Blend any global protein prior with local biophysical + contextual 3-mer SLiM features per residue.
+    let mut global_prior = [0.0f32; BIO_SLIM_VEC16_DIM];
+    if per_residue_vecs.len() >= 64 && per_residue_vecs.len() % 4 == 0 {
+        let d = per_residue_vecs.len() / 4;
+        for c in 0..d {
+            let val = pgbio_read_f32_le(per_residue_vecs, c * 4);
+            global_prior[(c * BIO_SLIM_VEC16_DIM) / d] += val * 0.05;
+        }
+    }
+
+    let aa_features = |aa: u8| -> [f32; 8] {
+        match aa.to_ascii_uppercase() {
+            b'I' => [4.5, 0.0, 0.0, 0.65, 0.0, 1.0, 0.2, -0.4],
+            b'V' => [4.2, 0.0, 0.0, 0.55, 0.0, 0.9, 0.2, -0.3],
+            b'L' => [3.8, 0.0, 0.0, 0.65, 0.0, 1.0, 0.3, -0.3],
+            b'F' => [2.8, 0.0, 1.0, 0.85, 0.0, 0.9, 0.1, -0.5],
+            b'C' => [2.5, 0.0, 0.0, 0.45, 0.2, 0.6, 0.1, -0.2],
+            b'M' => [1.9, 0.0, 0.0, 0.70, 0.1, 0.8, 0.3, -0.1],
+            b'A' => [1.8, 0.0, 0.0, 0.25, 0.0, 0.7, 0.5, 0.1],
+            b'G' => [-0.4, 0.0, 0.0, 0.10, 0.0, 0.1, 1.2, 0.8],
+            b'T' => [-0.7, 0.0, 0.0, 0.45, 0.6, 0.5, 0.4, 0.2],
+            b'S' => [-0.8, 0.0, 0.0, 0.30, 0.7, 0.4, 0.8, 0.6],
+            b'W' => [-0.9, 0.0, 1.4, 1.00, 0.3, 0.9, 0.1, -0.5],
+            b'Y' => [-1.3, 0.0, 1.1, 0.90, 0.5, 0.8, 0.2, -0.3],
+            b'P' => [-1.6, 0.0, 0.0, 0.45, 0.0, 0.1, 1.4, 1.1],
+            b'H' => [-3.2, 0.5, 0.7, 0.65, 0.7, 0.6, 0.4, 0.3],
+            b'E' => [-3.5, -1.0, 0.0, 0.60, 0.9, 0.7, 0.8, 0.9],
+            b'Q' => [-3.5, 0.0, 0.0, 0.60, 0.8, 0.6, 0.7, 0.7],
+            b'D' => [-3.5, -1.0, 0.0, 0.45, 0.9, 0.4, 0.9, 0.9],
+            b'N' => [-3.5, 0.0, 0.0, 0.45, 0.8, 0.3, 0.8, 0.7],
+            b'K' => [-3.9, 1.0, 0.0, 0.75, 0.9, 0.7, 0.9, 1.0],
+            b'R' => [-4.5, 1.2, 0.2, 0.90, 1.0, 0.7, 0.8, 0.9],
+            _ => [0.0, 0.0, 0.0, 0.40, 0.4, 0.5, 0.5, 0.5],
+        }
+    };
+
+    let mut out = Vec::with_capacity(l);
+    for i in 0..l {
+        let f_curr = aa_features(seq_bytes[i]);
+        let f_prev = if i > 0 { aa_features(seq_bytes[i - 1]) } else { f_curr };
+        let f_next = if i + 1 < l { aa_features(seq_bytes[i + 1]) } else { f_curr };
+        let tri_hash = fmix64(
+            ((f_prev[0].to_bits() as u64) << 16)
+                ^ ((seq_bytes[i] as u64) << 8)
+                ^ (if i + 1 < l { seq_bytes[i + 1] as u64 } else { 0x5A }),
+        );
+        let mut v16 = [0.0f32; BIO_SLIM_VEC16_DIM];
+        for k in 0..8 {
+            v16[k] = f_curr[k] + 0.25 * (f_prev[k] + f_next[k]) + global_prior[k];
+            let h_bit = (((tri_hash >> (k * 7)) & 0x7F) as f32 / 63.5) - 1.0;
+            v16[8 + k] = 0.55 * (f_next[k] - f_prev[k]) + 0.45 * h_bit + global_prior[8 + k];
+        }
+        out.push(v16);
+    }
+    out
+}
+
+/// Evaluates whether residue `pos_0based` is permitted by an optional disorder/loop bitmask
+/// (`'1'` = disordered/surface-accessible loop; `'0'` = rigid buried core).
+/// When `disorder_or_loop_mask` is `None` or empty, all positions are permitted.
+#[inline]
+fn pgbio_mask_allows_window(mask_str: Option<&str>, start_0: usize, end_0: usize) -> bool {
+    let Some(raw) = mask_str else {
+        return true;
+    };
+    let clean: Vec<u8> = raw
+        .bytes()
+        .filter(|&b| b == b'0' || b == b'1')
+        .collect();
+    if clean.is_empty() {
+        return true;
+    }
+    let span = (end_0.saturating_sub(start_0)).max(1);
+    let mut allowed = 0usize;
+    for pos in start_0..end_0 {
+        let bit = clean.get(pos).copied().unwrap_or(b'1');
+        if bit == b'1' {
+            allowed += 1;
+        }
+    }
+    // Require at least 50% of the window residues to sit in disordered/loop regions (`'1'`)
+    allowed * 2 >= span
+}
+
+/// Phase 2 Sliding Motif-Window Extractor (`bio_pslim_window_pool`):
+/// Extracts overlapping or strided 5–12 aa Short Linear Motif (SLiM) windows across a microprotein/sORF
+/// (`seq`, with optional `per_residue_vecs bytea` and `disorder_or_loop_mask`), pools their 16-D motif representations,
+/// and applies in-memory corpus ZCA whitening (`bio_fit_zca_whiten` + `bio_whiten_embedding`) followed by exact L2 normalization
+/// so every emitted `motif_vec` (`real[16]` / `vec16`) has unit L2 norm (`||motif_vec||_2 == 1.0`) and inserts directly into
+/// existing `pg_bio` 2-level layered-centroid `fastscan` tables with zero index-format changes!
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_pslim_window_pool(
+    per_residue_vecs: Option<Vec<u8>>,
+    seq: &str,
+    window_len: default!(i32, 8),
+    stride: default!(i32, 2),
+    disorder_or_loop_mask: default!(Option<&str>, "NULL"),
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(start_pos, i32),
+        name!(end_pos, i32),
+        name!(subseq, String),
+        name!(motif_vec, Vec<f32>),
+        name!(local_entropy, f32),
+    ),
+> {
+    let clean_seq: String = seq
+        .trim()
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .collect();
+    let seq_bytes = clean_seq.as_bytes();
+    let l = seq_bytes.len();
+    if l == 0 {
+        return pgrx::iter::TableIterator::new(Vec::new().into_iter());
+    }
+
+    let w_len = (window_len.clamp(3, 32) as usize).min(l);
+    let step = (stride.max(1) as usize).max(1);
+    let raw_bytes = per_residue_vecs.unwrap_or_default();
+    let res_vecs = pgbio_unpack_or_synthesize_residue_vecs16(&raw_bytes, seq_bytes);
+
+    let mut raw_windows: Vec<(i32, i32, String, Vec<f32>, f32)> = Vec::new();
+    let mut start_0 = 0usize;
+    while start_0 + w_len <= l {
+        let end_0 = start_0 + w_len;
+        if pgbio_mask_allows_window(disorder_or_loop_mask, start_0, end_0) {
+            let sub = &clean_seq[start_0..end_0];
+            let ent = sequence_entropy(sub) as f32;
+            let mut pooled = vec![0.0f32; BIO_SLIM_VEC16_DIM];
+            let inv_w = 1.0f32 / (w_len as f32);
+            for pos in start_0..end_0 {
+                let rel = ((pos - start_0) as f32) * inv_w;
+                let center_weight = 1.0 + 0.25 * (std::f32::consts::PI * rel).sin();
+                for k in 0..BIO_SLIM_VEC16_DIM {
+                    let v = res_vecs[pos][k];
+                    // Combine mean pooling across channels 0..8 and N->C directional gradient across channels 8..16
+                    if k < 8 {
+                        pooled[k] += v * center_weight * inv_w;
+                    } else {
+                        let dir_sign = if rel >= 0.5 { 1.0 } else { -0.6 };
+                        pooled[k] += (v + 0.35 * dir_sign * res_vecs[pos][k - 8]) * inv_w;
+                    }
+                }
+            }
+            // Start and end positions are 1-based inclusive [start_pos, end_pos] (`end_pos - start_pos + 1 == w_len`)
+            raw_windows.push((
+                (start_0 + 1) as i32,
+                end_0 as i32,
+                sub.to_string(),
+                pooled,
+                ent,
+            ));
+        }
+        if start_0 + w_len == l {
+            break;
+        }
+        start_0 += step;
+    }
+
+    if raw_windows.is_empty() {
+        return pgrx::iter::TableIterator::new(Vec::new().into_iter());
+    }
+
+    // Apply existing ZCA whitening transform across the pooled 16-D window vectors followed by L2 unit normalization
+    let n_win = raw_windows.len();
+    if n_win >= 3 {
+        let flat: Vec<f32> = raw_windows
+            .iter()
+            .flat_map(|w| w.3.iter().copied())
+            .collect();
+        let zca_stats = bio_fit_zca_whiten(flat, 0.15, BIO_SLIM_VEC16_DIM as i32, false);
+        if !zca_stats.is_empty() {
+            for w in &mut raw_windows {
+                let mut whitened = bio_whiten_embedding(w.3.clone(), zca_stats.clone());
+                let norm = pgbio_simd_dot_f32(&whitened, &whitened).sqrt();
+                if norm > 1e-12 {
+                    for val in &mut whitened {
+                        *val /= norm;
+                    }
+                }
+                w.3 = whitened;
+            }
+            return pgrx::iter::TableIterator::new(raw_windows.into_iter());
+        }
+    }
+
+    // For 1–2 windows, L2-normalize directly
+    for w in &mut raw_windows {
+        let norm = pgbio_simd_dot_f32(&w.3, &w.3).sqrt();
+        if norm > 1e-12 {
+            for val in &mut w.3 {
+                *val /= norm;
+            }
+        } else {
+            w.3[0] = 1.0;
+        }
+    }
+
+    pgrx::iter::TableIterator::new(raw_windows.into_iter())
+}
+
+/// Evaluates whether a disordered microprotein (`length(seq) <= 110`) can serve as a non-overlapping
+/// Double-Sided Tether / Metabolon Coupler (`bio_match_dual_slim_tether`) between two distinct partner
+/// binding surfaces (`partner_a_vec`, `partner_b_vec`, e.g., `M1_Anchor + M2_Scissor` or `M2_Scissor + M3_Sink`).
+/// Enforces:
+/// 1. `length(seq) <= 110`
+/// 2. Two non-overlapping SLiM windows `(A, B)` with `end_a + min_linker <= start_b` (or `end_b + min_linker <= start_a`).
+/// 3. Linker Junction Sanity Check: evaluates the intervening linker `[end_first + 1 .. start_second - 1]` to ensure
+///    single-polypeptide fusion does not cleave or expose a split hydrophobic domain core across the linker
+///    (`linker_gravy <= 0.45` and no continuous >= 5-aa hydrophobic core run inside the linker; otherwise recommends `Bicistronic_Operon`).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_match_dual_slim_tether(
+    seq: &str,
+    partner_a_vec: Vec<f32>,
+    partner_b_vec: Vec<f32>,
+    window_len: default!(i32, 8),
+    stride: default!(i32, 2),
+    min_linker: default!(i32, 4),
+    per_residue_vecs: default!(Option<Vec<u8>>, "NULL"),
+    disorder_or_loop_mask: default!(Option<&str>, "NULL"),
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(start_a, i32),
+        name!(end_a, i32),
+        name!(subseq_a, String),
+        name!(sim_a, f32),
+        name!(l2_centroid_a, i16),
+        name!(start_b, i32),
+        name!(end_b, i32),
+        name!(subseq_b, String),
+        name!(sim_b, f32),
+        name!(l2_centroid_b, i16),
+        name!(linker_len, i32),
+        name!(linker_subseq, String),
+        name!(linker_gravy, f32),
+        name!(junction_sanity_pass, bool),
+        name!(recommended_operon_mode, String),
+        name!(dual_tether_score, f32),
+    ),
+> {
+    let clean_seq: String = seq
+        .trim()
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .collect();
+    if clean_seq.len() > 110 || clean_seq.len() < 12 {
+        return pgrx::iter::TableIterator::new(Vec::new().into_iter());
+    }
+
+    let windows: Vec<_> = bio_pslim_window_pool(
+        per_residue_vecs,
+        &clean_seq,
+        window_len,
+        stride,
+        disorder_or_loop_mask,
+    )
+    .collect();
+    if windows.len() < 2 {
+        return pgrx::iter::TableIterator::new(Vec::new().into_iter());
+    }
+
+    // Fold arbitrary-dimension partner vectors (e.g. 1280-D ESM-2 or 16-D motif target) into 16-D unit target vectors
+    let fold_to_16d = |v: &[f32], salt: f32| -> [f32; BIO_SLIM_VEC16_DIM] {
+        let mut out = [0.0f32; BIO_SLIM_VEC16_DIM];
+        if v.is_empty() {
+            out[0] = 1.0;
+            return out;
+        }
+        let d = v.len();
+        for (i, &val) in v.iter().enumerate() {
+            let slot = (i * BIO_SLIM_VEC16_DIM) / d.max(BIO_SLIM_VEC16_DIM);
+            let sign = if ((i / BIO_SLIM_VEC16_DIM) & 1) == 0 { 1.0 } else { -0.85 };
+            out[slot] += val * sign;
+        }
+        out[0] += salt * 0.01;
+        let norm = pgbio_simd_dot_f32(&out, &out).sqrt();
+        if norm > 1e-12 {
+            for x in &mut out {
+                *x /= norm;
+            }
+        }
+        out
+    };
+
+    let pa16 = fold_to_16d(&partner_a_vec, 1.0);
+    let pb16 = fold_to_16d(&partner_b_vec, -1.0);
+    let min_lnk = min_linker.max(1);
+
+    let mut best_pair: Option<(
+        i32,
+        i32,
+        String,
+        f32,
+        i16,
+        i32,
+        i32,
+        String,
+        f32,
+        i16,
+        i32,
+        String,
+        f32,
+        bool,
+        String,
+        f32,
+    )> = None;
+
+    for i in 0..windows.len() {
+        for j in (i + 1)..windows.len() {
+            let (s1, e1, ref sub1, ref v1, ent1) = windows[i];
+            let (s2, e2, ref sub2, ref v2, ent2) = windows[j];
+            if e1 + min_lnk > s2 {
+                continue;
+            }
+            let lnk_len = s2 - e1 - 1;
+            let lnk_sub = if (e1 as usize) < (s2 as usize - 1) && (s2 as usize - 1) <= clean_seq.len() {
+                clean_seq[(e1 as usize)..(s2 as usize - 1)].to_string()
+            } else {
+                String::new()
+            };
+
+            // Evaluate both orientations: (win_i -> Partner A, win_j -> Partner B) and (win_j -> Partner A, win_i -> Partner B)
+            let dot_i_a = pgbio_simd_dot_f32(v1, &pa16);
+            let dot_j_b = pgbio_simd_dot_f32(v2, &pb16);
+            let dot_j_a = pgbio_simd_dot_f32(v2, &pa16);
+            let dot_i_b = pgbio_simd_dot_f32(v1, &pb16);
+
+            let (sa, ea, sub_a, sim_a, vec_a, sb, eb, sub_b, sim_b, vec_b) =
+                if (dot_i_a + dot_j_b) >= (dot_j_a + dot_i_b) {
+                    (
+                        s1,
+                        e1,
+                        sub1.clone(),
+                        (0.5 * (dot_i_a + 1.0)).clamp(0.0, 1.0),
+                        v1.clone(),
+                        s2,
+                        e2,
+                        sub2.clone(),
+                        (0.5 * (dot_j_b + 1.0)).clamp(0.0, 1.0),
+                        v2.clone(),
+                    )
+                } else {
+                    // Maintain start_a < start_b ordering (`end_a + min_linker <= start_b`) while binding B-surface at N-term and A-surface at C-term
+                    (
+                        s1,
+                        e1,
+                        sub1.clone(),
+                        (0.5 * (dot_i_b + 1.0)).clamp(0.0, 1.0),
+                        v1.clone(),
+                        s2,
+                        e2,
+                        sub2.clone(),
+                        (0.5 * (dot_j_a + 1.0)).clamp(0.0, 1.0),
+                        v2.clone(),
+                    )
+                };
+
+            // Linker Junction Sanity Check: reject single-polypeptide fusion if the intervening linker splits a hydrophobic core
+            let lnk_gravy = if lnk_sub.is_empty() {
+                -0.25f32
+            } else {
+                gravy_score(&lnk_sub) as f32
+            };
+            let mut max_hydro_run = 0usize;
+            let mut cur_run = 0usize;
+            for b in lnk_sub.bytes() {
+                if matches!(b.to_ascii_uppercase(), b'I' | b'V' | b'L' | b'F' | b'W' | b'M' | b'C') {
+                    cur_run += 1;
+                    if cur_run > max_hydro_run {
+                        max_hydro_run = cur_run;
+                    }
+                } else {
+                    cur_run = 0;
+                }
+            }
+            let junction_ok = lnk_gravy <= 0.45 && max_hydro_run < 5;
+            let mode_str = if junction_ok {
+                "Single_Polypeptide_Fusion".to_string()
+            } else {
+                "Bicistronic_Operon_Required (Split Hydrophobic Core)".to_string()
+            };
+
+            let c_a: Vec<_> = bio_vector_layered_centroid_assign(vec_a).collect();
+            let c_b: Vec<_> = bio_vector_layered_centroid_assign(vec_b).collect();
+            let l2_a = c_a.first().map(|r| r.1).unwrap_or(0);
+            let l2_b = c_b.first().map(|r| r.1).unwrap_or(0);
+
+            let ent_bonus = ((ent1 + ent2) * 0.5 / 3.5).clamp(0.25, 1.0);
+            let junction_mult = if junction_ok { 1.0 } else { 0.72 };
+            let score = (0.45 * sim_a + 0.45 * sim_b + 0.10 * ent_bonus) * junction_mult;
+
+            if best_pair.as_ref().map_or(true, |bp| score > bp.15) {
+                best_pair = Some((
+                    sa,
+                    ea,
+                    sub_a,
+                    sim_a,
+                    l2_a,
+                    sb,
+                    eb,
+                    sub_b,
+                    sim_b,
+                    l2_b,
+                    lnk_len,
+                    lnk_sub,
+                    lnk_gravy,
+                    junction_ok,
+                    mode_str,
+                    score,
+                ));
             }
         }
     }
-    #[allow(unreachable_code)]
-    {
-        let mut dot = 0.0f32;
-        let mut n_ref = 0.0f32;
-        let mut n_cat = 0.0f32;
-        for i in 0..n {
-            let dr = r[i] - e[i];
-            let dc = p[i] - r[i];
-            dot += dr * dc;
-            n_ref += dr * dr;
-            n_cat += dc * dc;
+
+    pgrx::iter::TableIterator::new(best_pair.into_iter())
+}
+
+/// Standalone Linker Junction Sanity Check (`bio_audit_fusion_junction_sanity(seq, end_a, start_b)`):
+/// Verifies whether fusing two functional domains or SLiMs across `seq[end_a..start_b-1]` preserves a disordered,
+/// soluble linker (`junction_sanity_pass = true` -> `Single_Polypeptide_Fusion`) or cuts through a buried hydrophobic core
+/// (`junction_sanity_pass = false` -> `Bicistronic_Operon_Required`).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_audit_fusion_junction_sanity(
+    seq: &str,
+    end_a: i32,
+    start_b: i32,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(linker_len, i32),
+        name!(linker_subseq, String),
+        name!(linker_gravy, f32),
+        name!(max_hydrophobic_run, i32),
+        name!(junction_sanity_pass, bool),
+        name!(recommended_operon_mode, String),
+    ),
+> {
+    let clean: String = seq
+        .trim()
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .collect();
+    let l = clean.len();
+    let s_idx = (end_a.max(0) as usize).min(l);
+    let e_idx = (start_b.saturating_sub(1).max(0) as usize).min(l);
+    let lnk = if s_idx < e_idx {
+        &clean[s_idx..e_idx]
+    } else {
+        ""
+    };
+    let lnk_len = lnk.len() as i32;
+    let gr = if lnk.is_empty() {
+        0.0f32
+    } else {
+        gravy_score(lnk) as f32
+    };
+    let mut max_run = 0i32;
+    let mut cur = 0i32;
+    for b in lnk.bytes() {
+        if matches!(b.to_ascii_uppercase(), b'I' | b'V' | b'L' | b'F' | b'W' | b'M' | b'C') {
+            cur += 1;
+            if cur > max_run {
+                max_run = cur;
+            }
+        } else {
+            cur = 0;
         }
-        (dot, n_ref, n_cat)
     }
+    let pass = lnk_len >= 3 && gr <= 0.45 && max_run < 5;
+    let mode = if pass {
+        "Single_Polypeptide_Fusion".to_string()
+    } else {
+        "Bicistronic_Operon_Required (Split Hydrophobic Core)".to_string()
+    };
+    pgrx::iter::TableIterator::once((lnk_len, lnk.to_string(), gr, max_run, pass, mode))
 }
 
 /// Deterministic `STORM`-style `ID128` 64-hot target hashing (`bio_id128_hash(accession_or_neighbor_id) -> bytea`).
@@ -10810,16 +11911,17 @@ pub fn bio_run_phase4_benchmarks() -> pgrx::iter::TableIterator<
         std::hint::black_box(acc_f32);
     }
 
-    // 3. Throughput (rows/sec) of bio_enzref_role_contrast (1280-D SIMD)
+    // 3. Throughput (rows/sec) of bio_enzref_role_contrast & bio_enzref_flux_rank (1280-D SIMD)
     let enz_v = f32_cands[0].clone();
     let react_v = f32_cands[1].clone();
     let prod_v = f32_cands[2].clone();
-    let n_enz_iters = 20_000usize;
+    let n_enz_iters = 50_000usize;
     let t0_enz = Instant::now();
     let mut enz_acc = 0.0f32;
     for _ in 0..n_enz_iters {
-        let (dot, nr, nc) = pgbio_simd_enzref_contrast(&enz_v, &react_v, &prod_v, 1280);
-        enz_acc += dot / (nr * nc + 1.0);
+        let (dot, nr, np, nc) = pgbio_simd_enzref_contrast_full(&enz_v, &react_v, &prod_v, 1280);
+        let res = pgbio_compute_enzref_metrics_from_moments(dot, nr, np, nc, 1280);
+        enz_acc += res.forward_flux_score - 0.1 * res.backpressure_risk;
     }
     let enz_secs = t0_enz.elapsed().as_secs_f64().max(1e-9);
     let enz_rows_per_sec = (n_enz_iters as f64) / enz_secs;
@@ -10847,6 +11949,18 @@ pub fn bio_run_phase4_benchmarks() -> pgrx::iter::TableIterator<
     let pains_secs = t0_pains.elapsed().as_secs_f64().max(1e-9);
     let pains_rows_per_sec = (n_pains_iters as f64) / pains_secs;
     std::hint::black_box(pains_hits);
+
+    // 5. Throughput (windows/sec) of bio_pslim_window_pool (77-aa sORF with ZCA whitening + L2 unit normalization)
+    let sorf_seq = "MKKLVLVAVILGLAVAGSAQAPVGRDTVPDPLRERAQELGVKVTVEGPGGGSGGGGSLLPAIVHIEQDKTKREEVD";
+    let n_pslim_iters = 1_200usize;
+    let t0_pslim = Instant::now();
+    let mut total_windows = 0usize;
+    for _ in 0..n_pslim_iters {
+        let wins: Vec<_> = bio_pslim_window_pool(None, sorf_seq, 8, 2, None).collect();
+        total_windows += wins.len();
+    }
+    let pslim_secs = t0_pslim.elapsed().as_secs_f64().max(1e-9);
+    let pslim_windows_per_sec = (total_windows as f64) / pslim_secs;
 
     let rows = vec![
         (
@@ -10897,6 +12011,13 @@ pub fn bio_run_phase4_benchmarks() -> pgrx::iter::TableIterator<
             pains_rows_per_sec.round(),
             pains_rows_per_sec.round(),
             "molecules / sec".to_string(),
+        ),
+        (
+            "3c. Disordered Microprotein SLiM Window Pooler (ZCA + L2) Throughput".to_string(),
+            1.0,
+            pslim_windows_per_sec.round(),
+            pslim_windows_per_sec.round(),
+            "windows / sec".to_string(),
         ),
     ];
 
@@ -13796,9 +14917,31 @@ HETATM    5  O   HOH A 301      14.110  16.050  23.820  1.00 18.00           O  
     #[pg_test]
     fn test_layer14_bioprocess_cascade_and_pareto() {
         let rk4: Vec<_> =
-            crate::simulate_cascade_kinetics(22.0, 80.0, 35.0, 40.0, 120.0, 4.5, 1000.0, 48.0, 8).collect();
+            crate::simulate_cascade_kinetics(22.0, 80.0, 35.0, 40.0, 120.0, 4.5, 1000.0, 48.0, 8, 0.0, 0.0).collect();
         assert_eq!(rk4.len(), 9);
-        assert!(rk4.last().unwrap().4 > 0.85);
+        let yield_clean = rk4.last().unwrap().4;
+        assert!(yield_clean > 0.85);
+
+        // Verify that high backpressure_risk on M3_Sink depresses 48h RK4 net yield
+        let rk4_bp: Vec<_> =
+            crate::simulate_cascade_kinetics(22.0, 80.0, 35.0, 40.0, 120.0, 4.5, 1000.0, 48.0, 8, 1.45, 0.0).collect();
+        let yield_bp = rk4_bp.last().unwrap().4;
+        assert!(
+            yield_bp < yield_clean - 0.12,
+            "High backpressure_risk (1.45) must depress 48h RK4 yield significantly: clean={} vs backpressured={}",
+            yield_clean,
+            yield_bp
+        );
+
+        // Verify that moderate metabolon crowding c/c* = 0.65 boosts effective cascade conversion
+        let rk4_crowd: Vec<_> =
+            crate::simulate_cascade_kinetics(22.0, 80.0, 35.0, 40.0, 120.0, 4.5, 1000.0, 48.0, 8, 0.45, 0.65).collect();
+        let rk4_uncrowd: Vec<_> =
+            crate::simulate_cascade_kinetics(22.0, 80.0, 35.0, 40.0, 120.0, 4.5, 1000.0, 48.0, 8, 0.45, 0.0).collect();
+        assert!(
+            rk4_crowd.last().unwrap().4 > rk4_uncrowd.last().unwrap().4,
+            "Mouth-to-mouth metabolon crowding (c/c*=0.65) should relieve diffusion lag and boost yield"
+        );
 
         let stoich: Vec<_> =
             crate::optimize_consortium_stoichiometry(0.42, 0.25, 0.20, 14.0, 18.0, 9.5, 48.0).collect();
@@ -14465,7 +15608,30 @@ ATOM     37  O   HIS A   5      30.629   2.388   0.771  1.00  0.00           O
 
     #[pg_test]
     fn test_phase3_enzref_role_contrast_and_storm_l0() {
-        // 1. Test EnzRef Role-Contrast Scorer
+        // 1. Test Reaction SMILES Decomposition Helper (`bio_split_reaction_roles` & `bio_reaction_role_vectors`)
+        let split_double: Vec<_> =
+            crate::bio_split_reaction_roles("CC(=O)Oc1ccccc1C(=O)O.O>>CC(=O)O.O=C(O)c1ccccc1O").collect();
+        assert_eq!(split_double.len(), 1);
+        assert_eq!(split_double[0].0, "CC(=O)Oc1ccccc1C(=O)O.O");
+        assert_eq!(split_double[0].1, "CC(=O)O.O=C(O)c1ccccc1O");
+
+        // Agent stripping: `A>agent>B`
+        let split_agent: Vec<_> =
+            crate::bio_split_reaction_roles("CC(=O)NC1C(O)OC(CO)C(O)C1O>[Zn+2].O>NC1C(O)OC(CO)C(O)C1O.CC(=O)O").collect();
+        assert_eq!(split_agent.len(), 1);
+        assert_eq!(split_agent[0].0, "CC(=O)NC1C(O)OC(CO)C(O)C1O");
+        assert_eq!(split_agent[0].1, "NC1C(O)OC(CO)C(O)C1O.CC(=O)O");
+
+        let role_vecs: Vec<_> =
+            crate::bio_reaction_role_vectors("CC(=O)Oc1ccccc1C(=O)O.O>[H+]>CC(=O)O.O=C(O)c1ccccc1O", 1280).collect();
+        assert_eq!(role_vecs.len(), 1);
+        assert_eq!(role_vecs[0].2.len(), 1280);
+        assert_eq!(role_vecs[0].3.len(), 1280);
+        assert_eq!(role_vecs[0].4.len(), 9);
+        assert_eq!(role_vecs[0].5.len(), 9);
+        assert_ne!(role_vecs[0].2, role_vecs[0].3, "Reactant and product 1280-D vectors must differ");
+
+        // 2. Test EnzRef Role-Contrast Scorer, `bio_enzref_kinetics`, and `bio_enzref_flux_rank` exact antisymmetry
         let enz_bg = vec![1.0f32, 0.0, 0.0, 0.0, 0.5, -0.5, 0.2, 0.1];
         let reactant = vec![2.0f32, 1.0, 0.0, 0.0, 0.5, -0.5, 0.2, 0.1];
         // Aligned product along the same catalytic polarization direction (reactant - enz_bg = [1, 1, 0...])
@@ -14475,7 +15641,7 @@ ATOM     37  O   HIS A   5      30.629   2.388   0.771  1.00  0.00           O
         // Reverse / inhibitory shift
         let prod_reverse = vec![0.5f32, -0.5, 0.0, 0.0, 0.5, -0.5, 0.2, 0.1];
 
-        let score_fwd = crate::bio_enzref_role_contrast(enz_bg.clone(), reactant.clone(), prod_forward);
+        let score_fwd = crate::bio_enzref_role_contrast(enz_bg.clone(), reactant.clone(), prod_forward.clone());
         let score_ortho = crate::bio_enzref_role_contrast(enz_bg.clone(), reactant.clone(), prod_ortho);
         let score_rev = crate::bio_enzref_role_contrast(enz_bg.clone(), reactant.clone(), prod_reverse);
         let score_dead = crate::bio_enzref_role_contrast(enz_bg.clone(), reactant.clone(), reactant.clone());
@@ -14485,7 +15651,81 @@ ATOM     37  O   HIS A   5      30.629   2.388   0.771  1.00  0.00           O
         assert!(score_rev < -0.30, "Reverse role contrast must be negative, got {}", score_rev);
         assert_eq!(score_dead, 0.0, "Zero reaction turnover (product == reactant) must yield 0.0");
 
-        // 2. Test STORM ID128 64-hot deterministic target hashing
+        // Verify `bio_enzref_kinetics` and `bio_enzref_flux_rank` exact antisymmetry under swap(reactant, product)
+        let kin_fwd = crate::pgbio_enzref_kinetics_struct(&enz_bg, &reactant, &prod_forward);
+        let kin_swapped = crate::pgbio_enzref_kinetics_struct(&enz_bg, &prod_forward, &reactant);
+        let kin_rows: Vec<_> = crate::bio_enzref_kinetics(enz_bg.clone(), reactant.clone(), prod_forward.clone()).collect();
+        assert_eq!(kin_rows.len(), 1);
+        let flux_fwd = crate::bio_enzref_flux_rank(enz_bg.clone(), reactant.clone(), prod_forward.clone());
+        let flux_swapped = crate::bio_enzref_flux_rank(enz_bg.clone(), prod_forward.clone(), reactant.clone());
+
+        assert!(flux_fwd > 0.25, "Expected positive forward flux rank, got {}", flux_fwd);
+        assert!(
+            (flux_fwd + flux_swapped).abs() < 1e-5,
+            "swap(reactant, product) must exactly flip bio_enzref_flux_rank sign: fwd={} vs swapped={}",
+            flux_fwd,
+            flux_swapped
+        );
+        assert!(
+            (kin_fwd.role_contrast_norm - kin_swapped.role_contrast_norm).abs() < 1e-5,
+            "role_contrast_norm ||c_fwd|| must be symmetric under swap(reactant, product)"
+        );
+        assert!(
+            (kin_fwd.mean_catalytic_response - kin_swapped.mean_catalytic_response).abs() < 1e-5,
+            "mean_catalytic_response ||m|| must be symmetric under swap(reactant, product)"
+        );
+        assert!(
+            kin_swapped.backpressure_risk > kin_fwd.backpressure_risk,
+            "Swapped reverse direction must have higher backpressure_risk ({}) than forward direction ({})",
+            kin_swapped.backpressure_risk,
+            kin_fwd.backpressure_risk
+        );
+
+        // 3. Test Disordered Microprotein SLiM Window Pooler (`bio_pslim_window_pool`) & Dual-SLiM Tether (`bio_match_dual_slim_tether`)
+        let sorf_seq = "MKKLVLVAVILGLAVAGSAQAPVGRDTVPDPLRERAQELGVKVTVEGPGGGSGGGGSLLPAIVHIEQDKTKREEVD";
+        let windows: Vec<_> = crate::bio_pslim_window_pool(None, sorf_seq, 8, 2, None).collect();
+        assert!(windows.len() > 20, "Expected >20 sliding 8-aa windows across 76-aa sORF");
+        for (start_p, end_p, subseq, motif_vec, local_ent) in &windows {
+            assert_eq!(end_p - start_p + 1, 8, "Window bounds must be 8 residues wide");
+            assert_eq!(subseq.len(), 8);
+            assert_eq!(motif_vec.len(), 16, "motif_vec must be 16-D (vec16 compatible)");
+            let l2_norm = crate::pgbio_simd_dot_f32(motif_vec, motif_vec).sqrt();
+            assert!(
+                (l2_norm - 1.0).abs() < 1e-4,
+                "ZCA-whitened SLiM window vector must have L2 norm ~= 1.0, got {}",
+                l2_norm
+            );
+            assert!(*local_ent >= 0.0);
+        }
+
+        // Test dual-SLiM tether matching with clean flexible GGGSGGGGS linker vs split hydrophobic core linker
+        let p_a = windows[2].3.clone();
+        let p_b = windows[windows.len() - 2].3.clone();
+        let dual_clean: Vec<_> =
+            crate::bio_match_dual_slim_tether(sorf_seq, p_a.clone(), p_b.clone(), 8, 2, 6, None, None).collect();
+        assert_eq!(dual_clean.len(), 1);
+        let dc = &dual_clean[0];
+        assert!(
+            dc.1 + 6 <= dc.5,
+            "Dual-SLiM windows must be non-overlapping with end_a ({}) + min_linker (6) <= start_b ({})",
+            dc.1,
+            dc.5
+        );
+
+        // Verify junction sanity check rejects split hydrophobic domain core across linker
+        let split_hydro_seq = "DKTKREEVDDDDIVLFWVIVLFWVVVLLFIIVLFWVGSAQAPVGRDTV";
+        let j_bad: Vec<_> = crate::bio_audit_fusion_junction_sanity(split_hydro_seq, 8, 40).collect();
+        assert_eq!(j_bad.len(), 1);
+        assert!(!j_bad[0].4, "Split hydrophobic core across linker must fail junction_sanity_pass");
+        assert!(j_bad[0].5.contains("Bicistronic_Operon_Required"));
+
+        let clean_linker_seq = "DKTKREEVDGGGSGGGGSGGGSGGGGSAQAPVGRDTV";
+        let j_good: Vec<_> = crate::bio_audit_fusion_junction_sanity(clean_linker_seq, 9, 28).collect();
+        assert_eq!(j_good.len(), 1);
+        assert!(j_good[0].4, "Flexible GGGS linker must pass junction_sanity_pass");
+        assert_eq!(j_good[0].5, "Single_Polypeptide_Fusion");
+
+        // 4. Test STORM ID128 64-hot deterministic target hashing
         let h1 = crate::bio_id128_hash("P00918_CA2_HUMAN");
         let h1_again = crate::bio_id128_hash("P00918_CA2_HUMAN");
         let h2 = crate::bio_id128_hash("Q1JU72_FA1_DEHALOGENASE");
@@ -14497,9 +15737,7 @@ ATOM     37  O   HIS A   5      30.629   2.388   0.771  1.00  0.00           O
         assert_eq!(pop1, 64, "ID128 hash must be strictly 64-hot (64 bits set out of 128), got {}", pop1);
         assert_eq!(pop2, 64, "ID128 hash must be strictly 64-hot (64 bits set out of 128), got {}", pop2);
 
-        // 3. Test STORM bitwise Tanimoto neighborhood smoother with activity cliff preservation
-        // Three closely related congeners (toluene, ethylbenzene, propylbenzene) where compound 2 has an activity cliff (pIC50 = 9.2 vs 5.1, 5.3)
-        // plus one dissimilar molecule (caffeine, pIC50 = 4.0)
+        // 5. Test STORM bitwise Tanimoto neighborhood smoother with activity cliff preservation
         let fps = vec![
             "Cc1ccccc1".to_string(),
             "CCc1ccccc1".to_string(),
@@ -14509,12 +15747,10 @@ ATOM     37  O   HIS A   5      30.629   2.388   0.771  1.00  0.00           O
         let raw_scores = vec![5.1, 9.2, 5.3, 4.0];
         let smoothed: Vec<_> = crate::bio_smooth_assay_series(fps, raw_scores, 0.25).collect();
         assert_eq!(smoothed.len(), 4);
-        // Verify both raw_score and smoothed_score are exposed and the activity cliff on compound 2 is preserved
         assert_eq!(smoothed[1].1, 9.2); // raw_score preserved!
         assert!(smoothed[1].2 < 8.5 && smoothed[1].2 > 5.5, "Expected smoothed score to blend congener neighborhood, got {}", smoothed[1].2);
         assert!(smoothed[1].3 >= 2, "Expected congener neighbors >= 2, got {}", smoothed[1].3);
         assert!(smoothed[1].4 > 0.8, "Expected positive activity cliff delta on cliff compound, got {}", smoothed[1].4);
-        // Dissimilar caffeine has only itself in its Tanimoto >= 0.25 neighborhood
         assert_eq!(smoothed[3].3, 1);
         assert!((smoothed[3].1 - smoothed[3].2).abs() < 1e-12);
     }
@@ -14522,7 +15758,7 @@ ATOM     37  O   HIS A   5      30.629   2.388   0.771  1.00  0.00           O
     #[pg_test]
     fn test_phase4_pgrx_bench_suite() {
         let rows: Vec<_> = crate::bio_run_phase4_benchmarks().collect();
-        assert_eq!(rows.len(), 7);
+        assert_eq!(rows.len(), 8);
         for (name, base, opt, ratio, unit) in &rows {
             pgrx::log!(
                 "[PGRX-BENCH] {} | baseline={:.4} | optimized={:.4} | ratio={:.2}x ({})",
@@ -14539,9 +15775,10 @@ ATOM     37  O   HIS A   5      30.629   2.388   0.771  1.00  0.00           O
         assert!(rows[2].2 > rows[2].1);
         // Assert BioVecInt8G128 varlena size is 1,304 B (< 2,000 B TOAST threshold)
         assert_eq!(rows[3].2, 1304.0);
-        // Assert high throughput for EnzRef SIMD (> 20,000 rows/sec in debug, > 2M/sec in release) and PAINS screen (> 5,000 molecules/sec)
+        // Assert high throughput for EnzRef SIMD (> 20,000 rows/sec in debug, > 500k/sec in release), PAINS screen (> 5,000 molecules/sec), and SLiM window pooler
         assert!(rows[5].2 > 20_000.0);
         assert!(rows[6].2 > 5_000.0);
+        assert!(rows[7].2 > 2_000.0);
     }
 
     #[pg_test]
