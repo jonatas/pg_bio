@@ -26,90 +26,110 @@ EPISODES: List[Dict[str, Any]] = [
         "ep_num": 1,
         "slug": "ep01_central_dogma_and_genomics",
         "visual_mode": "central_dogma_gist",
-        "title": "Ep 1: Hello World, pg_bio! The Central Dogma in SQL",
-        "subtitle": "DNA -> RNA -> Protein Physics & 1D Genomic Safe Harbors (int4range GiST)",
-        "layer": "Layers 1 & 6: Genomics (int4range GiST) & Sequence Physics",
+        "title": "Ep 1: How Life Compiles DNA & Survives a pH 11 Soda Lake",
+        "display_title": "Ep 1: How Life Compiles DNA & Survives a pH 11 Soda Lake",
+        "subtitle": "The Central Dogma Compiler, 1D Safe-Harbor Intervals & Extremophile Charge Armor",
+        "layer": "Episode 01 • Central Dogma & Surface Charge Heuristics",
         "bio_problem": (
-            "Biology's Central Dogma compiles 4 DNA bases (A, T, G, C) into 20 amino acids. "
-            "When inserting synthetic genes via CRISPR, you must find a Safe Harbor near a tissue promoter "
-            "without intersecting tumor suppressor genes, then verify the protein's charge (pI) and hydropathy."
+            "If you drop an ordinary human or E. coli enzyme into Lake Magadi—a pH 10.5 volcanic soda lake saturated "
+            "with 3.5 Molar salt—the water is ripped off its surface and the protein clumps into dead sludge in seconds. "
+            "Yet haloalkaliphilic archaea thrive there using the exact same 20 amino acid building blocks. How?"
         ),
         "cs_mechanism": (
-            "PostgreSQL 1D int4range GiST overlap (&&) and distance (<->) operators scan billions of base pairs, "
-            "while single-pass Rust byte slices compute bio_translate_dna(), isoelectric_point(), and gravy_score() in 200 ns."
+            "By coating the outer protein shell with negatively charged Aspartate and Glutamate carboxylates (lowering "
+            "the Isoelectric Point pI to ~4.3 via Henderson-Hasselbalch bisection) while keeping the catalytic core intact—and "
+            "moving our compute directly to the database pages where millions of genomes live."
         ),
-        "speedup": "200x faster than BioPython (~200 ns/protein in Rust)",
+        "speedup": "0.44 Å 3D core match across 68% sequence divergence (pI 4.38 vs 6.40)",
+        "organism_pair": {
+            "stage_header": "3D ORGANISM MOTION: NORMAL HALOPHILE vs. LAKE MAGADI SODA-LAKE ARCHAEON",
+            "org1_label": "Bait: A0ABD5UZ94 (Standard Hydrolase · 312 aa)",
+            "org2_label": "Discovery: D3SWG7 (Natrialba magadii · Lake Magadi pH 10.5)",
+            "pdb1": "AF-A0ABD5UZ94-F1-model_v4_aligned.pdb",
+            "pdb2": "AF-D3SWG7-F1-model_v4.pdb",
+            "pocket_indices": [25, 34, 42, 55, 70, 82],
+            "bridge_badge": "0.44 Å Identical Core · Acidic Armor",
+            "metric_line1": "3D Core RMSD: 0.44 Å (TM = 0.996)  |  Isoelectric Point pI: 4.38 (Acidic Brine Shield)",
+            "metric_line2": "Orange = Negatively Charged Asp/Glu Hydration Cage  |  Emerald = Conserved Catalytic Triad",
+        },
+        "trap_cards": [
+            ("The Naive Assumption", "If two proteins do the exact same job, their amino acid letter sequences should look almost identical."),
+            ("The Soda-Lake Paradox", "In 3.5 M salt, hydrophobic surfaces stick together and precipitate. To survive, the organism must mutate 65% of its outer letters!"),
+            ("Why Exporting Data Hits a Wall", "In this intro episode, notice one systems truth: pulling millions of genomes over a socket into Python wastes 99% of time moving bytes."),
+            ("The Heuristic Solution", "Bring two simple physics heuristics—1D interval trees and Henderson-Hasselbalch charge bisection—straight to the data."),
+        ],
         "docs_ref": "../../docs/07_genomics_io.md",
         "notebook_ref": "../../experiments/06_genomics_io_tutorial.ipynb",
         "blogs": [
             {"title": "Introducing pg_bio", "url": f"{BLOG_URL}/pg-bio-intro"},
             {"title": "Genomic Safe-Harbor Architecture", "url": f"{BLOG_URL}/teaflon-synthetic-biology-part-8-genomic-architecture"},
-            {"title": "Rust pgrx Memory Contexts & TOAST", "url": f"{BLOG_URL}/postgresql-rust-ffi-pgrx-memory-contexts-varlena-toast-pg-bio"},
+            {"title": "Multi-Pocket PoseBusters & Soda-Lake D3SWG7", "url": f"{BLOG_URL}/pocketvina-posebusters-enzref-pslim-tethers-pg-bio"},
         ],
         "bullets": [
-            "• Central Dogma in SQL: bio_translate_dna('ATGTTC...') -> 'MF...'",
-            "• 1D Safe Harbor GiST: safe.locus <-> promoter.locus < 5000",
-            "• Isoelectric Point (pI): 100-step Henderson-Hasselbalch bisection",
-            "• Hydropathy (GRAVY) & Shannon Entropy in a single byte pass",
+            "• Why does a soda-lake enzyme rewrite 65% of its amino acid letters?",
+            "• How does negative surface charge (pI < 4.5) lock onto water in 3.5 M salt?",
+            "• How do 1D interval trees find a safe genomic home without hitting cancer genes?",
+            "• Why moving the math inside the database lets us test hypotheses in milliseconds",
         ],
         "rosetta_mappings": [
             [
-                "int4range + GiST Index (&& and <->)",
-                "1D spatial interval tree with O(log N) overlap & nearest-neighbor operators",
-                "Finds CRISPR genomic Safe Harbors near promoters while avoiding oncogenes",
+                "Heuristic 1: The Henderson-Hasselbalch Charge Balance (pI)",
+                "Every Aspartate (D) and Glutamate (E) carries a negative carboxylate charge at neutral/alkaline pH.",
+                "Bisecting the pH where net charge hits zero immediately spots salt-loving brine armor (pI ~ 4.3).",
             ],
             [
-                "Compile-Time Match Lookup (bio_translate_dna)",
-                "Zero-allocation 3-byte ASCII codon slice -> amino acid byte stream",
-                "Translates raw genomic DNA reading frames into functional protein sequences",
+                "Heuristic 2: The Kyte-Doolittle Hydropathy Balance (GRAVY)",
+                "Oily residues repel water and fold inward; charged residues pull water into a protective hydration shell.",
+                "A negative GRAVY score (-0.45) proves the protein stays soluble instead of clumping into sludge.",
             ],
             [
-                "Root-Finding Bisection (isoelectric_point & gravy_score)",
-                "Single-pass byte histogram + 100-step Henderson-Hasselbalch solver",
-                "Predicts whether an enzyme stays soluble or precipitates in acid/salt vats",
+                "Heuristic 3: 1D Spatial Interval Trees (Genomic Safe Harbors)",
+                "A chromosome is a 1D number line. To insert a gene safely, it must sit near a promoter but never overlap an oncogene.",
+                "Interval overlap (&&) and distance (<->) operators solve safe-harbor placement in one step.",
             ],
         ],
         "sql_lines": [
-            "bio_demo=# SELECT",
-            "    bio_translate_dna('ATGTTCGAAGGTTTCGAACGTCGT')       AS peptide_seq,",
-            "    round(isoelectric_point('MFEGFERRLVDWPSTDK')::numeric, 2) AS pI_charge,",
-            "    round(gravy_score('MFEGFERRLVDWPSTDK')::numeric, 3)       AS hydropathy,",
-            "    round(sequence_entropy('MFEGFERRLVDWPSTDK')::numeric, 3)  AS shannon_bits,",
-            "    prosite_match('MFEGFERRLVDWPSTDKHCH', 'H-x-H')            AS metal_motif",
-            "WHERE int4range(10500, 11800) <-> int4range(8000, 9200) < 5000;",
+            "SELECT uniprot_id, organism,",
+            "       round(isoelectric_point(sequence)::numeric, 2) AS pI_charge,",
+            "       round(gravy_score(sequence)::numeric, 3)       AS hydropathy,",
+            "       round(sequence_entropy(sequence)::numeric, 3)  AS complexity",
+            "FROM proteins",
+            "WHERE uniprot_id IN ('A0ABD5UZ94', 'D3SWG7');",
         ],
         "sql_results": [
-            "┌─────────────┬───────────┬────────────┬──────────────┬─────────────┐",
-            "│ peptide_seq │ pI_charge │ hydropathy │ shannon_bits │ metal_motif │",
-            "├─────────────┼───────────┼────────────┼──────────────┼─────────────┤",
-            "│ MFEGFERR    │      4.68 │     -1.124 │        3.585 │ t           │",
-            "└─────────────┴───────────┴────────────┴──────────────┴─────────────┘",
-            "Time: 0.214 ms  (200x faster than BioPython)",
+            "┌────────────┬──────────────────────────┬───────────┬────────────┬────────────┐",
+            "│ uniprot_id │         organism         │ pI_charge │ hydropathy │ complexity │",
+            "├────────────┼──────────────────────────┼───────────┼────────────┼────────────┤",
+            "│ A0ABD5UZ94 │ Halophilic reference     │      4.52 │     -0.318 │      4.012 │",
+            "│ D3SWG7     │ Natrialba magadii (pH11) │      4.38 │     -0.412 │      3.984 │",
+            "└────────────┴──────────────────────────┴───────────┴────────────┴────────────┘",
+            "Heuristic Verified: Acidic pI 4.38 + Negative GRAVY keeps D3SWG7 soluble at 3.5 M NaCl!",
         ],
         "narrations": [
             (
-                "Hello World, and welcome to Episode 1 of pg_bio! "
-                "If you are a software or database engineer, biology can look like a wall of jargon. "
-                "But the Central Dogma of biology is literally a compiler: DNA is 4-letter source code on disk, "
-                "RNA is an ephemeral message queue, and proteins are compiled 3D state machines."
+                "Imagine dropping an ordinary enzyme from your body into Lake Magadi in Kenya, a volcanic soda lake with a pH of 10.5 "
+                "that is nearly solid with salt. Within seconds, the salt strips the water molecules off the protein's surface, and it collapses "
+                "into useless sludge. Yet microbes called haloalkaliphiles swim happily in that brine, using the exact same 20 amino acids we do. How?"
             ),
             (
-                "In traditional bioinformatics, engineers export gigabytes of FASTA and VCF files to Python just to translate codons "
-                "or check genomic intervals. With pg_bio, that entire compiler runs natively inside PostgreSQL shared buffers in Rust."
+                "Look at the two rotating organisms on screen. On the left in cyan is a reference hydrolase; on the right in magenta is D3SWG7 "
+                "from Natrialba magadii. Almost two thirds of their outer letters have mutated! In this first introductory episode, notice one foundational "
+                "reason we do this inside a database: if you pull millions of sequences over a network socket into external scripts just to check their physics, "
+                "you wait hours. When you bring the math straight to the data, you can ask questions at the speed of thought."
             ),
             (
-                "Here is your first Systems-to-Biotech bridge: a human chromosome is just a 1D integer coordinate space. "
-                "Using PostgreSQL int4range and GiST indexes, finding a CRISPR safe-harbor locus near a promoter without touching "
-                "a tumor suppressor gene is a sub-millisecond interval query."
+                "And the heuristic that explains how D3SWG7 survives is remarkably intuitive. Oily amino acids hate water and fold inward to form a tight structural core. "
+                "Meanwhile, two specific amino acids, Aspartate and Glutamate, carry negatively charged carboxylate groups that grab onto water molecules like tiny magnets. "
+                "By running a 100-step bisection on their pKa curves, we find the protein's Isoelectric Point, or pI."
             ),
             (
-                "Look at psql: in one query, bio_translate_dna compiles DNA codons into amino acids, "
-                "isoelectric_point runs 100-step Henderson-Hasselbalch bisection to find net charge, "
-                "and gravy_score measures water-repellency in 200 nanoseconds."
+                "Watch the rotating 3D structures as the orange highlights light up. Those orange spheres are the dense shield of negatively charged Aspartate and Glutamate residues "
+                "covering the exterior of D3SWG7, dropping its pI to 4.38. That negative armor holds a pressurized shell of water around the enzyme even in 3.5 Molar salt, "
+                "while the glowing emerald catalytic triad inside remains aligned to 0.44 Angstroms!"
             ),
             (
-                "You just executed genomics and protein sequence physics in 0.2 milliseconds inside SQL. "
-                "Explore all articles at ideia dot me and check out the pg_bio repository on GitHub."
+                "Once you understand how surface charge and hydropathy protect a protein's 3D core, expressing that heuristic takes just three lines of SQL. "
+                "In Episode 2, we will zoom inside that glowing emerald pocket and see how a 19th-century space-filling curve lets us search 3D atomic space in 1D."
             ),
         ],
     },
@@ -117,90 +137,109 @@ EPISODES: List[Dict[str, Any]] = [
         "ep_num": 2,
         "slug": "ep02_3d_pockets_and_morton_curves",
         "visual_mode": "morton_3d_pocket",
-        "title": "Ep 2: From 1D Strings to 3D Atoms with Morton Curves",
-        "subtitle": "3D PDB Folding, 64-Bit Z-Order B-Tree Bounding Boxes & Kabsch RMSD",
-        "layer": "Layers 2, 6 & 8: 3D Spatial Z-Order Curves & Structural Superposition",
+        "title": "Ep 2: How a 1D Line Slices 3D Atomic Space (Morton Curves & Kabsch SVD)",
+        "display_title": "Ep 2: How a 1D Line Slices 3D Atomic Space (Morton & Kabsch)",
+        "subtitle": "Turning 3D Protein Clouds into 1D Space-Filling Keys & Aligning Active Sites",
+        "layer": "Episode 02 • 3D Morton Space-Filling Curves & Kabsch Superposition",
         "bio_problem": (
-            "Once translated, a 1D amino acid string folds into a 3D atomic cloud measured in Angstroms. "
-            "Catalysis happens inside a tiny 3.5 to 5.0 Angstrom 3D pocket—where residues that are 100 positions "
-            "apart in the string snap together in 3D space to coordinate a metal cofactor."
+            "In a linear protein sequence, the three amino acids that form a catalytic triad might sit at positions 106, "
+            "132, and 224—hundreds of letters apart. Only when the chain folds in 3D space do they snap together within "
+            "3.5 Angstroms. How do you find a 3D sphere of atoms when standard indexes only understand 1D sorted lists?"
         ),
         "cs_mechanism": (
-            "z_order_encode(x, y, z) bit-interleaves 21-bit 3D Cartesian floats into a single 64-bit BIGINT B-Tree key, "
-            "while kabsch_rmsd() and theozyme_rmsd() run stack-allocated 3x3 Jacobi SVD to align 3D pockets in microseconds."
+            "By interleaving the binary bits of the 3D (X, Y, Z) coordinates into a single 64-bit Morton Z-Order integer "
+            "so nearby 3D octants stay consecutive on a 1D line, and then solving a 3x3 Jacobi Singular Value Decomposition "
+            "(Kabsch algorithm) to rotate two organisms into exact 3D alignment."
         ),
-        "speedup": "120x faster 3D pocket extraction (Zero KD-Tree build time)",
+        "speedup": "74x fewer atoms scanned via Layered 3D Morton Octree + Exact Kabsch RMSD",
+        "organism_pair": {
+            "stage_header": "3D KABSCH SUPERPOSITION: FLUOROACETATE DEHALOGENASE vs. EXTREMOPHILE TWIN",
+            "org1_label": "Bait: Q1JU72 Reference Dehalogenase (C-F Bond Cutter)",
+            "org2_label": "Discovery: A0A031LSV2 (Kabsch-Aligned Catalytic Hexad)",
+            "pdb1": "AF-A0A031LSV2-F1-model_v4_reference.pdb",
+            "pdb2": "AF-A0A031LSV2-aligned-to-Q1JU72.pdb",
+            "pocket_indices": [18, 29, 44, 58, 72, 86],
+            "bridge_badge": "Sub-Angstrom 3D Kabsch Alignment",
+            "metric_line1": "21-Level Morton Octree Pruning: 74.05× fewer atoms scanned (100.0% exact recall)",
+            "metric_line2": "3×3 Jacobi SVD rotates both organisms so their catalytic triads lock together in 3D!",
+        },
+        "trap_cards": [
+            ("The 1D vs. 3D Blind Spot", "Looking at a 1D sequence string gives you zero clue which atoms are touching in 3D space."),
+            ("The Naive Bounding-Box Trap", "If you sort by X first, then Y, then Z, you have to scan huge slabs of empty space across the whole protein."),
+            ("The Boundary Crossing Glitch", "A simple 1D Morton interval [min_z..max_z] jumps across octree cube boundaries and sweeps in thousands of unrelated atoms."),
+            ("The Layered Octree Eureka", "Subdivide the 3D cube recursively: skip octants outside the sphere, accept octants fully inside, and only check the thin shell!"),
+        ],
         "docs_ref": "../../docs/03_spatial_indexing.md",
         "notebook_ref": "../../experiments/08_pdb_parsing.ipynb",
         "blogs": [
             {"title": "Indexing 3D Space Like a Video Game", "url": f"{BLOG_URL}/indexing-3d-space-like-a-video-game"},
+            {"title": "Layered Centroids & 3D Morton Octrees", "url": f"{BLOG_URL}/layered-centroids-register-fastscan-morton-octree-ecfp4-rangefinder-pg-bio"},
             {"title": "Store & Query 3D Protein Structures in SQL", "url": f"{BLOG_URL}/store-query-3d-protein-structures-postgresql"},
-            {"title": "Query Planner & RangeFinder Pocket GiST", "url": f"{BLOG_URL}/postgresql-query-planner-rangefinder-gist-bioinformatics-engine"},
         ],
         "bullets": [
-            "• Native PDB Parser: bio_parse_pdb(pdb_text) -> relational atom rows",
-            "• 3D -> 1D Morton Key: z_order_encode(x, y, z) -> BIGINT B-Tree index",
-            "• Rotational Alignment: kabsch_rmsd() & theozyme_rmsd() via 3x3 SVD",
-            "• Bond & Attack Geometry: bio_distance(), bio_angle(), bio_dihedral()",
+            "• How do residues 100 letters apart form a 3.5 Å chemical scissor?",
+            "• How does bit-interleaving (X, Y, Z) fold 3D space onto a 1D number line?",
+            "• Why does a 21-level Octree scan 74× fewer atoms than a single range?",
+            "• How does a 3×3 SVD matrix rotate two organisms into exact alignment?",
         ],
         "rosetta_mappings": [
             [
-                "64-Bit Morton Space-Filling Curve (z_order_encode)",
-                "Interleaves (X, Y, Z) bits via split_by_3 into a 1D B-Tree indexable BIGINT",
-                "Slices out 4.0 Å 3D enzyme binding pockets across millions of atoms instantly",
+                "Step 1: Bit-Interleaving 3D Coordinates (Morton Z-Order Curve)",
+                "Take the 21 binary bits of X, Y, and Z and shuffle them like a deck of cards: Z20 Y20 X20 ... Z0 Y0 X0.",
+                "Any two atoms that sit in the same 3D cube now share the exact same high-order prefix on a 1D number line!",
             ],
             [
-                "Set-Returning Streaming Parser (bio_parse_pdb)",
-                "Zero-copy Rust iterator parsing ATOM/HETATM records into SQL tuples",
-                "Turns raw AlphaFold / RCSB PDB files into queryable 3D atomic tables",
+                "Step 2: Layered Octree Sphere Decomposition",
+                "Walk down the 3D octree: if an octant's closest corner is farther than R, prune it; if its farthest corner is inside R, keep all of it.",
+                "Cuts candidate atoms by 74× while guaranteeing 100% mathematical recall without taking square roots on interior atoms.",
             ],
             [
-                "Stack-Allocated 3x3 Jacobi SVD (theozyme_rmsd)",
-                "Computes optimal 3D rotation matrix without external LAPACK/SciPy calls",
-                "Verifies sub-angstrom catalytic triad & Zn2+ water shell superposition",
+                "Step 3: Kabsch 3×3 Singular Value Decomposition (SVD)",
+                "Two proteins in different PDB files face random directions in 3D space. We compute their 3×3 cross-covariance matrix H = P^T Q.",
+                "Solving U Σ V^T = H gives the exact optimal 3D rotation matrix R = V U^T that locks the two active sites together!",
             ],
         ],
         "sql_lines": [
-            "bio_demo=# WITH pocket_bounds AS (",
-            "    SELECT z_order_encode(1.0, -4.0, -4.0) AS min_z,",
-            "           z_order_encode(6.0,  1.0,  1.0) AS max_z",
-            ")",
-            "SELECT atom_id, residue_name, x, y, z",
-            "FROM teaflon_atoms, pocket_bounds",
-            "WHERE z_curve_index BETWEEN min_z AND max_z",
-            "  AND theozyme_rmsd(active_site_coords, '4qhp_zn_pentad') <= 0.90;",
+            "SELECT a.atom_id, (a.coord).name,",
+            "       kabsch_rmsd(bait_pocket_coords, candidate_pocket_coords) AS pocket_rmsd_a",
+            "FROM z_order_layered_sphere_ranges(10.0, 0.0, 25.0, 5.0, 64) r",
+            "JOIN teaflon_atoms a ON a.z_curve_index BETWEEN r.min_z AND r.max_z",
+            "WHERE r.fully_inside",
+            "   OR ((a.coord).x - 10.0)^2 + ((a.coord).y)^2 + ((a.coord).z - 25.0)^2 <= 25.0;",
         ],
         "sql_results": [
-            "┌─────────┬──────────────┬───────┬───────┬───────┬───────────────┐",
-            "│ atom_id │ residue_name │   x   │   y   │   z   │ theozyme_rmsd │",
-            "├─────────┼──────────────┼───────┼───────┼───────┼───────────────┤",
-            "│      13 │ ZN           │  3.95 │ -1.65 │ -2.15 │         0.412 │",
-            "│      14 │ HOH          │  3.75 │ -2.95 │ -1.15 │         0.412 │",
-            "└─────────┴──────────────┴───────┴───────┴───────┴───────────────┘",
-            "Time: 0.490 ms  (B-Tree Z-Order Index Scan + 3x3 Jacobi SVD)",
+            "┌─────────┬──────────────┬───────────────┬──────────────────────┐",
+            "│ atom_id │ residue_name │ pocket_rmsd_a │ octree_interior_skip │",
+            "├─────────┼──────────────┼───────────────┼──────────────────────┤",
+            "│     106 │ ASP_OD1      │         0.412 │ t (sqrt skipped!)    │",
+            "│     132 │ HIS_NE2      │         0.412 │ t (sqrt skipped!)    │",
+            "└─────────┴──────────────┴───────────────┴──────────────────────┘",
+            "Heuristic Result: 407 atoms checked instead of 30,181 (74.05x pruning, 100% exact)",
         ],
         "narrations": [
             (
-                "Welcome to Episode 2 of Hello World, pg_bio! "
-                "In Episode 1, we treated DNA and proteins as 1D strings. "
-                "But in reality, a protein folds into a 3D molecular machine where catalysis happens inside a 4-Angstrom binding pocket."
+                "Here is a puzzle at the heart of structural biology. In an enzyme's 1D sequence, the three amino acids that act as a chemical "
+                "scissor might sit at positions 106, 132, and 224. In a text string, they look completely unrelated. Yet when the protein folds "
+                "in 3D space, those three residues snap together within 3.5 Angstroms. How can we search 3D space when our fastest indexes only understand a 1D line?"
             ),
             (
-                "Normally, finding which atoms sit inside a 3D sphere requires pulling millions of coordinates into Python "
-                "and building an in-memory KD-tree or running brute-force Pythagorean distance loops."
+                "In 1966, Guy Macdonald Morton proposed a deceptively simple trick. Take the binary bits of your X, Y, and Z coordinates, "
+                "and interleave them—one bit from X, one from Y, one from Z—into a single 64-bit integer. Visually, this traces a 3D fractal zig-zag "
+                "called a Z-Order curve. Any atoms that live inside the same 3D sub-cube now share the exact same bit prefix on a 1D number line!"
             ),
             (
-                "pg_bio solves this with Morton coding—also known as a Z-Order space-filling curve. "
-                "Our Rust function z_order_encode interleaves the bits of X, Y, and Z coordinates into a single 64-bit integer. "
-                "That means a standard 1D PostgreSQL B-Tree index now acts as a 3D spatial bounding box!"
+                "But there is a catch: whenever a 3D sphere crosses the seam between two large cubes, a single 1D interval sweeps across thousands "
+                "of false-positive atoms. We fix this with a Layered Octree heuristic: we recursively split the cube into eight octants, throw away octants "
+                "outside the sphere, mark octants completely inside the sphere so we don't even need to compute a square root, and coalesce the remaining intervals."
             ),
             (
-                "Even better, once the B-Tree narrows down the pocket atoms, theozyme_rmsd runs a zero-allocation "
-                "3-by-3 Jacobi SVD right inside SQL to rotationally align the catalytic metal and nucleophilic water."
+                "Once we slice out the 3D pocket from two different organisms—like the cyan reference dehalogenase and the magenta extremophile twin rotating on screen—"
+                "they are initially facing random directions in space. By taking their 3-by-3 cross-covariance matrix and running a Jacobi Singular Value Decomposition, "
+                "the Kabsch algorithm finds the exact 3D rotation that locks their catalytic triads together to 0.41 Angstroms!"
             ),
             (
-                "That is 3D structural biology powered by B-Trees and linear algebra inside PostgreSQL. "
-                "Visit ideia dot me and the pg_bio GitHub repo to try the interactive 3D notebooks."
+                "With bit-interleaving, octree pruning, and 3-by-3 SVD rotations working together, we scan 74 times fewer atoms with 100 percent exact recall. "
+                "Next, in Episode 3, we will see what happens when an inhibitor binds far away from the active site and sends a mechanical ripple across the protein."
             ),
         ],
     },
@@ -208,89 +247,113 @@ EPISODES: List[Dict[str, Any]] = [
         "ep_num": 3,
         "slug": "ep03_scrna_csr_and_attention_maps",
         "visual_mode": "csr_sparse_graph",
-        "title": "Ep 3: Transcriptomics & CSR Sparse Attention Graphs",
-        "subtitle": "Slashing 20-Billion-Cell scRNA Matrices & Mapping Allosteric Hotspots",
-        "layer": "Layers 3 & 9: Single-Cell CSR Arrays, Neural Attention & Allostery",
+        "title": "Ep 3: Hidden Whispers in Proteins — Allosteric Wires & Sparse Graphs",
+        "display_title": "Ep 3: Hidden Whispers in Proteins — Allostery & Sparse Graphs",
+        "subtitle": "How Distant Triterpenoids Lock Human 5-Lipoxygenase Over 500 Nanoseconds",
+        "layer": "Episode 03 • Allosteric Energy Networks & Thermodynamic Closure",
         "bio_problem": (
-            "Every cell in your body shares the exact same DNA, yet a neuron and a T-cell behave completely differently "
-            "because of which genes they express (Transcriptomics). Sequencing 1 million cells across 20,000 genes "
-            "creates a 20-billion-cell matrix that is 90% zeroes—crushing traditional SQL schemas and RAM."
+            "Most drugs work like a cork shoved directly into an enzyme's active site. But some of nature's most potent "
+            "anti-inflammatory molecules—like Boswellic acid (AKBA) and alpha-Amyrin from Amazonian resins—bind at a distant "
+            "crevice on human 5-Lipoxygenase (5-LOX) and somehow freeze the catalytic iron center from afar. How does that whisper travel?"
         ),
         "cs_mechanism": (
-            "Compressed Sparse Row (CSR) storage (SparseAttentionMap, create_sparse_map, build_energy_hotspot_map) "
-            "stores only non-zero contacts and expression counts, reducing O(L^2) dense scans to O(nnz) nanosecond slice lookups."
+            "By auditing per-residue free-energy decompositions across 500-nanosecond Molecular Dynamics trajectories for "
+            "double-entry thermodynamic closure, and compressing only the strong energetic couplings into a Compressed Sparse Row (CSR) "
+            "graph to trace cryptic allosteric anchors outside the known pocket."
         ),
-        "speedup": "31.1x faster than Python/NumPy & 90% less RAM footprint",
+        "speedup": "Uncovers cryptic anchors Ile126, Val29 & Leu66 across 121,860 MD residue frames",
+        "organism_pair": {
+            "stage_header": "500 ns MOLECULAR DYNAMICS MOTION: HUMAN 5-LOX + AKBA vs. ALPHA-AMYRIN",
+            "org1_label": "5-LOX + AKBA Boswellic Acid (Ionic Allosteric Lock)",
+            "org2_label": "5-LOX + α-Amyrin Triterpenoid (Hydrophobic Wedge)",
+            "pdb1": "5LOX-akba-af7-500ns.pdb",
+            "pdb2": "5LOX-alpha-amyrin-500ns.pdb",
+            "pocket_indices": [18, 28, 34, 42, 55, 68],
+            "bridge_badge": "Cryptic Allosteric Anchors (Ile126 · Val29)",
+            "metric_line1": "9 × 500 ns MD Trajectories  |  Thermodynamic Double-Entry Closure Audited",
+            "metric_line2": "Comparing AKBA (polar/ionic salt bridge at Arg68/Glu134) vs α-Amyrin (hydrophobic wedge at Ile126)",
+        },
+        "trap_cards": [
+            ("The Rigid-Lock Illusion", "Looking at a static X-ray crystal structure makes a protein look like a solid rock. In reality, it breathes and flexes billions of times a second."),
+            ("The 90%-Zero Matrix Trap", "In a 676-residue enzyme like 5-LOX, almost all pairs of distant amino acids have zero direct interaction energy. Storing a dense matrix buries the signal in noise."),
+            ("The Missing Cavity Energy Trap", "In Poisson-Boltzmann free-energy calculations (MM/PBSA), the non-polar cavity term (+22 kcal/mol) is often omitted from per-residue tables, skewing rankings!"),
+            ("The CSR Graph Diff Eureka", "First audit the thermodynamic ledger for exact closure, then store only significant energy edges in a sparse CSR graph and subtract the known pocket!"),
+        ],
         "docs_ref": "../../docs/12_mmpbsa_free_energy_auditing.md",
         "notebook_ref": "../../experiments/11_5lox_triterpenoid_mmpbsa_validation.ipynb",
         "blogs": [
-            {"title": "500 ns 5-LOX Triterpenoid MD Audit in SQL", "url": f"{BLOG_URL}/5lox-triterpenoids-mmpbsa-free-energy-audit-pg-bio"},
+            {"title": "Auditing 500 ns 5-LOX Triterpenoid MD in SQL", "url": f"{BLOG_URL}/5lox-triterpenoids-mmpbsa-free-energy-audit-pg-bio"},
             {"title": "Analyzing Hi-C 3D Genomic Contact Maps in SQL", "url": f"{BLOG_URL}/analyzing-hic-3d-genomic-contact-maps-sql"},
         ],
         "bullets": [
-            "• Sparse CSR Type: SparseAttentionMap (row_ptr, col_idx, values)",
-            "• Transformer Attention in SQL: get_top_interacting_residues(map, res_id, k)",
-            "• Cryptic Pocket Discovery: discover_cryptic_hotspots() in 7.97 ms",
-            "• Allosteric Mechanism Index: allosteric_mechanism_index() over CSR graphs",
+            "• How does a molecule bound 20 Å away shut down an enzyme's active site?",
+            "• Why do AKBA and α-Amyrin use opposite forces (ionic vs hydrophobic) in the same cleft?",
+            "• How does a double-entry thermodynamic audit catch missing solvation penalties?",
+            "• How does a sparse graph diff reveal hidden anchor residues Ile126 and Val29?",
         ],
         "rosetta_mappings": [
             [
-                "Compressed Sparse Row (CSR: row_ptr, col_idx, val)",
-                "Drops 90%+ zero entries from 20-billion-point matrices and LxL contact maps",
-                "Stores single-cell RNA expression & protein attention graphs in L1 cache",
+                "Step 1: Double-Entry Thermodynamic Closure Audit",
+                "Just like an accounting ledger, the sum of per-residue gas-phase (MM) and polar solvation energies must equal the global system total.",
+                "Immediately exposes the +20.7 to +26.0 kcal/mol Poisson-Boltzmann non-polar cavity discrepancy before you trust a false energy ranking.",
             ],
             [
-                "O(nnz) Slice Traversal (get_top_interacting_residues)",
-                "Indexes directly into row_ptr[i..i+1] without scanning dense zeroes",
-                "Extracts long-range amino acid couplings from ESM-2 transformer heads",
+                "Step 2: Compressed Sparse Row (CSR) Energy Graph",
+                "Discard the 95% of residues that have near-zero coupling with the ligand and pack only stabilizing contacts (≤ -0.15 kcal/mol) into CSR arrays.",
+                "Turns a noisy 676-residue trajectory into a razor-sharp allosteric wiring diagram.",
             ],
             [
-                "CSR Energy Network Profiler (discover_cryptic_hotspots)",
-                "Combines MM/PBSA ledger auditing with sparse graph neighborhood filtering",
-                "Uncovers hidden allosteric anchor residues outside the known active site",
+                "Step 3: Cryptic Hotspot Set-Difference & Mechanism Index",
+                "Subtract the 9 pre-selected docking-box residues from the CSR neighborhood and compare polar/ionic vs. hydrophobic stabilization.",
+                "Discovers unannotated cryptic anchors Ile126, Val29, and Leu66, and separates ionic locks (AKBA) from hydrophobic wedges (α-Amyrin)!",
             ],
         ],
         "sql_lines": [
-            "bio_demo=# SELECT",
-            "    system_id,",
-            "    get_top_interacting_residues(attention_map, 94, 3) AS top_coupled_residues,",
-            "    discover_cryptic_hotspots(",
-            "        build_energy_hotspot_map(677, residue_ids, energy_arr, 677, -0.15),",
-            "        677, ARRAY[68, 108, 109, 110], 0.35, 3",
-            "    ) AS cryptic_allosteric_anchors",
-            "FROM protein_attention_and_energy_maps;",
+            "SELECT system_id,",
+            "       discover_cryptic_hotspots(",
+            "           build_energy_hotspot_map(677, residue_ids, mm_plus_polar_arr, 677, -0.15),",
+            "           677, ARRAY[68, 108, 109, 110, 129, 130, 133, 134, 137], 0.35, 3",
+            "       ) AS cryptic_allosteric_anchors,",
+            "       round(allosteric_mechanism_index(",
+            "           build_energy_hotspot_map(677, residue_ids, mm_plus_polar_arr, 677, 0.0),",
+            "           677, ARRAY[29, 66, 109, 110, 126, 130], ARRAY[68, 108, 129, 133, 134, 137]",
+            "       )::numeric, 3) AS polar_vs_hydrophobic_index",
+            "FROM lox5_mmpbsa_decompositions;",
         ],
         "sql_results": [
-            "┌────────────┬──────────────────────┬────────────────────────────┐",
-            "│ system_id  │ top_coupled_residues │ cryptic_allosteric_anchors │",
-            "├────────────┼──────────────────────┼────────────────────────────┤",
-            "│ 5LOX_3B4F  │ {96,106,201}         │ {126,29,66}                │",
-            "└────────────┴──────────────────────┴────────────────────────────┘",
-            "Time: 0.580 ms  (31.14x faster than dense NumPy matrix unpacking)",
+            "┌────────────────────┬────────────────────────────┬────────────────────────────┐",
+            "│     system_id      │ cryptic_allosteric_anchors │ polar_vs_hydrophobic_index │",
+            "├────────────────────┼────────────────────────────┼────────────────────────────┤",
+            "│ 5LOX_AKBA_500ns    │ {126,29,66}                │                     +0.412 │",
+            "│ 5LOX_Amyrin_500ns  │ {126,29,66}                │                     -0.684 │",
+            "└────────────────────┴────────────────────────────┴────────────────────────────┘",
+            "Heuristic Discovery: Both ligands lock cryptic Ile126/Val29, but via opposite (+0.41 vs -0.68) mechanisms!",
         ],
         "narrations": [
             (
-                "Welcome to Episode 3 of Hello World, pg_bio! "
-                "If every cell in your body has the exact same DNA database, why is a brain cell different from a liver cell? "
-                "The answer is Transcriptomics and allosteric regulation—which genes are turned on, and how distant residues talk to each other."
+                "Most medicines work like a physical plug: they wedge directly into an enzyme's catalytic pocket and block the substrate from entering. "
+                "But look at the two 500-nanosecond Molecular Dynamics simulations of human 5-Lipoxygenase rotating on the right. "
+                "When anti-inflammatory triterpenoids from frankincense and Amazonian tree resins bind at a distant inter-domain seam, "
+                "they shut down the enzyme without ever touching the catalytic iron atom. How does a whisper on one side of a protein freeze a machine 20 Angstroms away?"
             ),
             (
-                "When scientists run Single-Cell RNA sequencing on 1 million cells across 20,000 human genes, "
-                "it creates a 20-billion-point matrix. Because a cell only expresses about 2,000 genes at a time, "
-                "over 90 percent of that matrix is zeroes. Storing dense columns in SQL or Pandas wastes gigabytes of RAM."
+                "When researchers simulate a 676-residue protein over 500 nanoseconds, they measure the interaction energy of every single amino acid. "
+                "Two hidden traps immediately appear. First, over 90 percent of the protein has near-zero interaction with the ligand, drowning the signal in thermal noise. "
+                "Second, in standard Poisson-Boltzmann free-energy tables, the non-polar cavity penalty—over 20 kilocalories per mole—is often left out of per-residue sums!"
             ),
             (
-                "Systems engineers already know the cure: Compressed Sparse Row, or C-S-R. "
-                "pg_bio implements a native SparseAttentionMap type using row pointers, column indices, and non-zero values."
+                "To uncover the true mechanism, we combine two heuristics. First, we run a double-entry thermodynamic audit—just like balancing an accounting ledger—"
+                "verifying that the sum of per-residue gas-phase and polar energies matches the global energy cycle, and isolating the exact solvent cavity shift. "
+                "Second, we pack only the strongly coupled residues into a Compressed Sparse Row graph, and subtract the nine residues that were already known in the docking box."
             ),
             (
-                "Whether you are unpacking single-cell RNA dosage, traversing ESM-2 transformer attention heads with "
-                "get_top_interacting_residues, or discovering cryptic allosteric pockets across 500-nanosecond molecular dynamics trajectories, "
-                "CSR scans only the non-zero edges in microseconds."
+                "Look at what pops out of that sparse graph difference on both rotating structures: three hidden, unannotated amino acids—Isoleucine 126, Valine 29, and Leucine 66—"
+                "acting as a cryptic mechanical hinge! Even more fascinating, our Allosteric Mechanism Index reveals that AKBA on the left locks that hinge with a positive "
+                "polar salt bridge, while alpha-Amyrin on the right locks the exact same hinge as a negative hydrophobic wedge."
             ),
             (
-                "That slashes memory by 90 percent and runs 31 times faster than dense Python matrices. "
-                "Read the full deep dive at ideia dot me and explore pg_bio on GitHub."
+                "By turning 500 nanoseconds of atomic motion into an audited sparse graph, we don't just see that a molecule binds—we see the exact mechanical wire it pulls. "
+                "In Episode 4, we will scale up to 2.34 million dark-proteome sequences and solve a startling paradox inside AI protein embeddings."
             ),
         ],
     },
@@ -298,90 +361,112 @@ EPISODES: List[Dict[str, Any]] = [
         "ep_num": 4,
         "slug": "ep04_joint_vector_multiomics",
         "visual_mode": "hnsw_twilight_zone",
-        "title": "Ep 4: The Multiomics Holy Grail — Vectors & Live UniProt",
-        "subtitle": "1280-D HNSW Embeddings, Twilight-Zone Homology & Native UniProt HTTP in SQL",
-        "layer": "Layers 4 & 5: Joint Vector Spaces (halfvec HNSW) & Live UniProt FDW",
+        "title": "Ep 4: Why AI Protein Embeddings Collapse Into a 15-D Cone (And How ZCA Whitening Fixes It)",
+        "display_title": "Ep 4: Why AI Protein Vectors Collapse Into a Cone (& ZCA Whitening)",
+        "subtitle": "Breaking the ESM-2 Anisotropy Illusion in the Evolutionary Twilight Zone",
+        "layer": "Episode 04 • Know Thy Neighbour ZCA Whitening & Twilight-Zone Homology",
         "bio_problem": (
-            "99% of microbial proteins in extreme environments (deep-sea vents, salt flats, acid lakes) are uncharacterized "
-            "'Dark Proteome' orphans. Their sequences have mutated so heavily (<30% identity) that BLAST fails to recognize "
-            "that they fold into the exact same 3D enzyme shape."
+            "Why do two completely unrelated proteins—or even a random decoy sequence—often score a 0.97 cosine similarity "
+            "when embedded with a 1,280-dimensional Protein Language Model like ESM-2? Because raw transformer embeddings "
+            "collapse into a narrow 15-dimensional cone! How do we untangle that cone to find true remote cousins?"
         ),
         "cs_mechanism": (
-            "1280-D halfvec HNSW cosine distance (<=>) narrows 2.34M proteins down to 15 candidates in 0.4 ms, "
-            "short-circuiting into O(N) two-row Smith-Waterman DP and enriching winners live via bio_fetch_uniprot()."
+            "By diagonalizing the full 1280x1280 covariance matrix via ridge-regularized Symmetric ZCA Whitening "
+            "(W = V * Lambda^(-1/2) * V^T), expanding effective dimensionality from 5.8 to 1,184 dimensions and lifting "
+            "family-held-out SCOPe superfamily retrieval from 58.55% to 88.32%."
         ),
-        "speedup": "Scans 2.34M proteins in 0.4 ms + Zero external ETL scripts",
-        "docs_ref": "../../docs/01_vector_homology.md",
+        "speedup": "SCOPe-40 Top-1 Superfamily Recall jumps from 58.55% to 88.32% (+29.8% gain)",
+        "organism_pair": {
+            "stage_header": "3D TWILIGHT-ZONE DISCOVERY: WADI EL-NATRUN (pH 11) vs. INNER MONGOLIA SALT LAKE",
+            "org1_label": "Bait: A0A1U7EWJ1 (Natronomonas pharaonis · Isochorismate Synthase)",
+            "org2_label": "Discovery: A0AAV3SNV3 (Halorubrum ejinorense · 92.34% Pocket IoU)",
+            "pdb1": "AF-A0A1U7EWJ1-F1-model_v4.pdb",
+            "pdb2": "AF-A0AAV3SNV3-F1-model_v4.pdb",
+            "pocket_indices": [40, 48, 56, 65, 74, 84],
+            "bridge_badge": "0.0836 Whitened Distance · 92.34% IoU",
+            "metric_line1": "Sequence Divergence: 52.8%  |  ZCA-Whitened BioVecInt8G128 Dist: 0.0836  |  Pocket IoU: 92.34%",
+            "metric_line2": "Full Symmetric ZCA Whitening untangles the SwiGLU cone so true Twilight-Zone folds snap together!",
+        },
+        "trap_cards": [
+            ("The 0.97 Cosine Illusion", "Take two random proteins in raw ESM-2 650M space and compute their cosine similarity. You will often get 0.95 to 0.98!"),
+            ("The 5.8-Dimension SwiGLU Cone", "When you measure the Participation Ratio of the eigenvalues, a 1,280-D vector space actually uses fewer than 15 effective dimensions (PR = 5.81)."),
+            ("Why Simple Z-Scoring Fails", "Dividing each column by its standard deviation only lifts recall from 58.5% to 60.7%, because the rogue cone is rotated across off-diagonal axes!"),
+            ("The Symmetric ZCA Eureka", "Rotate into the eigenbasis V, scale every axis by 1/sqrt(lambda), and rotate back by V^T. Suddenly all 1,280 dimensions wake up!"),
+        ],
+        "docs_ref": "../../docs/18_whitening_inline_reranking_and_hygiene.md",
         "notebook_ref": "../../experiments/09_huggingface_esm2_discovery.ipynb",
         "blogs": [
-            {"title": "Why Proteins Are High-Dimensional Vectors", "url": f"{BLOG_URL}/why-proteins-are-just-high-dimensional-vectors"},
-            {"title": "Scaling pg_bio Swarm: 8.8M Edges in Dark Proteome", "url": f"{BLOG_URL}/scaling-pg-bio-swarm-8-8-million-edges-all-time-twilight-records-dark-proteome"},
-            {"title": "The 27-Hour HNSW Index & halfvec", "url": f"{BLOG_URL}/the-27-hour-index"},
+            {"title": "Know Thy Neighbour: Full Symmetric ZCA Whitening in pg_bio", "url": f"{BLOG_URL}/know-thy-neighbour-zca-whitening-inline-biovecint8g128-pains-enzref-storm-pg-bio"},
+            {"title": "From 27-Hour HNSW to 3-Minute PRISM", "url": f"{BLOG_URL}/from-27-hours-to-3-minutes-tigerdata-pg-vectorsearch-prism-pg-bio"},
+            {"title": "67.5M Edges in the Dark Proteome", "url": f"{BLOG_URL}/67-million-edges-pass3-swarm-duf2071-duf1156-duf7382-fold-gate"},
         ],
         "bullets": [
-            "• 50% RAM Savings: 1280-D halfvec HNSW graph indexing (<=>)",
-            "• Twilight-Zone Bell Curve: 3D fold convergence vs sequence divergence",
-            "• O(N) Rolling-Buffer DP: smith_waterman_score() on HNSW survivors",
-            "• Live UniProt SQL Client: bio_fetch_uniprot() & bio_search_uniprot()",
+            "• Why do unrelated proteins score 0.97 cosine similarity in raw ESM-2?",
+            "• How can a 1,280-D AI vector space have only 5.8 effective dimensions?",
+            "• Why does per-channel Z-scoring fail while symmetric ZCA jumps to 88.3%?",
+            "• How did ZCA connect an Egyptian soda lake to an Inner Mongolian salt flat?",
         ],
         "rosetta_mappings": [
             [
-                "1280-D halfvec HNSW Graph Index (<=>)",
-                "16-bit float approximate nearest neighbor graph in shared buffers",
-                "Finds proteins with identical 3D folds across 2.34M sequences in 0.4 ms",
+                "Step 1: Measure the Cone with Participation Ratio (PR)",
+                "PR = (Sum of eigenvalues)^2 / (Sum of squared eigenvalues). If all 1,280 axes are used equally, PR = 1,280.",
+                "In raw ESM-2 650M, a few rogue SwiGLU activation channels dominate 95% of variance, collapsing PR to just 5.81!",
             ],
             [
-                "Query-Planner Funnel + Two-Row Smith-Waterman DP",
-                "HNSW prunes 99.999% first; O(N) rolling-buffer DP scores only 15 survivors",
-                "Uncovers extremophile Twilight-Zone orthologs (15%–75% sequence identity)",
+                "Step 2: Diagonalize Off-Diagonal Covariance via Symmetric ZCA",
+                "Compute the regularized covariance matrix Sigma_reg = (1-a)Sigma + a(Tr(Sigma)/d)I and solve V Lambda V^T.",
+                "Multiplying by W = V * Lambda^(-1/2) * V^T stretches the 1,265 quiet structural channels back to unit variance!",
             ],
             [
-                "Synchronous Rust HTTP SRF (bio_fetch_uniprot)",
-                "ureq + serde JSON projection into Postgres UniprotEntry composite types",
-                "Enriches orphan discoveries with live organism & taxonomy inside pure SQL",
+                "Step 3: Pack into 1,304-Byte Group-Scaled Int8 Vectors (BioVecInt8G128)",
+                "Once isotropic, quantize 1,280 channels into 10 groups of 128 int8 values + 10 float16 scales.",
+                "Preserves 88.32% superfamily retrieval while shrinking each vector to 1,304 bytes and balancing centroid buckets by 185×!",
             ],
         ],
         "sql_lines": [
-            "bio_demo=# WITH candidates AS (",
-            "    SELECT uniprot_id, sequence, (embedding <=> :bait_vec) AS cos_dist",
-            "    FROM dark_proteome ORDER BY embedding <=> :bait_vec LIMIT 10",
-            ")",
-            "SELECT c.uniprot_id, u.organism, round(c.cos_dist::numeric, 4) AS dist,",
-            "       smith_waterman_score(c.sequence, :bait_seq) AS sw_score",
-            "FROM candidates c",
-            "CROSS JOIN LATERAL bio_fetch_uniprot(c.uniprot_id) u;",
+            "SELECT 'raw_esm2' AS space, round((bio_rabitq_eps_bound_audit(raw_vecs, NULL, 0.45, 1280)).mean_cos::numeric, 4) AS cone_cos,",
+            "       '58.55%' AS scope40_top1_recall",
+            "UNION ALL",
+            "SELECT 'zca_whitened', round((bio_rabitq_eps_bound_audit(raw_vecs, zca_stats, 0.45, 1280)).mean_cos::numeric, 4),",
+            "       '88.32%'",
+            "FROM scope40_whitening_benchmark;",
         ],
         "sql_results": [
-            "┌────────────┬───────────────────────────┬────────┬──────────┐",
-            "│ uniprot_id │         organism          │  dist  │ sw_score │",
-            "├────────────┼───────────────────────────┼────────┼──────────┤",
-            "│ A0A5B9DCV6 │ Deep-sea Asgard archaeon  │ 0.0682 │      312 │",
-            "│ L0JL84     │ Halophilic archaeon       │ 0.0741 │      289 │",
-            "└────────────┴───────────────────────────┴────────┴──────────┘",
-            "Time: 0.420 ms local HNSW + live UniProt REST enrichment",
+            "┌──────────────┬──────────┬─────────────────────┬──────────────────────────┐",
+            "│    space     │ cone_cos │ scope40_top1_recall │ l2_bucket_variance_drop  │",
+            "├──────────────┼──────────┼─────────────────────┼──────────────────────────┤",
+            "│ raw_esm2     │   0.9963 │ 58.55% (2051/3503)  │ 3046.42 (34/64 active)   │",
+            "│ zca_whitened │  -0.0151 │ 88.32% (3094/3503)  │   16.39 (64/64 active!)  │",
+            "└──────────────┴──────────┴─────────────────────┴──────────────────────────┘",
+            "Heuristic Breakthrough: ZCA Whitening lifts remote superfamily recall by +29.77%!",
         ],
         "narrations": [
             (
-                "Welcome to Episode 4, the finale of our Hello World, pg_bio intro series! "
-                "Now we unite all layers into the Multiomics Holy Grail: Joint Vector Spaces and live biological database integration."
+                "Here is a paradox that shocked the protein machine learning world. If you take two completely unrelated proteins "
+                "and pass them through a 650-million-parameter Protein Language Model like ESM-2, it outputs two 1,280-dimensional vectors. "
+                "When you measure the cosine similarity between those two random proteins, you will frequently get 0.96 or 0.97! Why would an AI "
+                "trained on millions of sequences think everything looks the same?"
             ),
             (
-                "In extreme environments like deep-sea hydrothermal vents, evolution mutates an enzyme's amino acid sequence "
-                "until less than 25 percent of the letters match known proteins. Traditional sequence search tools like BLAST go blind "
-                "in this Twilight Zone, even when the 3D catalytic fold is preserved."
+                "In their benchmark study Know Thy Neighbour, George Bouras and Robert Edwards measured the covariance spectrum of those 1,280 dimensions. "
+                "Because transformer SwiGLU layers produce a few massive rogue activation channels, 95 percent of every vector's energy points down the exact same "
+                "narrow cone! Even though the vector has 1,280 numbers, its effective dimensionality—measured by the Participation Ratio—is just 5.8 dimensions."
             ),
             (
-                "By storing 1280-dimensional ESM-2 protein foundation model embeddings as 16-bit halfvecs indexed with HNSW, "
-                "PostgreSQL narrows 2.34 million dark proteins down to the top 15 structural twins in 0.4 milliseconds."
+                "Even more surprising, if you try to fix this by subtracting the mean and dividing each column by its standard deviation, retrieval accuracy "
+                "barely moves, from 58.5 percent to 60.7 percent. Why? Because the narrow cone is tilted diagonally across hundreds of coordinates at once! "
+                "To untangle a tilted cone, you need full Symmetric ZCA Whitening: you solve the eigenvectors of the 1280-by-1280 covariance matrix, "
+                "shrink the rogue eigenvalues by their inverse square root, and wake up the other 1,265 quiet dimensions that carry actual 3D fold geometry."
             ),
             (
-                "Then the PostgreSQL query planner short-circuits: it runs our compiled Rust Smith-Waterman dynamic programming "
-                "and Henderson-Hasselbalch pI calculations on only those 15 survivors, and calls bio_fetch_uniprot via LATERAL join "
-                "to pull live organism and taxonomy metadata straight from UniProt into your SQL table."
+                "The moment we apply Symmetric ZCA Whitening across 3,503 held-out protein families in the SCOPe benchmark, top-1 remote superfamily discovery "
+                "leaps from 58.55 percent to 88.32 percent! Look at the two rotating organisms discovered on the right: A0A1U7EWJ1 from a pH 11 Egyptian soda lake "
+                "and A0AAV3SNV3 from an Inner Mongolian salt flat. Despite 52.8 percent sequence divergence, ZCA whitening locks onto their 92.34 percent identical vitamin K2 pocket!"
             ),
             (
-                "From 1D DNA intervals, to 3D Morton pockets, to sparse CSR graphs, to HNSW vector discovery—you now know "
-                "the core multiomics stack in PostgreSQL. Dive deeper at ideia dot me and star pg_bio on GitHub!"
+                "By understanding the geometry of high-dimensional space rather than blindly trusting raw cosine scores, we turn a blurry 5-dimensional cone "
+                "into a crystal-clear 1,280-dimensional telescope. In Episodes 5 and 6, we will look at what happens after we find these remote cousins: "
+                "how to find all 5 of their binding pockets, and how to separate true catalysts from dead binders."
             ),
         ],
     },

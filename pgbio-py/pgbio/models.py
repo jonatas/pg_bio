@@ -245,6 +245,42 @@ class PoseBustersAudit:
     ligand_heavy_atoms: int
 
 
+@dataclass
+class BioEnzRefResult:
+    forward_flux_score: float
+    backpressure_risk: float
+    role_contrast_norm: float
+    mean_catalytic_response: float
+    cosine_alignment: float
+    norm_ratio_react_over_prod: float
+
+
+@dataclass
+class BioIpsaeMinipaeAudit:
+    chain_a_id: str
+    chain_b_id: str
+    chain_a_len: int
+    chain_b_len: int
+    active_contacts_ab: int
+    active_contacts_ba: int
+    d0_a_to_b: float
+    d0_b_to_a: float
+    ipsae_a_to_b: float
+    ipsae_b_to_a: float
+    ipsae_min: float
+    ipsae_max: float
+    iptm_global_diluted: float
+    idr_dilution_rescue_delta: float
+    minipae_5x5_a: float
+    best_window_a_start: int
+    best_window_b_start: int
+    passes_cofold_gate: bool
+    gate_verdict: str
+    packed_csr_bytes: int
+
+
+
+
 
 
 
