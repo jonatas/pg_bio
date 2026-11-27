@@ -165,13 +165,38 @@ SEED_ATTEMPTS = [
         "pr_url": "https://github.com/jonatas/pg_bio/pull/19",
         "blog_post_slug": "pocketvina-posebusters-enzref-pslim-tethers-pg-bio",
         "notes": "Merged in PR #19; tying together with PR #16 in unified blog post and video backlog."
+    },
+    {
+        "attempt_code": "ATT-2026-11-26-IPSAE-MINIPAE-GATE",
+        "run_date": "2026-11-27",
+        "category": "Structural_Bio",
+        "paper_title": "Directional ipSAE (Dunbrack 2025/2026) & 5x5 MiniPAE (Veinstein 2026) Co-Folding Confidence Gate for Disordered SLiM Tethers",
+        "paper_ref": "bioRxiv 10.1101/2025.02.10.637595 | Brief. Bioinform. 10.1093/bib/bbaf501 | bioRxiv 10.64898/2026.01.29.702534 | PR #20",
+        "pg_strategy": "Implement bio_ipsae_minipae_audit, bio_ipsae_minipae_from_pae_flat, bio_pack_sparse_pae_csr, and bio_peek_pae_csr_header in Rust over inline zero-TOAST 'PGPA' quantized CSR PAE matrices (< 2,000 B TOAST threshold) with Dunbrack's contact-only d0(N_i) length scale and Veinstein's 5x5 contiguous diagonal MiniPAE window.",
+        "worktree_path": ".worktrees/ipsae-minipae-gate",
+        "branch_name": "feat/ipsae-minipae-cofolding-gate",
+        "status": "Published",
+        "theory_test_name": "test_layer21_ipsae_minipae_cofolding_gate_and_idr_rescue",
+        "benchmark_summary": {
+            "slim_80aa_global_iptm": 0.1250,
+            "slim_80aa_ipsae_min": 0.8315,
+            "idr_rescue_delta": "+0.7065",
+            "slim_80aa_minipae_5x5_a": 0.4750,
+            "decoy_23aa_minipae_5x5_a": 25.0800,
+            "csr_storage_compression": "194.13x smaller (211,600 B dense -> 1,090 B inline PGPA CSR, 0 B TOAST)",
+            "throughput_complexes_per_sec": "26,316 complexes/sec/core (0.038 ms/complex, 46.37x faster than Python/NumPy)"
+        },
+        "pr_number": 20,
+        "pr_url": "https://github.com/jonatas/pg_bio/pull/20",
+        "blog_post_slug": "ipsae-minipae-cofolding-gate-disordered-slim-tethers-pg-bio",
+        "notes": "Merged in PR #20, published blog post on ideia.me, and rendered Episode 07 Veritasium-style video (ep05_ipsae_minipae_cofolding_gate)."
     }
 ]
 
 SEED_VIDEOS = [
     {
         "episode_slug": "ep03_pocketvina_posebusters_21_gate",
-        "title": "Multi-Pocket SAS Concavity & 21-Check PoseBusters Gate with Dual-Ledger Provenance",
+        "title": "Ep 5: The Salt Mirage & The Chameleon Enzyme (Multi-Pocket SAS & 21-Check PoseBusters)",
         "layer_name": "Layer 19: Multi-Pocket Conditioning & PoseBusters Physical Gate",
         "attempt_code": "ATT-2026-11-24-POCKETVINA-POSEBUSTERS",
         "pr_number": 16,
@@ -183,7 +208,7 @@ SEED_VIDEOS = [
     },
     {
         "episode_slug": "ep04_enzref_kinetics_and_pslim_tethers",
-        "title": "SIMD EnzRef Catalytic Role-Contrast & ZCA-Whitened Disordered Microprotein SLiM Tethers",
+        "title": "Ep 6: Dead Binders vs. Living Catalysts (EnzRef Role-Contrast & pSLiM Tethers)",
         "layer_name": "Layer 20: EnzRef Reaction Role-Contrast & Disordered SLiM Metabolon Tethers",
         "attempt_code": "ATT-2026-11-26-ENZREF-PSLIM",
         "pr_number": 19,
@@ -191,6 +216,18 @@ SEED_VIDEOS = [
         "bio_problem": "Standard vector similarity cannot distinguish a dead non-catalytic binder from a high-kcat forward enzyme or detect when a synthetic chimera linker slices through a buried hydrophobic core.",
         "cs_mechanism": "Reference-centered SIMD role-contrast (d_react = r - e, c_fwd = p - r) over inline 1,304-byte BioVecInt8G128 varlenas with exact antisymmetry and backpressure risk, paired with 16-D ZCA-whitened unit-L2 SLiM window pooling and GRAVY/hydrophobic-run junction sanity checks.",
         "speedup_metric": "2.09M EnzRef 1280-D triplets/sec/core & 617.8k ZCA-whitened SLiM windows/sec/core",
+        "status": "Published_IdeiaMe"
+    },
+    {
+        "episode_slug": "ep05_ipsae_minipae_cofolding_gate",
+        "title": "Ep 7: Why AlphaFold's ipTM Rejects Real Microprotein Tethers (ipSAE & 5x5 MiniPAE)",
+        "layer_name": "Layer 21: Directional ipSAE & 5x5 MiniPAE Co-Folding Confidence Gate",
+        "attempt_code": "ATT-2026-11-26-IPSAE-MINIPAE-GATE",
+        "pr_number": 20,
+        "blog_post_slug": "ipsae-minipae-cofolding-gate-disordered-slim-tethers-pg-bio",
+        "bio_problem": "Whole-chain ipTM averages error over flexible disordered linker tails (crushing an 0.45 A 10-aa SLiM inside an 80-aa microprotein to 0.1250), while single-contact random coils fool simple distance checks.",
+        "cs_mechanism": "Restrict Dunbrack's d0(N_i) length scale strictly to contacts with PAE < 10 A (rescuing ipSAE to 0.8315), require a contiguous 5x5 diagonal MiniPAE window (0.475 A vs 25.08 A decoy), and store sparse contacts in a 1,090-byte zero-TOAST PGPA CSR container with 16B O(1) header peeking.",
+        "speedup_metric": "+0.7065 IDR rescue (ipTM 0.1250 -> ipSAE 0.8315) + 194.13x smaller inline CSR (26,316 complexes/sec/core)",
         "status": "Published_IdeiaMe"
     }
 ]

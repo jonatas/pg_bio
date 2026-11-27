@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "last_synced_at": "2026-11-27T12:08:58.642922+00:00",
+  "last_synced_at": "2026-11-27T12:38:12.487992+00:00",
   "database_uri": "postgresql://localhost:28818/bio_demo",
   "research_attempts": [
     {
@@ -133,19 +133,24 @@
       "pg_strategy": "Contact-restricted d0(N_i) directional ipSAE (ipsae_a_to_b, ipsae_b_to_a, ipsae_min) and 5x5 sliding-window MiniPAE in compiled Rust over inline PGPA CSR PAE/contact matrices (<2,000 B, zero TOAST) to rescue disordered SLiM metabolon tethers from global ipTM IDR dilution.",
       "worktree_path": ".worktrees/ipsae-minipae-gate",
       "branch_name": "feat/ipsae-minipae-cofolding-gate",
-      "status": "Worktree_Active",
+      "status": "Published",
       "theory_test_name": "test_layer21_ipsae_minipae_cofolding_gate_and_idr_rescue",
       "benchmark_summary": {
-        "target_throughput": ">25,000 complexes/sec",
-        "idr_rescue_invariant": "ipsae_min >= 0.65 AND minipae <= 3.5A on 70-aa IDR linkers"
+        "idr_rescue_delta": "+0.7065",
+        "slim_80aa_ipsae_min": 0.8315,
+        "slim_80aa_global_iptm": 0.125,
+        "csr_storage_compression": "194.13x smaller (211,600 B dense -> 1,090 B inline PGPA CSR, 0 B TOAST)",
+        "slim_80aa_minipae_5x5_a": 0.475,
+        "decoy_23aa_minipae_5x5_a": 25.08,
+        "throughput_complexes_per_sec": "26,316 complexes/sec/core (0.038 ms/complex, 46.37x faster than Python/NumPy)"
       },
-      "pr_number": null,
-      "pr_url": null,
-      "blog_post_slug": null,
-      "video_backlog_id": null,
-      "notes": "Proposed by Daily Bioinformatics Literature Sub-Agent.",
+      "pr_number": 20,
+      "pr_url": "https://github.com/jonatas/pg_bio/pull/20",
+      "blog_post_slug": "ipsae-minipae-cofolding-gate-disordered-slim-tethers-pg-bio",
+      "video_backlog_id": 29,
+      "notes": "Merged in PR #20, published blog post on ideia.me, and rendered Episode 07 Veritasium-style video (ep05_ipsae_minipae_cofolding_gate).",
       "created_at": "2026-11-26 18:25:41.143486-03",
-      "updated_at": "2026-11-27 09:06:08.642096-03"
+      "updated_at": "2026-11-27 09:38:12.46352-03"
     },
     {
       "attempt_id": 17,
@@ -218,7 +223,7 @@
       "video_backlog_id": 2,
       "notes": "Merged in PR #19; tying together with PR #16 in unified blog post and video backlog.",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 09:08:58.636676-03"
+      "updated_at": "2026-11-27 09:38:12.46352-03"
     },
     {
       "attempt_id": 4,
@@ -244,7 +249,7 @@
       "video_backlog_id": 1,
       "notes": "Merged in PR #16; tying together with PR #19 in unified blog post and video backlog.",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 09:08:58.636676-03"
+      "updated_at": "2026-11-27 09:38:12.46352-03"
     },
     {
       "attempt_id": 3,
@@ -269,7 +274,7 @@
       "video_backlog_id": null,
       "notes": "Merged in PR #15 and published on ideia.me.",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 09:08:58.636676-03"
+      "updated_at": "2026-11-27 09:38:12.46352-03"
     },
     {
       "attempt_id": 2,
@@ -293,7 +298,7 @@
       "video_backlog_id": null,
       "notes": "Merged in PR #14 and published on ideia.me.",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 09:08:58.636676-03"
+      "updated_at": "2026-11-27 09:38:12.46352-03"
     },
     {
       "attempt_id": 1,
@@ -318,7 +323,7 @@
       "video_backlog_id": null,
       "notes": "Merged in PR #13 and published on ideia.me.",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 09:08:58.636676-03"
+      "updated_at": "2026-11-27 09:38:12.46352-03"
     }
   ],
   "video_backlog": [
@@ -335,7 +340,7 @@
       "speedup_metric": "20.96x faster than Python/RDKit pull (1.65 ms/complex across 120 complexes)",
       "status": "Published_IdeiaMe",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 09:08:58.636676-03"
+      "updated_at": "2026-11-27 09:38:12.46352-03"
     },
     {
       "video_id": 2,
@@ -350,7 +355,22 @@
       "speedup_metric": "2.09M EnzRef 1280-D triplets/sec/core & 617.8k ZCA-whitened SLiM windows/sec/core",
       "status": "Published_IdeiaMe",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 09:08:58.636676-03"
+      "updated_at": "2026-11-27 09:38:12.46352-03"
+    },
+    {
+      "video_id": 29,
+      "episode_slug": "ep05_ipsae_minipae_cofolding_gate",
+      "title": "Ep 7: Why AlphaFold's ipTM Rejects Real Microprotein Tethers (ipSAE & 5x5 MiniPAE)",
+      "layer_name": "Layer 21: Directional ipSAE & 5x5 MiniPAE Co-Folding Confidence Gate",
+      "attempt_code": "ATT-2026-11-26-IPSAE-MINIPAE-GATE",
+      "pr_number": 20,
+      "blog_post_slug": "ipsae-minipae-cofolding-gate-disordered-slim-tethers-pg-bio",
+      "bio_problem": "Whole-chain ipTM averages error over flexible disordered linker tails (crushing an 0.45 A 10-aa SLiM inside an 80-aa microprotein to 0.1250), while single-contact random coils fool simple distance checks.",
+      "cs_mechanism": "Restrict Dunbrack's d0(N_i) length scale strictly to contacts with PAE < 10 A (rescuing ipSAE to 0.8315), require a contiguous 5x5 diagonal MiniPAE window (0.475 A vs 25.08 A decoy), and store sparse contacts in a 1,090-byte zero-TOAST PGPA CSR container with 16B O(1) header peeking.",
+      "speedup_metric": "+0.7065 IDR rescue (ipTM 0.1250 -> ipSAE 0.8315) + 194.13x smaller inline CSR (26,316 complexes/sec/core)",
+      "status": "Published_IdeiaMe",
+      "created_at": "2026-11-27 09:38:12.46352-03",
+      "updated_at": "2026-11-27 09:38:12.46352-03"
     }
   ]
 }
