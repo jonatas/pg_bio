@@ -1,0 +1,21 @@
+{
+  "benchmark": "Layer 21 Directional ipSAE & 5x5 MiniPAE Co-Folding Confidence Gate",
+  "complex_count": 200,
+  "chain_a_len": 150,
+  "chain_b_len": 80,
+  "slim_window_len": 10,
+  "idr_tail_len": 70,
+  "global_iptm_diluted": 0.1571,
+  "directional_ipsae_min": 0.8,
+  "idr_rescue_delta": 0.6429,
+  "minipae_5x5_angstroms": 0.475,
+  "dense_pae_bytes": 211600,
+  "inline_pgpa_csr_bytes": 1080,
+  "storage_compression_ratio": "195.93x (0 B TOAST)",
+  "python_numpy_total_ms": 8121.64,
+  "python_numpy_ms_per_complex": 40.608,
+  "pg_bio_rust_total_ms": 7.6,
+  "pg_bio_rust_ms_per_complex": 0.038,
+  "pg_bio_throughput_complexes_per_sec": 26316,
+  "speedup_vs_python": "1068.64x"
+}

@@ -18,6 +18,8 @@ from .models import (
     RangeFinderEvaluation,
     VectorIndexRecommendation,
     PoseBustersAudit,
+    BioEnzRefResult,
+    BioIpsaeMinipaeAudit,
 )
 
 class PgBioClient:
@@ -931,6 +933,209 @@ class PgBioClient:
                         "contact_residues": r[11],
                     })
         return results
+
+    def split_reaction_roles(self, rxn_smiles: str) -> dict:
+        """
+        Splits a reaction SMILES (`A.B>>C.D` or `A>agent>B`) into `(reactants_smiles, products_smiles)`,
+        automatically stripping intermediate reaction agents/solvents (`>agent>`).
+        """
+        query = "SELECT reactants_smiles, products_smiles FROM bio_split_reaction_roles(%s);"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (rxn_smiles,))
+                row = cur.fetchone()
+                if not row:
+                    return {"reactants_smiles": "", "products_smiles": ""}
+                return {"reactants_smiles": row[0], "products_smiles": row[1]}
+
+    def enzref_kinetics(
+        self,
+        enz_bg_vec: List[float],
+        reactant_vec: List[float],
+        product_vec: List[float],
+    ) -> BioEnzRefResult:
+        """
+        Evaluates Reference-Centered EnzRef Kinetic Role-Contrast (forward_flux_score, backpressure_risk,
+        role_contrast_norm, mean_catalytic_response, cosine_alignment, norm_ratio_react_over_prod) in SIMD.
+        """
+        query = "SELECT bio_enzref_kinetics(%s::real[], %s::real[], %s::real[])::text;"
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (enz_bg_vec, reactant_vec, product_vec))
+                row = cur.fetchone()
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return BioEnzRefResult(**data)
+
+    def enzref_kinetics_smiles(
+        self,
+        enz_bg_vec: List[float],
+        rxn_smiles: str,
+    ) -> dict:
+        """
+        Decomposes `rxn_smiles` (`A.B>>C.D` or `A>agent>B`), vectorizes reactant and product roles,
+        and evaluates EnzRef kinetic role-contrast in a single Rust call.
+        """
+        query = """
+            SELECT reactants_smiles, products_smiles, forward_flux_score,
+                   backpressure_risk, role_contrast_norm, mean_catalytic_response,
+                   cosine_alignment, norm_ratio_react_over_prod
+            FROM bio_enzref_kinetics_smiles(%s::real[], %s);
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (enz_bg_vec, rxn_smiles))
+                r = cur.fetchone()
+                if not r:
+                    return {}
+                return {
+                    "reactants_smiles": r[0],
+                    "products_smiles": r[1],
+                    "forward_flux_score": float(r[2]),
+                    "backpressure_risk": float(r[3]),
+                    "role_contrast_norm": float(r[4]),
+                    "mean_catalytic_response": float(r[5]),
+                    "cosine_alignment": float(r[6]),
+                    "norm_ratio_react_over_prod": float(r[7]),
+                }
+
+    def pslim_window_pool(
+        self,
+        seq: str,
+        window_len: int = 8,
+        stride: int = 2,
+        per_residue_vecs: Optional[bytes] = None,
+        disorder_or_loop_mask: Optional[str] = None,
+    ) -> List[dict]:
+        """
+        Extracts strided Short Linear Motif (SLiM) windows across a microprotein/sORF (`seq`),
+        applies in-memory corpus ZCA whitening + exact L2 unit normalization, and returns 16-D `vec16` motif vectors.
+        """
+        query = """
+            SELECT start_pos, end_pos, subseq, motif_vec, local_entropy
+            FROM bio_pslim_window_pool(%s, %s, %s, %s, %s);
+        """
+        results = []
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (per_residue_vecs, seq, window_len, stride, disorder_or_loop_mask))
+                for r in cur.fetchall():
+                    results.append({
+                        "start_pos": int(r[0]),
+                        "end_pos": int(r[1]),
+                        "subseq": r[2],
+                        "motif_vec": [float(x) for x in r[3]],
+                        "local_entropy": float(r[4]),
+                    })
+        return results
+
+    def match_dual_slim_tether(
+        self,
+        seq: str,
+        partner_a_vec: List[float],
+        partner_b_vec: List[float],
+        window_len: int = 8,
+        stride: int = 2,
+        min_linker: int = 4,
+        per_residue_vecs: Optional[bytes] = None,
+        disorder_or_loop_mask: Optional[str] = None,
+    ) -> Optional[dict]:
+        """
+        Evaluates whether a disordered microprotein (`length(seq) <= 110`) can serve as a non-overlapping
+        Double-Sided Tether / Metabolon Coupler between two partner surfaces with linker junction sanity verification.
+        """
+        query = """
+            SELECT start_a, end_a, subseq_a, sim_a, l2_centroid_a,
+                   start_b, end_b, subseq_b, sim_b, l2_centroid_b,
+                   linker_len, linker_subseq, linker_gravy,
+                   junction_sanity_pass, recommended_operon_mode, dual_tether_score
+            FROM bio_match_dual_slim_tether(%s, %s::real[], %s::real[], %s, %s, %s, %s, %s);
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (
+                        seq,
+                        partner_a_vec,
+                        partner_b_vec,
+                        window_len,
+                        stride,
+                        min_linker,
+                        per_residue_vecs,
+                        disorder_or_loop_mask,
+                    ),
+                )
+                r = cur.fetchone()
+                if not r:
+                    return None
+                return {
+                    "start_a": int(r[0]),
+                    "end_a": int(r[1]),
+                    "subseq_a": r[2],
+                    "sim_a": float(r[3]),
+                    "l2_centroid_a": int(r[4]),
+                    "start_b": int(r[5]),
+                    "end_b": int(r[6]),
+                    "subseq_b": r[7],
+                    "sim_b": float(r[8]),
+                    "l2_centroid_b": int(r[9]),
+                    "linker_len": int(r[10]),
+                    "linker_subseq": r[11],
+                    "linker_gravy": float(r[12]),
+                    "junction_sanity_pass": bool(r[13]),
+                    "recommended_operon_mode": r[14],
+                    "dual_tether_score": float(r[15]),
+                }
+
+    def ipsae_minipae_audit(
+        self,
+        pdb_text: str,
+        pae_csr_bytea: Optional[bytes] = None,
+        pae_cutoff_a: float = 10.0,
+        minipae_gate_a: float = 3.5,
+    ) -> BioIpsaeMinipaeAudit:
+        """
+        Executes Layer 21 Directional ipSAE (Dunbrack 2025/2026) and 5x5 Sliding-Window MiniPAE
+        (Veinstein et al. 2025) over a 2-chain PDB complex or packed PGPA CSR bytea, rescuing
+        disordered SLiM metabolon tethers from global ipTM IDR dilution.
+        """
+        query = """
+            SELECT chain_a_id, chain_b_id, chain_a_len, chain_b_len,
+                   active_contacts_ab, active_contacts_ba, d0_a_to_b, d0_b_to_a,
+                   ipsae_a_to_b, ipsae_b_to_a, ipsae_min, ipsae_max,
+                   iptm_global_diluted, idr_dilution_rescue_delta,
+                   minipae_5x5_a, best_window_a_start, best_window_b_start,
+                   passes_cofold_gate, gate_verdict, packed_csr_bytes
+            FROM bio_ipsae_minipae_audit(%s, %s, %s, %s);
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (pdb_text, pae_csr_bytea, pae_cutoff_a, minipae_gate_a))
+                r = cur.fetchone()
+                return BioIpsaeMinipaeAudit(
+                    chain_a_id=r[0],
+                    chain_b_id=r[1],
+                    chain_a_len=int(r[2]),
+                    chain_b_len=int(r[3]),
+                    active_contacts_ab=int(r[4]),
+                    active_contacts_ba=int(r[5]),
+                    d0_a_to_b=float(r[6]),
+                    d0_b_to_a=float(r[7]),
+                    ipsae_a_to_b=float(r[8]),
+                    ipsae_b_to_a=float(r[9]),
+                    ipsae_min=float(r[10]),
+                    ipsae_max=float(r[11]),
+                    iptm_global_diluted=float(r[12]),
+                    idr_dilution_rescue_delta=float(r[13]),
+                    minipae_5x5_a=float(r[14]),
+                    best_window_a_start=int(r[15]),
+                    best_window_b_start=int(r[16]),
+                    passes_cofold_gate=bool(r[17]),
+                    gate_verdict=r[18],
+                    packed_csr_bytes=int(r[19]),
+                )
+
+
 
 
 

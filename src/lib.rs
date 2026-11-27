@@ -13967,6 +13967,962 @@ pub fn bio_multipocket_posebusters_screen(
     pgrx::iter::TableIterator::new(final_rows.into_iter())
 }
 
+// =====================================================================
+// 22. LAYER 21: DIRECTIONAL ipSAE & MiniPAE CO-FOLDING CONFIDENCE GATE
+//     FOR PROTEIN COMPLEXES & DISORDERED SLiM METABOLON TETHERS
+//     (Dunbrack bioRxiv 2025/2026; Veinstein Brief. Bioinform. 2025)
+// =====================================================================
+
+/// Magic header for inline zero-TOAST `"PGPA"` quantized CSR inter-chain PAE containers (`< 2,000 B`).
+pub const PGPA_MAGIC: [u8; 4] = *b"PGPA";
+
+/// Computes Dunbrack's contact-restricted distance scale `d0(N_i)` (in Ångströms)
+/// where `N_i` is the number of inter-chain partner residues with `PAE_{i,j} < pae_cutoff`:
+///   `d0(N_i) = max(1.0, 1.24 * (max(N_i, 27) - 15)^(1/3) - 1.8)`
+/// Unlike standard AlphaFold `ipTM` (which plugs `L_A + L_B` into `d0` and averages over all residues,
+/// penalizing disordered tails and flexible linkers), `d0(N_i)` depends ONLY on the active contact count `N_i`.
+#[inline]
+pub fn pgbio_ipsae_d0_from_contacts(n_contacts: usize) -> f64 {
+    if n_contacts < 27 {
+        return 1.0;
+    }
+    let eff = (n_contacts as f64) - 15.0;
+    (1.24 * eff.cbrt() - 1.8).max(1.0)
+}
+
+/// Evaluates a single residue's directional `ipSAE_i` score over its active inter-chain PAE contacts (`pae_q8`,
+/// where each `u8` byte represents `pae_angstroms = (q as f32) * 0.0625`).
+#[inline]
+pub fn pgbio_simd_ipsae_row_q8(pae_q8_slice: &[u8], cutoff_q8: u8) -> (usize, f64) {
+    let mut active_q8: Vec<f32> = Vec::with_capacity(pae_q8_slice.len());
+    for &q in pae_q8_slice {
+        if q <= cutoff_q8 {
+            active_q8.push((q as f32) * 0.0625);
+        }
+    }
+    let n_i = active_q8.len();
+    if n_i == 0 {
+        return (0, 0.0);
+    }
+    let d0 = pgbio_ipsae_d0_from_contacts(n_i) as f32;
+    let d0_sq = d0 * d0;
+    let mut sum_ptm = 0.0f32;
+    // Unrolled 4-lane vectorizable loop for LLVM NEON / AVX2 auto-vectorization
+    let chunks = active_q8.chunks_exact(4);
+    let rem = chunks.remainder();
+    for ch in chunks {
+        let s0 = d0_sq / (d0_sq + ch[0] * ch[0]);
+        let s1 = d0_sq / (d0_sq + ch[1] * ch[1]);
+        let s2 = d0_sq / (d0_sq + ch[2] * ch[2]);
+        let s3 = d0_sq / (d0_sq + ch[3] * ch[3]);
+        sum_ptm += (s0 + s1) + (s2 + s3);
+    }
+    for &p in rem {
+        sum_ptm += d0_sq / (d0_sq + p * p);
+    }
+    (n_i, (sum_ptm as f64) / (n_i as f64))
+}
+
+/// Composite type for Layer 21 Directional `ipSAE` & $5 \times 5$ `MiniPAE` Co-Folding Confidence Gate
+/// (`bio_ipsae_minipae_audit`, `bio_ipsae_minipae_from_pae_flat`).
+#[derive(PostgresType, Serialize, Deserialize, Debug, Clone)]
+pub struct BioIpsaeMinipaeAudit {
+    pub chain_a_id: String,
+    pub chain_b_id: String,
+    pub chain_a_len: i32,
+    pub chain_b_len: i32,
+    pub active_contacts_ab: i32,
+    pub active_contacts_ba: i32,
+    pub d0_a_to_b: f64,
+    pub d0_b_to_a: f64,
+    pub ipsae_a_to_b: f64,
+    pub ipsae_b_to_a: f64,
+    pub ipsae_min: f64,
+    pub ipsae_max: f64,
+    pub ipsae_asymmetry: f64,
+    pub iptm_global_diluted: f64,
+    pub idr_dilution_rescue_delta: f64,
+    pub minipae_5x5_a: f64,
+    pub best_window_a_start: i32,
+    pub best_window_b_start: i32,
+    pub passes_cofold_gate: bool,
+    pub gate_verdict: String,
+    pub packed_csr_bytes: i32,
+}
+
+/// Internal representation of bidirectional inter-chain PAE matrices (`pae_ab` of size `L_A * L_B`
+/// and `pae_ba` of size `L_B * L_A`, in Ångströms).
+pub fn pgbio_extract_bidirectional_pae_blocks(
+    pae_flat: &[f32],
+    l_a: usize,
+    l_b: usize,
+) -> (Vec<f32>, Vec<f32>) {
+    let n_ab = l_a * l_b;
+    let l_tot = l_a + l_b;
+    let mut pae_ab = vec![30.0f32; n_ab];
+    let mut pae_ba = vec![30.0f32; n_ab];
+
+    if l_a == 0 || l_b == 0 {
+        return (pae_ab, pae_ba);
+    }
+
+    if pae_flat.len() >= l_tot * l_tot {
+        // Full (L_A + L_B) x (L_A + L_B) matrix
+        for i in 0..l_a {
+            for j in 0..l_b {
+                pae_ab[i * l_b + j] = pae_flat[i * l_tot + (l_a + j)].clamp(0.0, 30.0);
+                pae_ba[j * l_a + i] = pae_flat[(l_a + j) * l_tot + i].clamp(0.0, 30.0);
+            }
+        }
+    } else if pae_flat.len() >= 2 * n_ab {
+        // Rectangular 2 * L_A * L_B: first L_A * L_B is A->B, second L_B * L_A is B->A
+        for idx in 0..n_ab {
+            pae_ab[idx] = pae_flat[idx].clamp(0.0, 30.0);
+            pae_ba[idx] = pae_flat[n_ab + idx].clamp(0.0, 30.0);
+        }
+    } else if pae_flat.len() >= n_ab {
+        // Symmetric single L_A * L_B block
+        for i in 0..l_a {
+            for j in 0..l_b {
+                let v = pae_flat[i * l_b + j].clamp(0.0, 30.0);
+                pae_ab[i * l_b + j] = v;
+                pae_ba[j * l_a + i] = v;
+            }
+        }
+    }
+    (pae_ab, pae_ba)
+}
+
+/// Packs bidirectional inter-chain PAE blocks (`pae_ab: L_A x L_B` and `pae_ba: L_B x L_A`)
+/// into a zero-TOAST inline `"PGPA"` quantized CSR `bytea` container (`< 2,000 B`).
+pub fn pgbio_pack_bidirectional_pae_to_csr_bytes(
+    pae_ab: &[f32],
+    pae_ba: &[f32],
+    l_a: usize,
+    l_b: usize,
+    store_cutoff_a: f32,
+    flags: u8,
+    cached_ipsae_min: f64,
+    cached_minipae: f64,
+) -> Vec<u8> {
+    let cutoff = store_cutoff_a.clamp(2.0, 15.9375);
+    let cutoff_q8 = (cutoff * 16.0).round().clamp(1.0, 255.0) as u8;
+
+    // Collect candidate edges (row, col, q8) and cap total edges per direction at 220 so total bytea stays < 2,000 B
+    let max_edges_per_dir: usize = ((1880usize.saturating_sub(16 + 2 * (l_a + l_b + 2))) / 6).clamp(32, 240);
+
+    let collect_dir = |mat: &[f32], rows: usize, cols: usize| -> (Vec<u16>, Vec<u16>, Vec<u8>) {
+        let mut all_edges: Vec<(usize, usize, u8)> = Vec::new();
+        for r in 0..rows {
+            for c in 0..cols {
+                let val = mat[r * cols + c];
+                if val <= cutoff {
+                    let q = (val * 16.0).round().clamp(0.0, 255.0) as u8;
+                    all_edges.push((r, c, q));
+                }
+            }
+        }
+        if all_edges.len() > max_edges_per_dir {
+            all_edges.sort_by_key(|e| e.2);
+            all_edges.truncate(max_edges_per_dir);
+            all_edges.sort_by_key(|e| (e.0, e.1));
+        }
+        let mut row_ptr = vec![0u16; rows + 1];
+        let mut col_idx = Vec::with_capacity(all_edges.len());
+        let mut vals_q8 = Vec::with_capacity(all_edges.len());
+        let mut cur_r = 0usize;
+        for (r, c, q) in all_edges {
+            while cur_r < r {
+                cur_r += 1;
+                row_ptr[cur_r] = col_idx.len() as u16;
+            }
+            col_idx.push(c as u16);
+            vals_q8.push(q);
+        }
+        while cur_r < rows {
+            cur_r += 1;
+            row_ptr[cur_r] = col_idx.len() as u16;
+        }
+        (row_ptr, col_idx, vals_q8)
+    };
+
+    let (rp_a, ci_b, q_ab) = collect_dir(pae_ab, l_a, l_b);
+    let (rp_b, ci_a, q_ba) = collect_dir(pae_ba, l_b, l_a);
+    let nnz_ab = ci_b.len();
+    let nnz_ba = ci_a.len();
+
+    let total_bytes = 16 + 2 * (rp_a.len() + rp_b.len()) + 3 * (nnz_ab + nnz_ba);
+    let mut out = Vec::with_capacity(total_bytes);
+    out.extend_from_slice(&PGPA_MAGIC);
+    out.extend_from_slice(&(l_a as u16).to_le_bytes());
+    out.extend_from_slice(&(l_b as u16).to_le_bytes());
+    out.extend_from_slice(&(nnz_ab as u16).to_le_bytes());
+    out.extend_from_slice(&(nnz_ba as u16).to_le_bytes());
+    out.push(cutoff_q8);
+    out.push(flags);
+    out.push((cached_ipsae_min.clamp(0.0, 1.0) * 250.0).round() as u8);
+    out.push((cached_minipae.clamp(0.0, 15.9375) * 16.0).round() as u8);
+
+    for &v in &rp_a {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    for &v in &ci_b {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&q_ab);
+
+    for &v in &rp_b {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    for &v in &ci_a {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&q_ba);
+    out
+}
+
+/// Unpacks a `"PGPA"` sparse PAE CSR `bytea` into dense inter-chain blocks `(l_a, l_b, pae_ab, pae_ba)`
+/// where missing sparse entries default to `30.0 Å`.
+pub fn pgbio_unpack_pae_csr_bytes(bytes: &[u8]) -> Option<(usize, usize, Vec<f32>, Vec<f32>)> {
+    if bytes.len() < 16 || bytes[0..4] != PGPA_MAGIC {
+        return None;
+    }
+    let l_a = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+    let l_b = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
+    let nnz_ab = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
+    let nnz_ba = u16::from_le_bytes([bytes[10], bytes[11]]) as usize;
+
+    let need = 16 + 2 * (l_a + 1 + l_b + 1) + 3 * (nnz_ab + nnz_ba);
+    if bytes.len() < need || l_a == 0 || l_b == 0 {
+        return None;
+    }
+
+    let mut off = 16usize;
+    let mut rp_a = vec![0usize; l_a + 1];
+    for i in 0..=l_a {
+        rp_a[i] = u16::from_le_bytes([bytes[off], bytes[off + 1]]) as usize;
+        off += 2;
+    }
+    let mut ci_b = vec![0usize; nnz_ab];
+    for i in 0..nnz_ab {
+        ci_b[i] = u16::from_le_bytes([bytes[off], bytes[off + 1]]) as usize;
+        off += 2;
+    }
+    let q_ab = &bytes[off..off + nnz_ab];
+    off += nnz_ab;
+
+    let mut rp_b = vec![0usize; l_b + 1];
+    for i in 0..=l_b {
+        rp_b[i] = u16::from_le_bytes([bytes[off], bytes[off + 1]]) as usize;
+        off += 2;
+    }
+    let mut ci_a = vec![0usize; nnz_ba];
+    for i in 0..nnz_ba {
+        ci_a[i] = u16::from_le_bytes([bytes[off], bytes[off + 1]]) as usize;
+        off += 2;
+    }
+    let q_ba = &bytes[off..off + nnz_ba];
+
+    let mut pae_ab = vec![30.0f32; l_a * l_b];
+    for r in 0..l_a {
+        let s = rp_a[r].min(nnz_ab);
+        let e = rp_a[r + 1].min(nnz_ab);
+        for k in s..e {
+            let c = ci_b[k];
+            if c < l_b {
+                pae_ab[r * l_b + c] = (q_ab[k] as f32) * 0.0625;
+            }
+        }
+    }
+
+    let mut pae_ba = vec![30.0f32; l_b * l_a];
+    for r in 0..l_b {
+        let s = rp_b[r].min(nnz_ba);
+        let e = rp_b[r + 1].min(nnz_ba);
+        for k in s..e {
+            let c = ci_a[k];
+            if c < l_a {
+                pae_ba[r * l_a + c] = (q_ba[k] as f32) * 0.0625;
+            }
+        }
+    }
+
+    Some((l_a, l_b, pae_ab, pae_ba))
+}
+
+/// Core mathematical engine evaluating Dunbrack's Directional `ipSAE` (`ipsae_a_to_b`, `ipsae_b_to_a`,
+/// `ipsae_min`, `ipsae_max`), global diluted `ipTM`, `idr_dilution_rescue_delta`, and Veinstein's
+/// $5 \times 5$ sliding-window `MiniPAE` in $O(L_A L_B)$ separable rolling-sum time.
+pub fn pgbio_eval_ipsae_minipae_core(
+    chain_a_id: &str,
+    chain_b_id: &str,
+    l_a: usize,
+    l_b: usize,
+    pae_ab: &[f32],
+    pae_ba: &[f32],
+    pae_cutoff_a: f32,
+    minipae_gate_a: f32,
+    flags: u8,
+) -> (BioIpsaeMinipaeAudit, Vec<u8>) {
+    if l_a == 0 || l_b == 0 {
+        return (
+            BioIpsaeMinipaeAudit {
+                chain_a_id: chain_a_id.to_string(),
+                chain_b_id: chain_b_id.to_string(),
+                chain_a_len: l_a as i32,
+                chain_b_len: l_b as i32,
+                active_contacts_ab: 0,
+                active_contacts_ba: 0,
+                d0_a_to_b: 1.0,
+                d0_b_to_a: 1.0,
+                ipsae_a_to_b: 0.0,
+                ipsae_b_to_a: 0.0,
+                ipsae_min: 0.0,
+                ipsae_max: 0.0,
+                ipsae_asymmetry: 0.0,
+                iptm_global_diluted: 0.0,
+                idr_dilution_rescue_delta: 0.0,
+                minipae_5x5_a: 30.0,
+                best_window_a_start: 1,
+                best_window_b_start: 1,
+                passes_cofold_gate: false,
+                gate_verdict: "REJECTED_EMPTY_CHAIN".to_string(),
+                packed_csr_bytes: 16,
+            },
+            vec![b'P', b'G', b'P', b'A', 0, 0, 0, 0, 0, 0, 0, 0, 160, flags, 0, 255],
+        );
+    }
+
+    let cutoff = pae_cutoff_a.clamp(2.0, 20.0);
+    let d0_global = pgbio_ipsae_d0_from_contacts(l_a + l_b);
+    let d0_global_sq = (d0_global * d0_global) as f32;
+
+    // 1. Evaluate Chain A -> Chain B directional ipSAE and global diluted ipTM_A->B
+    let mut best_ipsae_ab = 0.0f64;
+    let mut best_d0_ab = 1.0f64;
+    let mut best_iptm_ab = 0.0f64;
+    let mut total_contacts_ab = 0usize;
+
+    for i in 0..l_a {
+        let row_slice = &pae_ab[i * l_b..(i + 1) * l_b];
+        let mut n_i = 0usize;
+        let mut global_sum = 0.0f32;
+        for &p in row_slice {
+            global_sum += d0_global_sq / (d0_global_sq + p * p);
+            if p < cutoff {
+                n_i += 1;
+            }
+        }
+        let row_iptm = (global_sum as f64) / (l_b as f64);
+        if row_iptm > best_iptm_ab {
+            best_iptm_ab = row_iptm;
+        }
+        total_contacts_ab += n_i;
+        if n_i > 0 {
+            let d0_i = pgbio_ipsae_d0_from_contacts(n_i);
+            let d0_i_sq = (d0_i * d0_i) as f32;
+            let mut sum_i = 0.0f32;
+            for &p in row_slice {
+                if p < cutoff {
+                    sum_i += d0_i_sq / (d0_i_sq + p * p);
+                }
+            }
+            let score_i = (sum_i as f64) / (n_i as f64);
+            if score_i > best_ipsae_ab {
+                best_ipsae_ab = score_i;
+                best_d0_ab = d0_i;
+            }
+        }
+    }
+
+    // 2. Evaluate Chain B -> Chain A directional ipSAE and global diluted ipTM_B->A
+    let mut best_ipsae_ba = 0.0f64;
+    let mut best_d0_ba = 1.0f64;
+    let mut best_iptm_ba = 0.0f64;
+    let mut total_contacts_ba = 0usize;
+
+    for j in 0..l_b {
+        let row_slice = &pae_ba[j * l_a..(j + 1) * l_a];
+        let mut n_j = 0usize;
+        let mut global_sum = 0.0f32;
+        for &p in row_slice {
+            global_sum += d0_global_sq / (d0_global_sq + p * p);
+            if p < cutoff {
+                n_j += 1;
+            }
+        }
+        let row_iptm = (global_sum as f64) / (l_a as f64);
+        if row_iptm > best_iptm_ba {
+            best_iptm_ba = row_iptm;
+        }
+        total_contacts_ba += n_j;
+        if n_j > 0 {
+            let d0_j = pgbio_ipsae_d0_from_contacts(n_j);
+            let d0_j_sq = (d0_j * d0_j) as f32;
+            let mut sum_j = 0.0f32;
+            for &p in row_slice {
+                if p < cutoff {
+                    sum_j += d0_j_sq / (d0_j_sq + p * p);
+                }
+            }
+            let score_j = (sum_j as f64) / (n_j as f64);
+            if score_j > best_ipsae_ba {
+                best_ipsae_ba = score_j;
+                best_d0_ba = d0_j;
+            }
+        }
+    }
+
+    let ipsae_min = best_ipsae_ab.min(best_ipsae_ba);
+    let ipsae_max = best_ipsae_ab.max(best_ipsae_ba);
+    let ipsae_asym = (best_ipsae_ab - best_ipsae_ba).abs();
+    let iptm_global_diluted = best_iptm_ab.max(best_iptm_ba);
+    let idr_rescue_delta = ipsae_min - iptm_global_diluted;
+
+    // 3. Evaluate Veinstein / Omidi 5x5 Sliding-Window MiniPAE via 2D Prefix Sums in O(L_A * L_B)
+    let w_a = 5usize.min(l_a);
+    let w_b = 5usize.min(l_b);
+    let mut pref = vec![0.0f64; (l_a + 1) * (l_b + 1)];
+    let stride = l_b + 1;
+    for i in 0..l_a {
+        let mut row_acc = 0.0f64;
+        for j in 0..l_b {
+            let sym_pae = 0.5 * ((pae_ab[i * l_b + j] as f64) + (pae_ba[j * l_a + i] as f64));
+            row_acc += sym_pae;
+            pref[(i + 1) * stride + (j + 1)] = pref[i * stride + (j + 1)] + row_acc;
+        }
+    }
+
+    let inv_area = 1.0 / ((w_a * w_b) as f64);
+    let mut minipae_5x5 = 30.0f64;
+    let mut best_u = 0usize;
+    let mut best_v = 0usize;
+
+    for u in 0..=(l_a - w_a) {
+        let u2 = u + w_a;
+        for v in 0..=(l_b - w_b) {
+            let v2 = v + w_b;
+            let sum_box = pref[u2 * stride + v2] + pref[u * stride + v]
+                - pref[u * stride + v2]
+                - pref[u2 * stride + v];
+            let mean_box = sum_box * inv_area;
+            if mean_box < minipae_5x5 {
+                minipae_5x5 = mean_box;
+                best_u = u;
+                best_v = v;
+            }
+        }
+    }
+
+    let gate_limit = minipae_gate_a.max(0.5) as f64;
+    let passes_gate = ipsae_max >= 0.65 && ipsae_min >= 0.55 && minipae_5x5 <= gate_limit;
+    let verdict = if passes_gate && iptm_global_diluted < 0.50 && idr_rescue_delta >= 0.20 {
+        "RESCUED_SLIM_IDR_TETHER".to_string()
+    } else if passes_gate {
+        "VERIFIED_DOMAIN_COMPLEX".to_string()
+    } else {
+        "REJECTED_HIGH_PAE_DECOY".to_string()
+    };
+
+    let packed_csr = pgbio_pack_bidirectional_pae_to_csr_bytes(
+        pae_ab,
+        pae_ba,
+        l_a,
+        l_b,
+        15.0,
+        flags,
+        ipsae_min,
+        minipae_5x5,
+    );
+    let packed_len = packed_csr.len() as i32;
+
+    let round4 = |x: f64| (x * 10000.0).round() / 10000.0;
+
+    (
+        BioIpsaeMinipaeAudit {
+            chain_a_id: chain_a_id.to_string(),
+            chain_b_id: chain_b_id.to_string(),
+            chain_a_len: l_a as i32,
+            chain_b_len: l_b as i32,
+            active_contacts_ab: total_contacts_ab as i32,
+            active_contacts_ba: total_contacts_ba as i32,
+            d0_a_to_b: round4(best_d0_ab),
+            d0_b_to_a: round4(best_d0_ba),
+            ipsae_a_to_b: round4(best_ipsae_ab),
+            ipsae_b_to_a: round4(best_ipsae_ba),
+            ipsae_min: round4(ipsae_min),
+            ipsae_max: round4(ipsae_max),
+            ipsae_asymmetry: round4(ipsae_asym),
+            iptm_global_diluted: round4(iptm_global_diluted),
+            idr_dilution_rescue_delta: round4(idr_rescue_delta),
+            minipae_5x5_a: round4(minipae_5x5),
+            best_window_a_start: (best_u + 1) as i32,
+            best_window_b_start: (best_v + 1) as i32,
+            passes_cofold_gate: passes_gate,
+            gate_verdict: verdict,
+            packed_csr_bytes: packed_len,
+        },
+        packed_csr,
+    )
+}
+
+/// Synthesizes directional inter-chain PAE matrices `(chain_a_id, chain_b_id, l_a, l_b, pae_ab, pae_ba)`
+/// directly from a 2-chain 3D PDB complex using per-residue Cα/Cβ coordinates and B-factor pLDDT confidence.
+pub fn pgbio_derive_pae_from_2chain_pdb(
+    pdb_text: &str,
+) -> (String, String, usize, usize, Vec<f32>, Vec<f32>) {
+    #[derive(Clone)]
+    struct ResNode {
+        chain: String,
+        res_seq: i32,
+        ca: [f64; 3],
+        cb: [f64; 3],
+        has_cb: bool,
+        plddt: f64,
+    }
+
+    let mut residues: Vec<ResNode> = Vec::new();
+    let mut chain_order: Vec<String> = Vec::new();
+
+    for line in pdb_text.lines() {
+        if !line.starts_with("ATOM  ") || line.len() < 54 {
+            continue;
+        }
+        let atom_name = line[12..16].trim();
+        if atom_name != "CA" && atom_name != "CB" {
+            continue;
+        }
+        let chain_raw = line[21..22].trim();
+        let chain_id = if chain_raw.is_empty() {
+            "A".to_string()
+        } else {
+            chain_raw.to_string()
+        };
+        let res_seq = line[22..26].trim().parse::<i32>().unwrap_or(0);
+        let x = line[30..38].trim().parse::<f64>().unwrap_or(0.0);
+        let y = line[38..46].trim().parse::<f64>().unwrap_or(0.0);
+        let z = line[46..54].trim().parse::<f64>().unwrap_or(0.0);
+        let bfac = if line.len() >= 66 {
+            line[60..66].trim().parse::<f64>().unwrap_or(85.0)
+        } else {
+            85.0
+        };
+        let plddt = if bfac <= 1.0 {
+            (bfac.max(0.85) * 100.0).clamp(1.0, 100.0)
+        } else {
+            bfac.clamp(1.0, 100.0)
+        };
+
+        if !chain_order.contains(&chain_id) {
+            chain_order.push(chain_id.clone());
+        }
+
+        if let Some(existing) = residues
+            .iter_mut()
+            .rev()
+            .take(4)
+            .find(|r| r.chain == chain_id && r.res_seq == res_seq)
+        {
+            if atom_name == "CA" {
+                existing.ca = [x, y, z];
+                existing.plddt = plddt;
+                if !existing.has_cb {
+                    existing.cb = [x, y, z];
+                }
+            } else if atom_name == "CB" {
+                existing.cb = [x, y, z];
+                existing.has_cb = true;
+            }
+        } else {
+            residues.push(ResNode {
+                chain: chain_id,
+                res_seq,
+                ca: [x, y, z],
+                cb: [x, y, z],
+                has_cb: atom_name == "CB",
+                plddt,
+            });
+        }
+    }
+
+    if residues.is_empty() {
+        return ("A".to_string(), "B".to_string(), 0, 0, Vec::new(), Vec::new());
+    }
+
+    let (chain_a_id, chain_b_id, chain_a, chain_b): (String, String, Vec<ResNode>, Vec<ResNode>) =
+        if chain_order.len() >= 2 {
+            let ca_id = chain_order[0].clone();
+            let cb_id = chain_order[1].clone();
+            let a_nodes: Vec<ResNode> = residues.iter().filter(|r| r.chain == ca_id).cloned().collect();
+            let b_nodes: Vec<ResNode> = residues.iter().filter(|r| r.chain == cb_id).cloned().collect();
+            (ca_id, cb_id, a_nodes, b_nodes)
+        } else {
+            // Single chain ID present: split at midpoint into virtual domains A and B
+            let mid = (residues.len() / 2).max(1);
+            (
+                "A".to_string(),
+                "B".to_string(),
+                residues[..mid].to_vec(),
+                residues[mid..].to_vec(),
+            )
+        };
+
+    let l_a = chain_a.len();
+    let l_b = chain_b.len();
+    if l_a == 0 || l_b == 0 {
+        return (chain_a_id, chain_b_id, l_a, l_b, Vec::new(), Vec::new());
+    }
+
+    // Compute local 3-residue backbone frame confidence p_i^frame in [0.01, 1.0]
+    let frame_conf = |nodes: &[ResNode]| -> Vec<f64> {
+        let n = nodes.len();
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let lo = i.saturating_sub(1);
+            let hi = (i + 1).min(n - 1);
+            let mut s = 0.0;
+            for k in lo..=hi {
+                s += nodes[k].plddt / 100.0;
+            }
+            out.push((s / ((hi - lo + 1) as f64)).clamp(0.01, 1.0));
+        }
+        out
+    };
+
+    let pf_a = frame_conf(&chain_a);
+    let pf_b = frame_conf(&chain_b);
+
+    let mut pae_ab = vec![30.0f32; l_a * l_b];
+    let mut pae_ba = vec![30.0f32; l_b * l_a];
+
+    for i in 0..l_a {
+        let ra = &chain_a[i];
+        let p_a = (ra.plddt / 100.0).clamp(0.01, 1.0);
+        let pfa = pf_a[i];
+        for j in 0..l_b {
+            let rb = &chain_b[j];
+            let p_b = (rb.plddt / 100.0).clamp(0.01, 1.0);
+            let pfb = pf_b[j];
+
+            let dx_ca = ra.ca[0] - rb.ca[0];
+            let dy_ca = ra.ca[1] - rb.ca[1];
+            let dz_ca = ra.ca[2] - rb.ca[2];
+            let d_ca = (dx_ca * dx_ca + dy_ca * dy_ca + dz_ca * dz_ca).sqrt();
+
+            let dx_cb = ra.cb[0] - rb.cb[0];
+            let dy_cb = ra.cb[1] - rb.cb[1];
+            let dz_cb = ra.cb[2] - rb.cb[2];
+            let d_cb = (dx_cb * dx_cb + dy_cb * dy_cb + dz_cb * dz_cb).sqrt();
+
+            let d_ij = d_ca.min(d_cb);
+            let excess_dist = (d_ij - 6.0).max(0.0);
+            let dist_penalty = 24.0 * (1.0 - (-excess_dist * excess_dist / 9.0).exp());
+
+            // Asymmetric PAE_{i->j} vs PAE_{j->i}:
+            // Inside the direct 3D interface contact zone (d_ij <= 6.0 Å) where both anchor frame and target residue
+            // have high pLDDT (~96%), PAE is ~0.65 to 0.90 Å; outside the direct contact zone (d_ij > 8.5 Å) or on disordered tails, PAE -> 25 Å (>= 10 Å cutoff).
+            let pae_ij = (0.45
+                + 12.0 * (1.0 - pfa)
+                + 8.0 * (1.0 - p_b)
+                + 0.08 * (d_ij - 3.2).max(0.0).min(4.0)
+                + dist_penalty)
+                .clamp(0.35, 30.0) as f32;
+
+            let pae_ji = (0.45
+                + 12.0 * (1.0 - pfb)
+                + 8.0 * (1.0 - p_a)
+                + 0.08 * (d_ij - 3.2).max(0.0).min(4.0)
+                + dist_penalty)
+                .clamp(0.35, 30.0) as f32;
+
+            pae_ab[i * l_b + j] = pae_ij;
+            pae_ba[j * l_a + i] = pae_ji;
+        }
+    }
+
+    // In AlphaFold2/3 & Boltz-2 co-folding, whenever an anchor residue i on Chain A forms a direct contact
+    // (d <= 5.5 Å, pLDDT >= 75%) with any residue in a rigid/docked secondary-structure segment of Chain B
+    // (and vice versa), the entire rigid co-folded interface patch shares the same relative rigid-body frame
+    // alignment (< 1.1 Å PAE across the participating interface residues)!
+    let a_in_interface: Vec<bool> = (0..l_a)
+        .map(|i| {
+            chain_a[i].plddt >= 75.0
+                && (0..l_b).any(|j| pae_ab[i * l_b + j] <= 2.5 && chain_b[j].plddt >= 75.0)
+        })
+        .collect();
+    let b_in_interface: Vec<bool> = (0..l_b)
+        .map(|j| {
+            chain_b[j].plddt >= 75.0
+                && (0..l_a).any(|i| pae_ba[j * l_a + i] <= 2.5 && chain_a[i].plddt >= 75.0)
+        })
+        .collect();
+
+    for i in 0..l_a {
+        let pfa = pf_a[i];
+        let p_a = (chain_a[i].plddt / 100.0).clamp(0.01, 1.0);
+        for j in 0..l_b {
+            let pfb = pf_b[j];
+            let p_b = (chain_b[j].plddt / 100.0).clamp(0.01, 1.0);
+            if a_in_interface[i] && b_in_interface[j] {
+                let frame_pae_ab = (0.38 + 5.0 * (1.0 - pfa) + 4.5 * (1.0 - p_b)).clamp(0.35, 2.5) as f32;
+                if frame_pae_ab < pae_ab[i * l_b + j] {
+                    pae_ab[i * l_b + j] = frame_pae_ab;
+                }
+                let frame_pae_ba = (0.38 + 5.0 * (1.0 - pfb) + 4.5 * (1.0 - p_a)).clamp(0.35, 2.5) as f32;
+                if frame_pae_ba < pae_ba[j * l_a + i] {
+                    pae_ba[j * l_a + i] = frame_pae_ba;
+                }
+            } else {
+                pae_ab[i * l_b + j] = pae_ab[i * l_b + j].max(14.5);
+                pae_ba[j * l_a + i] = pae_ba[j * l_a + i].max(14.5);
+            }
+        }
+    }
+
+    (chain_a_id, chain_b_id, l_a, l_b, pae_ab, pae_ba)
+}
+
+/// Packs a flattened inter-chain or full $(L_A+L_B)^2$ PAE matrix (`float4[]`) into a zero-TOAST
+/// inline `"PGPA"` quantized CSR `bytea` (`< 2,000 B`).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_pack_sparse_pae_csr(
+    pae_flat: Vec<f32>,
+    chain_a_len: i32,
+    chain_b_len: i32,
+    pae_cutoff_a: default!(f32, 15.0),
+) -> Vec<u8> {
+    let l_a = chain_a_len.max(0) as usize;
+    let l_b = chain_b_len.max(0) as usize;
+    let (pae_ab, pae_ba) = pgbio_extract_bidirectional_pae_blocks(&pae_flat, l_a, l_b);
+    let (audit, _) = pgbio_eval_ipsae_minipae_core("A", "B", l_a, l_b, &pae_ab, &pae_ba, 10.0, 3.5, 2);
+    pgbio_pack_bidirectional_pae_to_csr_bytes(
+        &pae_ab,
+        &pae_ba,
+        l_a,
+        l_b,
+        pae_cutoff_a,
+        2,
+        audit.ipsae_min,
+        audit.minipae_5x5_a,
+    )
+}
+
+/// O(1) 16-Byte Header Peek on a packed `"PGPA"` PAE CSR `bytea` (`bio_peek_pae_csr_header`),
+/// reading `(chain_a_len, chain_b_len, nnz_ab, nnz_ba, cached_ipsae_min, cached_minipae_a, passes_cofold_gate)`
+/// directly from the first 16 bytes without unpacking the variable-length CSR arrays!
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_peek_pae_csr_header(
+    pae_csr_bytea: Vec<u8>,
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(chain_a_len, i32),
+        name!(chain_b_len, i32),
+        name!(nnz_ab, i32),
+        name!(nnz_ba, i32),
+        name!(cached_ipsae_min, f64),
+        name!(cached_minipae_a, f64),
+        name!(passes_cofold_gate, bool),
+    ),
+> {
+    if pae_csr_bytea.len() < 16 || pae_csr_bytea[0..4] != PGPA_MAGIC {
+        return pgrx::iter::TableIterator::new(Vec::new().into_iter());
+    }
+    let l_a = u16::from_le_bytes([pae_csr_bytea[4], pae_csr_bytea[5]]) as i32;
+    let l_b = u16::from_le_bytes([pae_csr_bytea[6], pae_csr_bytea[7]]) as i32;
+    let nnz_ab = u16::from_le_bytes([pae_csr_bytea[8], pae_csr_bytea[9]]) as i32;
+    let nnz_ba = u16::from_le_bytes([pae_csr_bytea[10], pae_csr_bytea[11]]) as i32;
+    let ipsae_min = ((pae_csr_bytea[14] as f64) / 250.0 * 10000.0).round() / 10000.0;
+    let minipae = ((pae_csr_bytea[15] as f64) * 0.0625 * 10000.0).round() / 10000.0;
+    let pass = ipsae_min >= 0.55 && minipae <= 3.5;
+    pgrx::iter::TableIterator::once((l_a, l_b, nnz_ab, nnz_ba, ipsae_min, minipae, pass))
+}
+
+/// Evaluates Layer 21 Directional `ipSAE` (Dunbrack 2025/2026) and $5 \times 5$ Sliding-Window `MiniPAE`
+/// (Veinstein et al. 2025) directly over a flattened PAE matrix (`pae_flat float4[]`).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_ipsae_minipae_from_pae_flat(
+    pae_flat: Vec<f32>,
+    chain_a_len: i32,
+    chain_b_len: i32,
+    pae_cutoff_a: default!(f32, 10.0),
+    minipae_gate_a: default!(f32, 3.5),
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(chain_a_len, i32),
+        name!(chain_b_len, i32),
+        name!(active_contacts_ab, i32),
+        name!(active_contacts_ba, i32),
+        name!(d0_a_to_b, f64),
+        name!(d0_b_to_a, f64),
+        name!(ipsae_a_to_b, f64),
+        name!(ipsae_b_to_a, f64),
+        name!(ipsae_min, f64),
+        name!(ipsae_max, f64),
+        name!(iptm_global_diluted, f64),
+        name!(idr_dilution_rescue_delta, f64),
+        name!(minipae_5x5_a, f64),
+        name!(best_window_a_start, i32),
+        name!(best_window_b_start, i32),
+        name!(passes_cofold_gate, bool),
+        name!(gate_verdict, String),
+        name!(packed_csr_bytes, i32),
+        name!(packed_pae_csr, Vec<u8>),
+    ),
+> {
+    let l_a = chain_a_len.max(0) as usize;
+    let l_b = chain_b_len.max(0) as usize;
+    let (pae_ab, pae_ba) = pgbio_extract_bidirectional_pae_blocks(&pae_flat, l_a, l_b);
+    let (a, csr) = pgbio_eval_ipsae_minipae_core(
+        "A",
+        "B",
+        l_a,
+        l_b,
+        &pae_ab,
+        &pae_ba,
+        pae_cutoff_a,
+        minipae_gate_a,
+        2,
+    );
+    pgrx::iter::TableIterator::once((
+        a.chain_a_len,
+        a.chain_b_len,
+        a.active_contacts_ab,
+        a.active_contacts_ba,
+        a.d0_a_to_b,
+        a.d0_b_to_a,
+        a.ipsae_a_to_b,
+        a.ipsae_b_to_a,
+        a.ipsae_min,
+        a.ipsae_max,
+        a.iptm_global_diluted,
+        a.idr_dilution_rescue_delta,
+        a.minipae_5x5_a,
+        a.best_window_a_start,
+        a.best_window_b_start,
+        a.passes_cofold_gate,
+        a.gate_verdict,
+        a.packed_csr_bytes,
+        csr,
+    ))
+}
+
+/// Polymorphic Layer 21 Co-Folding Confidence Gate (`bio_ipsae_minipae_audit`):
+/// Accepts EITHER a 2-chain 3D PDB complex text (`pdb_text`) OR an inline `"PGPA"` sparse PAE CSR `bytea`
+/// (`pae_csr_bytea`), computes Dunbrack's contact-restricted directional `ipSAE` (`ipsae_a_to_b`, `ipsae_b_to_a`,
+/// `ipsae_min`, `ipsae_max`), global diluted `ipTM`, `idr_dilution_rescue_delta`, and Veinstein's $5 \times 5$
+/// sliding-window `MiniPAE`, rescuing disordered microprotein SLiM tethers from global `ipTM` IDR dilution!
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_ipsae_minipae_audit(
+    pdb_text: &str,
+    pae_csr_bytea: default!(Option<Vec<u8>>, "NULL"),
+    pae_cutoff_a: default!(f32, 10.0),
+    minipae_gate_a: default!(f32, 3.5),
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(chain_a_id, String),
+        name!(chain_b_id, String),
+        name!(chain_a_len, i32),
+        name!(chain_b_len, i32),
+        name!(active_contacts_ab, i32),
+        name!(active_contacts_ba, i32),
+        name!(d0_a_to_b, f64),
+        name!(d0_b_to_a, f64),
+        name!(ipsae_a_to_b, f64),
+        name!(ipsae_b_to_a, f64),
+        name!(ipsae_min, f64),
+        name!(ipsae_max, f64),
+        name!(iptm_global_diluted, f64),
+        name!(idr_dilution_rescue_delta, f64),
+        name!(minipae_5x5_a, f64),
+        name!(best_window_a_start, i32),
+        name!(best_window_b_start, i32),
+        name!(passes_cofold_gate, bool),
+        name!(gate_verdict, String),
+        name!(packed_csr_bytes, i32),
+        name!(packed_pae_csr, Vec<u8>),
+    ),
+> {
+    if let Some(ref bytes) = pae_csr_bytea {
+        if let Some((l_a, l_b, pae_ab, pae_ba)) = pgbio_unpack_pae_csr_bytes(bytes) {
+            let (a, csr) = pgbio_eval_ipsae_minipae_core(
+                "A",
+                "B",
+                l_a,
+                l_b,
+                &pae_ab,
+                &pae_ba,
+                pae_cutoff_a,
+                minipae_gate_a,
+                bytes[13],
+            );
+            return pgrx::iter::TableIterator::once((
+                a.chain_a_id,
+                a.chain_b_id,
+                a.chain_a_len,
+                a.chain_b_len,
+                a.active_contacts_ab,
+                a.active_contacts_ba,
+                a.d0_a_to_b,
+                a.d0_b_to_a,
+                a.ipsae_a_to_b,
+                a.ipsae_b_to_a,
+                a.ipsae_min,
+                a.ipsae_max,
+                a.iptm_global_diluted,
+                a.idr_dilution_rescue_delta,
+                a.minipae_5x5_a,
+                a.best_window_a_start,
+                a.best_window_b_start,
+                a.passes_cofold_gate,
+                a.gate_verdict,
+                a.packed_csr_bytes,
+                csr,
+            ));
+        }
+    }
+
+    let (ca_id, cb_id, l_a, l_b, pae_ab, pae_ba) = pgbio_derive_pae_from_2chain_pdb(pdb_text);
+    let (a, csr) = pgbio_eval_ipsae_minipae_core(
+        &ca_id,
+        &cb_id,
+        l_a,
+        l_b,
+        &pae_ab,
+        &pae_ba,
+        pae_cutoff_a,
+        minipae_gate_a,
+        1,
+    );
+    pgrx::iter::TableIterator::once((
+        a.chain_a_id,
+        a.chain_b_id,
+        a.chain_a_len,
+        a.chain_b_len,
+        a.active_contacts_ab,
+        a.active_contacts_ba,
+        a.d0_a_to_b,
+        a.d0_b_to_a,
+        a.ipsae_a_to_b,
+        a.ipsae_b_to_a,
+        a.ipsae_min,
+        a.ipsae_max,
+        a.iptm_global_diluted,
+        a.idr_dilution_rescue_delta,
+        a.minipae_5x5_a,
+        a.best_window_a_start,
+        a.best_window_b_start,
+        a.passes_cofold_gate,
+        a.gate_verdict,
+        a.packed_csr_bytes,
+        csr,
+    ))
+}
+
+
+
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
 mod tests {
@@ -15949,6 +16905,167 @@ HETATM    3  O1  LIG L   1       5.050  10.100  10.000  1.00  0.00           O";
         .collect();
         assert!(screen.len() >= 2);
         assert!(screen.iter().any(|r| r.2), "Exactly one pocket must be flagged as ★ is_best_pocket");
+    }
+
+    #[pg_test]
+    fn test_layer21_ipsae_minipae_cofolding_gate_and_idr_rescue() {
+        // 1. Verify Dunbrack d0(N_i) contact-restricted scaling transition:
+        assert_eq!(crate::pgbio_ipsae_d0_from_contacts(1), 1.0);
+        assert_eq!(crate::pgbio_ipsae_d0_from_contacts(10), 1.0);
+        assert_eq!(crate::pgbio_ipsae_d0_from_contacts(26), 1.0);
+        let d0_27 = crate::pgbio_ipsae_d0_from_contacts(27);
+        let d0_42 = crate::pgbio_ipsae_d0_from_contacts(42);
+        assert!(
+            (d0_27 - (1.24 * 12.0f64.cbrt() - 1.8)).abs() < 1e-6,
+            "Expected d0(27) ~= 1.0389, got {}",
+            d0_27
+        );
+        assert!(
+            (d0_42 - 1.92).abs() < 1e-6,
+            "Expected d0(42) = 1.24 * 27^(1/3) - 1.8 = 1.9200, got {}",
+            d0_42
+        );
+
+        // 2. Test Case 1: IDR Dilution Rescue Invariant (150-aa Receptor + 10-aa SLiM Tether inside an 80-aa sORF with 70-aa IDR tail)
+        // Chain A: 150-aa folded receptor domain
+        // Chain B: 80-aa microprotein where residues 31..40 (0-based 30..40) form a tight 10-aa SLiM contact patch
+        //          against Chain A pocket residues 50..60 (PAE = 0.45 Å), while the other 70 disordered linker residues
+        //          have PAE = 28.5 Å!
+        let l_a = 150usize;
+        let l_b = 80usize;
+        let mut pae_ab = vec![28.5f32; l_a * l_b];
+        let mut pae_ba = vec![28.5f32; l_b * l_a];
+        for i in 50..60 {
+            for j in 30..40 {
+                pae_ab[i * l_b + j] = 0.45;
+                pae_ba[j * l_a + i] = 0.50;
+            }
+        }
+        let mut flat_2block = pae_ab.clone();
+        flat_2block.extend_from_slice(&pae_ba);
+
+        let rows: Vec<_> =
+            crate::bio_ipsae_minipae_from_pae_flat(flat_2block.clone(), l_a as i32, l_b as i32, 10.0, 3.5).collect();
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!(r.0, 150);
+        assert_eq!(r.1, 80);
+        assert_eq!(r.2, 100, "Expected 10x10 = 100 active A->B contacts < 10 A");
+        assert_eq!(r.3, 100, "Expected 10x10 = 100 active B->A contacts < 10 A");
+        // Verify global diluted ipTM is crushed (< 0.35) by the 70-aa IDR tail, while ipSAE rescues it (>= 0.78)!
+        assert!(
+            r.10 < 0.35,
+            "Global diluted ipTM must be < 0.35 due to 87.5% IDR tail dilution, got {}",
+            r.10
+        );
+        assert!(
+            r.8 >= 0.75 && r.9 >= 0.78,
+            "Contact-restricted ipSAE_min ({}) and ipSAE_max ({}) must rescue the 10-aa SLiM interface!",
+            r.8,
+            r.9
+        );
+        assert!(
+            r.11 >= 0.45,
+            "Expected idr_dilution_rescue_delta >= 0.45, got {}",
+            r.11
+        );
+        assert!(
+            r.12 <= 1.0,
+            "Expected 5x5 MiniPAE <= 1.0 A inside the 10x10 SLiM patch, got {}",
+            r.12
+        );
+        assert!(
+            r.13 >= 51 && r.13 <= 56,
+            "Expected best_window_a_start in 1-based [51..56], got {}",
+            r.13
+        );
+        assert!(
+            r.14 >= 31 && r.14 <= 36,
+            "Expected best_window_b_start in 1-based [31..36], got {}",
+            r.14
+        );
+        assert!(r.15, "Disordered SLiM tether must pass passes_cofold_gate!");
+        assert_eq!(r.16, "RESCUED_SLIM_IDR_TETHER");
+        assert!(
+            r.17 < 2000,
+            "Packed PGPA CSR bytea must be strictly < 2,000 B (zero TOAST!), got {} B",
+            r.17
+        );
+
+        // Verify O(1) 16-byte header peek (`bio_peek_pae_csr_header`) matches full audit
+        let peek: Vec<_> = crate::bio_peek_pae_csr_header(r.18.clone()).collect();
+        assert_eq!(peek.len(), 1);
+        assert_eq!(peek[0].0, 150);
+        assert_eq!(peek[0].1, 80);
+        assert!(peek[0].6, "16-byte header peek must confirm passes_cofold_gate = true");
+
+        // 3. Test Case 2: Non-Binding Random Coil Decoy Rejection Invariant
+        // Only a single isolated terminal pair (0, 0) has PAE = 3.2 Å, while all neighbors in the 5x5 window have PAE = 26.0 Å
+        let mut decoy_ab = vec![26.0f32; l_a * l_b];
+        let mut decoy_ba = vec![26.0f32; l_b * l_a];
+        decoy_ab[0] = 3.2;
+        decoy_ba[0] = 3.2;
+        let mut decoy_flat = decoy_ab;
+        decoy_flat.extend_from_slice(&decoy_ba);
+
+        let decoy_rows: Vec<_> =
+            crate::bio_ipsae_minipae_from_pae_flat(decoy_flat, l_a as i32, l_b as i32, 10.0, 3.5).collect();
+        let dr = &decoy_rows[0];
+        assert!(
+            dr.12 > 20.0,
+            "5x5 MiniPAE must reject a single isolated spurious contact (got {} A)",
+            dr.12
+        );
+        assert!(!dr.15, "Random coil decoy with 1 isolated contact must fail passes_cofold_gate");
+        assert_eq!(dr.16, "REJECTED_HIGH_PAE_DECOY");
+
+        // 4. Test Case 3: 2-Chain 3D PDB Direct Mode (`bio_ipsae_minipae_audit`)
+        // Build a 2-chain PDB where Chain A (20 aa compact pocket helix/loop, pLDDT 96) docks tightly against an 8-aa SLiM
+        // in Chain B (res 11..18, dist ~3.8-5.5 A, pLDDT 96) flanked by 10 N-term and 12 C-term disordered tail residues (dist > 45 A, pLDDT 28)
+        let mut pdb_lines = Vec::new();
+        let mut serial = 1;
+        for i in 1..=20 {
+            let angle = (i as f64) * 0.65;
+            pdb_lines.push(format!(
+                "ATOM  {:5}  CA  ALA A{:4}    {:8.3}{:8.3}{:8.3}  1.00 96.50           C",
+                serial,
+                i,
+                3.2 * angle.cos(),
+                3.2 * angle.sin(),
+                (i as f64) * 0.45
+            ));
+            serial += 1;
+        }
+        for j in 1..=30 {
+            let is_slim = (11..=18).contains(&j);
+            let (x, y, z, plddt) = if is_slim {
+                let idx_a = j - 5; // matches Chain A residues 6..13 directly at ~1.4 A radial offset!
+                let angle = (idx_a as f64) * 0.65;
+                (1.9 * angle.cos(), 1.9 * angle.sin(), (idx_a as f64) * 0.45, 96.5)
+            } else {
+                ((j as f64) * 3.8, 55.0, 38.0, 28.0)
+            };
+            pdb_lines.push(format!(
+                "ATOM  {:5}  CA  SER B{:4}    {:8.3}{:8.3}{:8.3}  1.00 {:5.2}           C",
+                serial, j, x, y, z, plddt
+            ));
+            serial += 1;
+        }
+        let complex_pdb = pdb_lines.join("\n");
+        let pdb_audit: Vec<_> = crate::bio_ipsae_minipae_audit(&complex_pdb, None, 10.0, 3.5).collect();
+        assert_eq!(pdb_audit.len(), 1);
+        let pa = &pdb_audit[0];
+        assert_eq!(pa.0, "A");
+        assert_eq!(pa.1, "B");
+        assert_eq!(pa.2, 20);
+        assert_eq!(pa.3, 30);
+        assert!(
+            pa.14 <= 3.5 && pa.17,
+            "2-chain PDB with docked 8-aa SLiM must pass cofold gate (minipae={}, ipsae_min={}, verdict={})",
+            pa.14,
+            pa.10,
+            pa.18
+        );
     }
 }
 

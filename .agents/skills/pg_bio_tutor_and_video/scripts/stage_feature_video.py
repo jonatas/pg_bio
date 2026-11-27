@@ -586,7 +586,7 @@ def build_studio_deck_html(args: argparse.Namespace) -> str:
         <strong>⚙️ Systems Engineering Lens:</strong> {args.cs_mechanism}
       </p>
 
-      <h2>1. In-Database SQL Pipeline</h2>
+      <h2>1. Expressing the Heuristic as a Declarative Query</h2>
       <pre><code>-- Zero-IPC execution inside PostgreSQL 18 shared buffers:
 SELECT design_id,
        theozyme_rmsd(active_site_coords, '4qhp_zn_pentad') AS rmsd,
@@ -595,20 +595,20 @@ FROM metalloprotease_designs
 WHERE has_coordinated_water_shell(active_site_coords, 'ZN', 2.4) = TRUE
   AND theozyme_rmsd(active_site_coords, '4qhp_zn_pentad') &lt;= 0.90;</code></pre>
 
-      <h2>2. SQL vs. Python Pipeline Progress ({args.speedup})</h2>
+      <h2>2. Why This Heuristic Works ({args.speedup})</h2>
       <div class="bar-row">
         <div class="bar-label">
-          <span>🐍 Python Socket Pull + Biopython/SciPy</span>
-          <span style="color: var(--accent-color);">100% Baseline Wall-Clock</span>
+          <span>⚠️ Naive Single-Score / Uncentered Assumption</span>
+          <span style="color: var(--accent-color);">Prone to False Positives &amp; Dilution</span>
         </div>
         <div class="bar-track"><div class="bar-fill-py"></div></div>
       </div>
       <div class="bar-row">
         <div class="bar-label">
-          <span>🦀 <strong>pg_bio Native Rust (pgrx)</strong></span>
+          <span>🔬 <strong>Multi-Constraint Physical &amp; Geometric Heuristic</strong></span>
           <span style="color: var(--primary-light-blue);">{args.speedup}</span>
         </div>
-        <div class="bar-track"><div class="bar-fill-pg"></div></div>
+        <div class="bar-track"><div class="bar-fill-pg" style="width: 96%;"></div></div>
       </div>
 
       <h2>3. Integrated Blog Posts &amp; Video Library</h2>
@@ -900,6 +900,7 @@ def main() -> None:
     parser.add_argument("--bio-problem", required=True, help="1-sentence biological problem statement")
     parser.add_argument("--cs-mechanism", required=True, help="1-sentence Rust/SQL algorithmic mechanism")
     parser.add_argument("--speedup", required=True, help="Benchmark speedup headline")
+    parser.add_argument("--config", default="", help="Optional JSON config path for full Veritasium episode customization")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[4]
@@ -910,37 +911,51 @@ def main() -> None:
     (out_dir / "live_demo.sql").write_text(build_live_demo_sql(args), encoding="utf-8")
     (out_dir / "slides.marp.md").write_text(build_marp_slides(args), encoding="utf-8")
     (out_dir / "manim_scene.py").write_text(build_manim_scene(args), encoding="utf-8")
-    (out_dir / "studio_deck.html").write_text(build_studio_deck_html(args), encoding="utf-8")
+    deck_html = build_studio_deck_html(args)
+    if args.config and Path(args.config).exists():
+        import json
+        ep_cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
+        if "sql_lines" in ep_cfg:
+            custom_sql = "\n".join(ep_cfg["sql_lines"]).replace("<", "&lt;").replace(">", "&gt;")
+            default_sql = """-- Zero-IPC execution inside PostgreSQL 18 shared buffers:
+SELECT design_id,
+       theozyme_rmsd(active_site_coords, '4qhp_zn_pentad') AS rmsd,
+       bio_angle(water_o, substrate_c, substrate_o) AS attack_angle
+FROM metalloprotease_designs
+WHERE has_coordinated_water_shell(active_site_coords, 'ZN', 2.4) = TRUE
+  AND theozyme_rmsd(active_site_coords, '4qhp_zn_pentad') &lt;= 0.90;"""
+            deck_html = deck_html.replace(default_sql, custom_sql)
+    (out_dir / "studio_deck.html").write_text(deck_html, encoding="utf-8")
 
     mp4_path = out_dir / f"{args.slug}.mp4"
     renderer_script = Path(__file__).resolve().parent / "render_feature_mp4.py"
-    subprocess.run(
-        [
-            "uv",
-            "run",
-            "--with",
-            "pillow",
-            "--with",
-            "numpy",
-            "--with",
-            "edge-tts",
-            "python3",
-            str(renderer_script),
-            "--out",
-            str(mp4_path),
-            "--title",
-            args.title,
-            "--layer",
-            args.layer,
-            "--bio-problem",
-            args.bio_problem,
-            "--cs-mechanism",
-            args.cs_mechanism,
-            "--speedup",
-            args.speedup,
-        ],
-        check=True,
-    )
+    cmd = [
+        "uv",
+        "run",
+        "--with",
+        "pillow",
+        "--with",
+        "numpy",
+        "--with",
+        "edge-tts",
+        "python3",
+        str(renderer_script),
+        "--out",
+        str(mp4_path),
+        "--title",
+        args.title,
+        "--layer",
+        args.layer,
+        "--bio-problem",
+        args.bio_problem,
+        "--cs-mechanism",
+        args.cs_mechanism,
+        "--speedup",
+        args.speedup,
+    ]
+    if args.config and Path(args.config).exists():
+        cmd.extend(["--config", str(Path(args.config).resolve())])
+    subprocess.run(cmd, check=True)
 
     print(f"Created video & tutoring bundle in: {out_dir}")
     for fname in [
