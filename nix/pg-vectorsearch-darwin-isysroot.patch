@@ -1,0 +1,24 @@
+--- a/meson.build
++++ b/meson.build
+@@ -641,7 +641,21 @@
+   pg_cflags_raw = run_command(pg_config, '--cflags', check: true).stdout().strip().split()
+   pg_cppflags_raw = run_command(pg_config, '--cppflags', check: true).stdout().strip().split()
+   pg_cflags = []
++  # `-isysroot <sdk>` (darwin pg_config) is two words; keep them together,
++  # or has_argument() keeps the flag, drops the path, and the bare
++  # -isysroot swallows the next compiler argument.
++  pg_cflags_keep_next = false
+   foreach flag : pg_cflags_raw + pg_cppflags_raw
++    if pg_cflags_keep_next
++      pg_cflags += [flag]
++      pg_cflags_keep_next = false
++      continue
++    endif
++    if flag == '-isysroot'
++      pg_cflags += [flag]
++      pg_cflags_keep_next = true
++      continue
++    endif
+     if flag == '-Wdeclaration-after-statement'
+       continue
+     endif
