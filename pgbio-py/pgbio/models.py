@@ -279,6 +279,23 @@ class BioIpsaeMinipaeAudit:
     packed_csr_bytes: int
 
 
+@dataclass
+class BioBeneinReversionCandidate:
+    rank: int
+    combo_size: int
+    knockdown_mask: int
+    knockdown_genes: str
+    normal_basin_pct: float
+    cancer_escape_pct: float
+    mean_hamming_to_normal: float
+    reversion_score: float
+    synergy_over_subsets: float
+    steps_to_converge: int
+    final_attractor_mask: int
+    reversion_verdict: str
+
+
+
 
 
 

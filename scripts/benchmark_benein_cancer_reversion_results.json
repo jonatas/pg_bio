@@ -1,0 +1,22 @@
+{
+  "benchmark": "Layer 22 Bit-Sliced 64-Way BENEIN Boolean Attractor & Synergistic Cancer Reversion Scan",
+  "paper_reference": "Gong, Lee, Kim et al. & Kwang-Hyun Cho (KAIST), Advanced Science 2024/2025 (doi:10.1002/advs.202402132)",
+  "network_genes": 10,
+  "parallel_cells_per_u64_register": 64,
+  "combinations_per_scan": 41,
+  "total_trajectories_evaluated": 131200,
+  "single_kd_myb_normal_basin_pct": 0.0,
+  "single_kd_hdac2_normal_basin_pct": 0.0,
+  "single_kd_foxa2_normal_basin_pct": 0.0,
+  "dual_kd_myb_hdac2_normal_basin_pct": 1.56,
+  "triple_kd_myb_hdac2_foxa2_normal_basin_pct": 100.0,
+  "triple_kd_reversion_score": 1.0,
+  "triple_kd_synergy_over_subsets": 0.9413,
+  "dense_grn_state_bytes": 3360,
+  "inline_pgbn_csr_bytes": 192,
+  "storage_compression_ratio": "17.5x (0 B TOAST)",
+  "python_numpy_ms_per_scan": 13.358,
+  "pg_bio_bitsliced_rust_ms_per_scan": 0.0142,
+  "pg_bio_trajectories_per_sec_per_core": 184788732,
+  "speedup_vs_python": "940.71x"
+}
