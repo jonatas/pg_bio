@@ -23,12 +23,3 @@ Welcome to the `pg_bio` video and interactive 3D tutoring directory! Every serie
 
 ### 3. [Standalone Feature Deep-Dive: The Protein as a Modular State Machine (`Dock -> Cut -> Transform`)](ep02_modular_protein_state_machine/studio_deck.html)
 * [MP4 Video](ep02_modular_protein_state_machine/ep02_modular_protein_state_machine.mp4) • [Interactive Studio Deck](ep02_modular_protein_state_machine/studio_deck.html) • [Talk Track](ep02_modular_protein_state_machine/talk_track.md) • [Live SQL](ep02_modular_protein_state_machine/live_demo.sql)
-
-### 4. [Episode 05 (Layer 19): The Salt Mirage & The Chameleon Enzyme (Multi-Pocket SAS & 21-Check PoseBusters)](ep03_pocketvina_posebusters_21_gate/studio_deck.html)
-* [MP4 Video](ep03_pocketvina_posebusters_21_gate/ep03_pocketvina_posebusters_21_gate.mp4) • [Interactive Studio Deck](ep03_pocketvina_posebusters_21_gate/studio_deck.html) • [Talk Track](ep03_pocketvina_posebusters_21_gate/talk_track.md) • [Live SQL](ep03_pocketvina_posebusters_21_gate/live_demo.sql) • [Doc](../docs/19_pocketvina_multipocket_and_posebusters.md)
-
-### 5. [Episode 06 (Layer 20): Dead Binders vs. Living Catalysts (`EnzRef` Role-Contrast & `pSLiM` Tethers)](ep04_enzref_kinetics_and_pslim_tethers/studio_deck.html)
-* [MP4 Video](ep04_enzref_kinetics_and_pslim_tethers/ep04_enzref_kinetics_and_pslim_tethers.mp4) • [Interactive Studio Deck](ep04_enzref_kinetics_and_pslim_tethers/studio_deck.html) • [Talk Track](ep04_enzref_kinetics_and_pslim_tethers/talk_track.md) • [Live SQL](ep04_enzref_kinetics_and_pslim_tethers/live_demo.sql) • [Doc](../docs/20_enzref_role_contrast_and_pslim_tethers.md)
-
-### 6. [Episode 07 (Layer 21): Rescuing Disordered Microprotein Tethers (Contact-Restricted `ipSAE` & $5 \times 5$ `MiniPAE`)](ep05_ipsae_minipae_cofolding_gate/studio_deck.html)
-* [MP4 Video](ep05_ipsae_minipae_cofolding_gate/ep05_ipsae_minipae_cofolding_gate.mp4) • [Interactive Studio Deck](ep05_ipsae_minipae_cofolding_gate/studio_deck.html) • [Talk Track](ep05_ipsae_minipae_cofolding_gate/talk_track.md) • [Live SQL](ep05_ipsae_minipae_cofolding_gate/live_demo.sql) • [Doc](../docs/21_ipsae_minipae_cofolding_gate.md)

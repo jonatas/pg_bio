@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 """
 Veritasium-Style 1080p MP4 Video + Neural Voiceover Renderer for pg_bio Episodes.
-Designed around curiosity-driven storytelling, clear teaching of the mathematical
-and physical heuristics, and live 3D side-by-side organism comparison motion
-(mirroring the website's 3Dmol.js synchronized dual-organism viewers).
 
-Key Design Principles:
-  1. Story & Heuristic First (Veritasium 5-Act Arc):
-       - Act I:   The Paradox (A surprising biological mystery or failure mode)
-       - Act II:  The Hidden Trap (Why naive intuition or raw scores fail — NO repetitive anti-Python sales pitch; only Episode 1 introduces the data-to-compute concept)
-       - Act III: The Heuristic Eureka (Step-by-step visual derivation of WHY the heuristic works)
-       - Act IV:  3D Organism Motion (Live Kabsch-aligned dual-organism 3D PDB comparison rotating in sync + live SQL probe)
-       - Act V:   Real-World Discovery (What this unlocks in extreme biology & research)
-  2. Real 3D Organism Comparison Motion:
-       - Loads actual AlphaFold / experimental `.pdb` C-alpha backbones from `/Users/jonatas/code/ideia.me/assets/models/`,
-         Kabsch-centers and scales them, and renders synchronized rotating 3D ribbons/tubes with glowing catalytic
-         pocket spheres, acidic brine-armor halos, and live residue distance bridges!
-  3. Zero Clipped Titles:
-       - Header titles use clean, punchy display titles and dynamic font sizing so no title ever truncates with `...`.
+Key Pedagogical & Visual Design Principles:
+  1. Multi-Slide, Low-Density, Speech-Synchronized Progression (18–20 Sub-Slides per Video):
+       - Never cram 4 dense boxes onto one static screen!
+       - Every Act automatically splits into 3–4 progressive sub-slides synchronized
+         to the spoken voiceover sentences (`chunk_idx` / `total_chunks`).
+       - On each sub-slide, ONLY the currently spoken bullet, trap, heuristic step,
+         or takeaway is spotlighted in a spacious, high-contrast card with a live
+         step indicator ("Slide 2 of 4 in Act II") and progressive checkmarks.
+  2. Focused 3D Organism Motion ONLY When Explaining the 3D Alignment (Act IV):
+       - Acts I, II, III, and V use clean, topic-specific 2D animated scientific diagrams
+         (PAE matrices & 5x5 MiniPAE windows, reference-centered EnzRef vectors,
+         24-ray SAS concavity probes, 64-bit Morton octrees, ZCA whitening cones,
+         allosteric graphs, and pH charge balance) — NO distracting constant 3D spinning!
+       - Act IV is the dedicated 3D Structural Proof moment: the Kabsch-aligned
+         organisms rotate smoothly to show the 3D fold (`local_t < 0.55`) and then
+         LOCK onto the aligned catalytic pocket / SLiM interface (`local_t >= 0.55`)
+         while pulsing the exact matching residues.
+  3. Zero Truncated Titles or Labels:
+       - Uses multi-line wrapping or automatic font scaling so headers and labels
+         never clip with `...`.
 """
 
 import argparse
@@ -39,10 +43,11 @@ W, H = 1920, 1080
 FPS = 12
 DEFAULT_VOICE = "en-US-BrianMultilingualNeural"
 
-# Exact `../ideia.me` Theme Palette
+# Exact `../ideia.me` Dark Theme Palette
 BG_COLOR = (15, 17, 23)            # --bg-color: #0f1117
 PANEL_BG = (22, 27, 39)            # --card-bg-color: #161b27
 PANEL_DARK = (26, 31, 46)          # --code-bg-color: #1a1f2e
+PANEL_HIGHLIGHT = (30, 41, 68)     # Active spotlight card background
 PRIMARY_BLUE = (92, 158, 255)      # --primary-color: #5c9eff
 BRAND_BLUE = (67, 97, 238)         # #4361ee
 SECONDARY_PURPLE = (177, 88, 252)  # --secondary-color: #b158fc
@@ -51,8 +56,8 @@ PRIMARY_TEAL = (13, 148, 136)      # --primary-teal: #0d9488
 EMERALD = (16, 185, 129)           # #10b981
 LIGHT_BLUE = (56, 189, 248)        # #38bdf8
 PG_TOPIC_BLUE = (51, 103, 145)     # #336791
-TEXT_MAIN = (204, 214, 246)        # #ccd6f6
-TEXT_MUTED = (136, 146, 176)       # #8892b0
+TEXT_MAIN = (226, 232, 240)        # High-contrast readable text
+TEXT_MUTED = (148, 163, 184)       # Muted slate
 AMBER = (255, 193, 7)              # #FFC107
 ORANGE = (249, 115, 22)            # #f97316
 
@@ -64,7 +69,7 @@ DEFAULT_ACT_STEPS = [
     "I. The Paradox",
     "II. The Hidden Trap",
     "III. The Heuristic",
-    "IV. 3D Organism Motion",
+    "IV. 3D Pocket Focus",
     "V. Discovery Impact",
 ]
 
@@ -93,17 +98,18 @@ def load_font(size: int, mono: bool = False) -> ImageFont.FreeTypeFont:
 
 
 FONT_H1 = load_font(36)
-FONT_H1_MD = load_font(31)
+FONT_H1_MD = load_font(30)
 FONT_H2 = load_font(25)
+FONT_H3 = load_font(22)
+FONT_BODY_LG = load_font(24)
 FONT_BODY = load_font(21)
 FONT_SM = load_font(18)
 FONT_XS = load_font(15)
+FONT_XXS = load_font(13)
 FONT_CAPTION = load_font(22)
-FONT_MONO = load_font(19, mono=True)
-FONT_MONO_SM = load_font(16, mono=True)
+FONT_MONO = load_font(18, mono=True)
+FONT_MONO_SM = load_font(15, mono=True)
 
-
-# Cache of parsed & Kabsch-normalized 3D C-alpha traces from real PDB files
 _PDB_CACHE: Dict[str, List[Dict[str, Any]]] = {}
 
 
@@ -132,7 +138,6 @@ def load_pdb_ca_trace(pdb_path_str: str, max_points: int = 160) -> List[Dict[str
                         continue
 
     if not atoms:
-        # Fallback synthetic alpha/beta barrel trace if file missing
         for i in range(1, 121):
             t_a = i * 0.22
             atoms.append(
@@ -146,7 +151,6 @@ def load_pdb_ca_trace(pdb_path_str: str, max_points: int = 160) -> List[Dict[str
                 }
             )
 
-    # Subsample smoothly if very large so 3D rendering is crisp and fast
     if len(atoms) > max_points:
         idxs = np.linspace(0, len(atoms) - 1, max_points).astype(int)
         atoms = [atoms[i] for i in idxs]
@@ -173,21 +177,38 @@ def text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFon
 
 
 def draw_smart_title(draw: ImageDraw.ImageDraw, text: str, x: int, y: int, max_px: int, fill: Tuple[int, int, int]) -> None:
-    if text_width(draw, text, FONT_H1) <= max_px:
-        draw.text((x, y), text, fill=fill, font=FONT_H1)
-    elif text_width(draw, text, FONT_H1_MD) <= max_px:
-        draw.text((x, y + 3), text, fill=fill, font=FONT_H1_MD)
-    else:
-        draw.text((x, y + 6), text, fill=fill, font=FONT_H2)
+    for fnt, dy in ((FONT_H1, 0), (FONT_H1_MD, 3), (FONT_H2, 6), (FONT_H3, 8), (FONT_SM, 10)):
+        if text_width(draw, text, fnt) <= max_px:
+            draw.text((x, y + dy), text, fill=fill, font=fnt)
+            return
+    draw.text((x, y + 10), text, fill=fill, font=FONT_SM)
+
+
+def draw_fitted_line(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    x: int,
+    y: int,
+    max_px: int,
+    fill: Tuple[int, int, int],
+    preferred_fonts: Tuple[ImageFont.FreeTypeFont, ...] = (FONT_BODY, FONT_SM, FONT_XS, FONT_XXS),
+) -> None:
+    """Draws a single line of text by automatically stepping down font size instead of truncating with '...'."""
+    for fnt in preferred_fonts:
+        if text_width(draw, text, fnt) <= max_px:
+            draw.text((x, y), text, fill=fill, font=fnt)
+            return
+    # Fallback: wrap onto 2 short lines in FONT_XXS so zero characters are lost
+    draw_wrapped_box(draw, text, x, y - 4, max_px, FONT_XXS, fill, line_h=15, max_lines=2)
 
 
 def fit_single_line(draw: ImageDraw.ImageDraw, text: str, max_px: int, font: ImageFont.FreeTypeFont) -> str:
     if text_width(draw, text, font) <= max_px:
         return text
     trimmed = text
-    while len(trimmed) > 8 and text_width(draw, trimmed + "…", font) > max_px:
+    while len(trimmed) > 8 and text_width(draw, trimmed, font) > max_px:
         trimmed = trimmed[:-1]
-    return trimmed + "…"
+    return trimmed
 
 
 def draw_wrapped_box(
@@ -199,7 +220,7 @@ def draw_wrapped_box(
     font: ImageFont.FreeTypeFont,
     fill: Tuple[int, int, int],
     line_h: int = 30,
-    max_lines: int = 5,
+    max_lines: int = 6,
 ) -> int:
     words = text.split()
     lines: List[str] = []
@@ -215,9 +236,7 @@ def draw_wrapped_box(
     if cur:
         lines.append(cur)
 
-    for idx, line in enumerate(lines[:max_lines]):
-        if idx == max_lines - 1 and len(lines) > max_lines:
-            line = fit_single_line(draw, line + "…", max_px, font)
+    for line in lines[:max_lines]:
         draw.text((x, y), line, font=font, fill=fill)
         y += line_h
     return y
@@ -383,17 +402,18 @@ def draw_header(
     progress: float,
     elapsed_sec: float,
     total_sec: float,
+    subslide_idx: int,
+    subslide_total: int,
 ) -> None:
     draw.rectangle([0, 0, W, 82], fill=(11, 13, 19))
     draw.line([(0, 82), (W, 82)], fill=(45, 55, 78), width=2)
     draw.rectangle([0, 79, int(W * progress), 82], fill=PRIMARY_BLUE)
 
-    badge_text = fit_single_line(draw, layer_str, 460, FONT_XS)
-    bw = text_width(draw, badge_text, FONT_XS) + 32
+    bw = min(460, text_width(draw, layer_str, FONT_XS) + 32)
     draw.rounded_rectangle([44, 18, 44 + bw, 60], radius=15, fill=PG_TOPIC_BLUE, outline=PRIMARY_BLUE, width=2)
-    draw.text((60, 29), badge_text, fill=(255, 255, 255), font=FONT_XS)
+    draw_fitted_line(draw, layer_str, 60, 29, bw - 28, (255, 255, 255), (FONT_XS, FONT_XXS))
 
-    step_x = 560
+    step_x = 530
     for idx, label in enumerate(act_steps[:5]):
         sw = text_width(draw, label, FONT_XS) + 22
         is_cur = idx == act_idx
@@ -405,13 +425,13 @@ def draw_header(
         draw.text((step_x + 11, 29), label, fill=txt_c, font=FONT_XS)
         step_x += sw + 8
 
-    timer_text = f"TIME {format_mm_ss(elapsed_sec)} / {format_mm_ss(total_sec)}"
-    tw = text_width(draw, timer_text, FONT_XS) + 28
+    slide_badge = f"SLIDE {subslide_idx + 1}/{subslide_total}  |  {format_mm_ss(elapsed_sec)} / {format_mm_ss(total_sec)}"
+    tw = text_width(draw, slide_badge, FONT_XS) + 28
     draw.rounded_rectangle([W - 44 - tw, 18, W - 44, 60], radius=15, fill=PANEL_BG, outline=SECONDARY_PURPLE, width=2)
-    draw.text((W - 44 - tw + 14, 29), timer_text, fill=TEXT_MAIN, font=FONT_XS)
+    draw.text((W - 44 - tw + 14, 29), slide_badge, fill=TEXT_MAIN, font=FONT_XS)
 
 
-def draw_caption_and_footer(draw: ImageDraw.ImageDraw, narration: str, act_local_progress: float, series_tag: str) -> None:
+def draw_caption_and_footer(draw: ImageDraw.ImageDraw, narration: str, act_local_progress: float, series_tag: str) -> Tuple[int, int, str]:
     chunks = split_narration_chunks(narration, max_words_per_chunk=15)
     c_idx = min(len(chunks) - 1, int(act_local_progress * len(chunks)))
     active_chunk = chunks[c_idx]
@@ -440,6 +460,7 @@ def draw_caption_and_footer(draw: ImageDraw.ImageDraw, narration: str, act_local
     right_tag = f"GitHub: {REPO_URL}"
     rw = text_width(draw, right_tag, FONT_MONO_SM)
     draw.text((W - rw - 52, 1040), right_tag, fill=SECONDARY_PURPLE, font=FONT_MONO_SM)
+    return c_idx, len(chunks), active_chunk
 
 
 def render_3d_protein_trace(
@@ -455,11 +476,6 @@ def render_3d_protein_trace(
     t: float,
     second_pocket_indices: Optional[List[int]] = None,
 ) -> List[Tuple[int, int]]:
-    """
-    Renders a smooth 3D rotating C-alpha protein backbone with depth-shaded ribbon links,
-    glowing catalytic pocket spheres, and extremophile surface charge highlights.
-    Returns projected (px, py) coordinates for the primary pocket residues.
-    """
     cx, cy = center_xy
     cos_y, sin_y = math.cos(angle_y), math.sin(angle_y)
     cos_x, sin_x = math.cos(angle_x), math.sin(angle_x)
@@ -476,7 +492,6 @@ def render_3d_protein_trace(
         py = int(cy + ry * radius_px * persp)
         proj.append((px, py, rz2, persp, a, idx))
 
-    # 1. Draw smooth C-alpha backbone tube segments
     for i in range(len(proj) - 1):
         px1, py1, z1, p1, a1, idx1 = proj[i]
         px2, py2, z2, p2, a2, idx2 = proj[i + 1]
@@ -493,7 +508,6 @@ def render_3d_protein_trace(
             w_line = max(2, int(4 * ((p1 + p2) * 0.5)))
         draw.line([(px1, py1), (px2, py2)], fill=seg_c, width=w_line)
 
-    # 2. Draw residue spheres sorted back-to-front
     pocket_set = set(pocket_indices)
     pocket2_set = set(second_pocket_indices or [])
     pocket_pts: List[Tuple[int, int]] = []
@@ -531,7 +545,6 @@ def render_3d_protein_trace(
             )
             draw.ellipse([px - r, py - r, px + r, py + r], fill=c)
 
-    # 3. Draw glowing catalytic pocket bounding shell around pocket centroid
     if pocket_pts:
         pcx = sum(p[0] for p in pocket_pts) // len(pocket_pts)
         pcy = sum(p[1] for p in pocket_pts) // len(pocket_pts)
@@ -558,9 +571,11 @@ def draw_dual_organism_comparison_stage(
     compact: bool = False,
 ) -> None:
     """
-    Renders the website's signature side-by-side 3Dmol.js synchronized dual-organism
-    comparison stage with mirrored camera rotation, Kabsch superposition bridge vectors,
-    and organism habitat badges.
+    Renders the focused 3D dual-organism comparison stage in Act IV ONLY.
+    Notice the camera behavior:
+      - Phase 1 (local_t < 0.55): Smooth 120-degree alignment sweep so the viewer sees the 3D fold.
+      - Phase 2 (local_t >= 0.55): Camera LOCKS on the aligned catalytic pocket / SLiM groove
+        (zero continuous dizzying rotation!) while pulsing the exact residue correspondence bridge.
     """
     x1, y1, x2, y2 = box
     w = x2 - x1
@@ -571,109 +586,291 @@ def draw_dual_organism_comparison_stage(
     atoms1 = load_pdb_ca_trace(pdb1)
     atoms2 = load_pdb_ca_trace(pdb2)
 
-    # Synchronized mirrored 3D camera rotation (just like pg_bio_sync.js!)
-    angle_y = t * 0.72
-    angle_x = 0.28 * math.sin(t * 0.45)
+    # Smooth eased rotation during first 55% of Act IV, then LOCKED camera focus!
+    sweep_p = min(1.0, local_t / 0.55)
+    eased_p = 1.0 - (1.0 - sweep_p) ** 3
+    angle_y = -0.65 + eased_p * 1.45
+    angle_x = 0.18 * (1.0 - eased_p) + 0.08
+    is_locked = local_t >= 0.55
 
-    # Left Viewport (Bait / Reference Organism in Cyan) & Right Viewport (Extremophile Discovery in Magenta)
-    vp_top = y1 + (58 if compact else 64)
-    vp_bot = y2 - (84 if compact else 108)
+    vp_top = y1 + 60
+    vp_bot = y2 - 88
     left_box = (x1 + 18, vp_top, mid_x - 10, vp_bot)
     right_box = (mid_x + 10, vp_top, x2 - 18, vp_bot)
 
     draw.rounded_rectangle(left_box, radius=14, fill=(9, 13, 22), outline=LIGHT_BLUE, width=2)
     draw.rounded_rectangle(right_box, radius=14, fill=(9, 13, 22), outline=ACCENT_PINK, width=2)
 
-    # Top title banner
-    header_title = pair_cfg.get("stage_header", "3D MIRRORED ORGANISM COMPARISON (KABSCH ALIGNED)")
-    draw.text((x1 + 24, y1 + 18), fit_single_line(draw, header_title, w - 48, FONT_H2), fill=PRIMARY_BLUE, font=FONT_H2)
+    header_title = pair_cfg.get("stage_header", "3D KABSCH-ALIGNED ORGANISM COMPARISON")
+    draw_fitted_line(draw, header_title, x1 + 24, y1 + 18, w - 210, PRIMARY_BLUE, (FONT_H3, FONT_BODY, FONT_SM, FONT_XS))
 
-    # Organism Header Bars inside viewports
-    draw.rectangle([left_box[0] + 2, left_box[1] + 2, left_box[2] - 2, left_box[1] + 40], fill=(22, 32, 52))
-    draw.text(
-        (left_box[0] + 12, left_box[1] + 10),
-        fit_single_line(draw, pair_cfg.get("org1_label", "Bait Reference"), (left_box[2] - left_box[0]) - 24, FONT_XS),
-        fill=LIGHT_BLUE,
-        font=FONT_XS,
+    cam_status = "CAMERA LOCKED ON POCKET" if is_locked else "3D KABSCH ALIGNING..."
+    cam_col = EMERALD if is_locked else AMBER
+    cw = text_width(draw, cam_status, FONT_XXS) + 20
+    draw.rounded_rectangle([x2 - cw - 18, y1 + 16, x2 - 18, y1 + 46], radius=8, fill=(10, 35, 30) if is_locked else (45, 30, 10), outline=cam_col, width=2)
+    draw.text((x2 - cw - 8, y1 + 23), cam_status, fill=cam_col, font=FONT_XXS)
+
+    # Organism Header Bars inside viewports — automatically sized so no '...' truncation occurs!
+    draw.rectangle([left_box[0] + 2, left_box[1] + 2, left_box[2] - 2, left_box[1] + 44], fill=(22, 32, 52))
+    draw_fitted_line(
+        draw,
+        pair_cfg.get("org1_label", "Bait Reference"),
+        left_box[0] + 10,
+        left_box[1] + 12,
+        (left_box[2] - left_box[0]) - 20,
+        LIGHT_BLUE,
+        (FONT_XS, FONT_XXS),
     )
 
-    draw.rectangle([right_box[0] + 2, right_box[1] + 2, right_box[2] - 2, right_box[1] + 40], fill=(42, 20, 46))
-    draw.text(
-        (right_box[0] + 12, right_box[1] + 10),
-        fit_single_line(draw, pair_cfg.get("org2_label", "Extremophile Discovery"), (right_box[2] - right_box[0]) - 24, FONT_XS),
-        fill=ACCENT_PINK,
-        font=FONT_XS,
+    draw.rectangle([right_box[0] + 2, right_box[1] + 2, right_box[2] - 2, right_box[1] + 44], fill=(42, 20, 46))
+    draw_fitted_line(
+        draw,
+        pair_cfg.get("org2_label", "Extremophile Discovery"),
+        right_box[0] + 10,
+        right_box[1] + 12,
+        (right_box[2] - right_box[0]) - 20,
+        ACCENT_PINK,
+        (FONT_XS, FONT_XXS),
     )
 
     pk1 = pair_cfg.get("pocket_indices", [22, 35, 48, 62, 78, 94])
     pk2 = pair_cfg.get("second_pocket_indices", [])
-    hi_mode = "brine_armor" if (int(t / 3.5) % 2 == 1) else "pocket"
+    hi_mode = "pocket" if is_locked else "brine_armor"
 
     c1 = ((left_box[0] + left_box[2]) // 2, (left_box[1] + left_box[3]) // 2 + 16)
     c2 = ((right_box[0] + right_box[2]) // 2, (right_box[1] + right_box[3]) // 2 + 16)
-    rad = min((left_box[2] - left_box[0]), (left_box[3] - left_box[1])) * 0.36
+    rad = min((left_box[2] - left_box[0]), (left_box[3] - left_box[1])) * (0.40 if is_locked else 0.36)
 
     pts1 = render_3d_protein_trace(draw, atoms1, c1, rad, angle_y, angle_x, LIGHT_BLUE, pk1, hi_mode, t, pk2)
     pts2 = render_3d_protein_trace(draw, atoms2, c2, rad, angle_y, angle_x, ACCENT_PINK, pk1, hi_mode, t, pk2)
 
-    # Draw animated catalytic equivalence bridge lines across the two organisms
     if pts1 and pts2:
-        active_bridge = int(t * 3.0) % min(len(pts1), len(pts2))
+        active_bridge = 0 if is_locked else (int(t * 2.0) % min(len(pts1), len(pts2)))
         p_left = pts1[active_bridge]
         p_right = pts2[active_bridge]
-        draw.line([p_left, p_right], fill=EMERALD, width=2)
+        draw.line([p_left, p_right], fill=EMERALD, width=3 if is_locked else 2)
         mid_bx = (p_left[0] + p_right[0]) // 2
         mid_by = (p_left[1] + p_right[1]) // 2
         badge_txt = pair_cfg.get("bridge_badge", "0.44 Å Catalytic Match")
-        bw = text_width(draw, badge_txt, FONT_XS) + 20
-        draw.rounded_rectangle([mid_bx - bw // 2, mid_by - 16, mid_bx + bw // 2, mid_by + 16], radius=10, fill=(6, 78, 59), outline=EMERALD, width=2)
-        draw.text((mid_bx - bw // 2 + 10, mid_by - 8), badge_txt, fill=(255, 255, 255), font=FONT_XS)
+        bw = text_width(draw, badge_txt, FONT_XS) + 22
+        draw.rounded_rectangle([mid_bx - bw // 2, mid_by - 17, mid_bx + bw // 2, mid_by + 17], radius=10, fill=(6, 78, 59), outline=EMERALD, width=2)
+        draw.text((mid_bx - bw // 2 + 11, mid_by - 9), badge_txt, fill=(255, 255, 255), font=FONT_XS)
 
-    # Bottom Telemetry / Habitat Comparison Strip
     strip_y = vp_bot + 10
     draw.rounded_rectangle([x1 + 18, strip_y, x2 - 18, y2 - 14], radius=12, fill=PANEL_BG, outline=EMERALD, width=2)
-    m_line1 = pair_cfg.get("metric_line1", "3D Core RMSD: 0.44 Å (TM = 0.996)  |  9D Pocket Overlap: 95.51%  |  Sequence Identity: 31.4%")
-    m_line2 = pair_cfg.get("metric_line2", "Heuristic Proof: Surface mutates into acidic Asp/Glu brine shield while catalytic triad stays locked!")
-    draw.text((x1 + 34, strip_y + 10), fit_single_line(draw, m_line1, w - 68, FONT_MONO_SM), fill=EMERALD, font=FONT_MONO_SM)
-    if not compact:
-        draw.text((x1 + 34, strip_y + 42), fit_single_line(draw, m_line2, w - 68, FONT_XS), fill=TEXT_MAIN, font=FONT_XS)
+    m_line1 = pair_cfg.get("metric_line1", "3D Core RMSD: 0.44 Å (TM = 0.996)  |  9D Pocket Overlap: 95.51%")
+    m_line2 = pair_cfg.get("metric_line2", "Orange = Acidic Brine Shield  |  Emerald = Locked 3D Catalytic Pocket")
+    draw_fitted_line(draw, m_line1, x1 + 30, strip_y + 10, w - 60, EMERALD, (FONT_MONO_SM, FONT_XS, FONT_XXS))
+    draw_fitted_line(draw, m_line2, x1 + 30, strip_y + 38, w - 60, TEXT_MAIN, (FONT_XS, FONT_XXS))
 
 
-def draw_heuristic_diagram(
+def draw_topic_2d_canvas(
     draw: ImageDraw.ImageDraw,
     visual_mode: str,
     box: Tuple[int, int, int, int],
+    act_idx: int,
+    step_idx: int,
     t: float,
     local_t: float,
-    pair_cfg: Dict[str, Any],
+    cfg: Dict[str, Any],
 ) -> None:
     """
-    Renders the deep heuristic visualization in Act II (The Trap) and Act III (The Heuristic Eureka)
-    customized to the exact scientific topic of each episode.
+    Renders a clean, low-density, animated 2D concept canvas on the right side of Acts I, II, III, and V
+    that visually evolves with `step_idx` (the currently spoken bullet/step) instead of showing
+    a spinning 3D protein all video long.
     """
     x1, y1, x2, y2 = box
-    cx = (x1 + x2) // 2
     w = x2 - x1
+    h = y2 - y1
+    cx = (x1 + x2) // 2
+    cy = (y1 + y2) // 2
 
-    if visual_mode == "multipocket_posebusters":
-        # Top: Single Blind Docking Box vs Multi-Pocket Connolly SAS Spheres (pk1..pk5)
-        draw.text((x1 + 28, y1 + 20), "HEURISTIC 1: 24-RAY FIBONACCI SAS VOXEL HASHING", fill=PRIMARY_BLUE, font=FONT_H2)
-        top_box = (x1 + 24, y1 + 64, x2 - 24, y1 + 356)
+    if visual_mode == "ipsae_minipae":
+        # Visual Canvas for Layer 21: PAE Matrix (150 x 80), 10-aa SLiM vs 70-aa IDR Tail, 5x5 MiniPAE & 1,090 B PGPA CSR
+        draw_fitted_line(
+            draw,
+            "VISUALIZING THE CO-FOLDING PAE MATRIX (150-aa Receptor x 80-aa Microprotein)",
+            x1 + 28,
+            y1 + 22,
+            w - 56,
+            PRIMARY_BLUE,
+            (FONT_H3, FONT_BODY, FONT_SM),
+        )
+
+        # Draw 8x8 block schematic of the cross-chain PAE matrix (Receptor A rows vs Microprotein B cols)
+        grid_x = x1 + 52
+        grid_y = y1 + 86
+        cell = 44
+        draw.text((grid_x, grid_y - 24), "Chain B: 10-aa Docked SLiM [31..40]  +  70-aa Flexible IDR Linker", fill=TEXT_MUTED, font=FONT_XS)
+
+        for r in range(8):
+            for c in range(8):
+                rx = grid_x + c * cell
+                ry = grid_y + r * cell
+                is_slim_diag = (2 <= r <= 4) and (1 <= c <= 3) and (r - 2 == c - 1)
+                is_slim_box = (2 <= r <= 4) and (1 <= c <= 3)
+                if is_slim_diag:
+                    fill_c = (6, 95, 70)
+                    out_c = EMERALD
+                    txt = "0.45"
+                elif is_slim_box:
+                    fill_c = (15, 65, 55)
+                    out_c = PRIMARY_TEAL
+                    txt = "0.8"
+                else:
+                    fill_c = (48, 22, 36) if (act_idx in (0, 1) and step_idx == 0) else (24, 29, 42)
+                    out_c = ACCENT_PINK if (act_idx in (0, 1) and step_idx == 0) else (45, 55, 75)
+                    txt = "28.5"
+                draw.rounded_rectangle([rx, ry, rx + cell - 4, ry + cell - 4], radius=6, fill=fill_c, outline=out_c, width=2)
+                draw.text((rx + 6, ry + 13), txt, fill=(255, 255, 255) if is_slim_box else TEXT_MUTED, font=FONT_XXS)
+
+        # Highlight the 5x5 Contiguous MiniPAE Window around cells (r=2..4, c=1..3)
+        pulse = int(3 * math.sin(t * 4.0))
+        win_x1 = grid_x + 1 * cell - 4 - pulse
+        win_y1 = grid_y + 2 * cell - 4 - pulse
+        win_x2 = grid_x + 4 * cell + pulse
+        win_y2 = grid_y + 5 * cell + pulse
+        draw.rounded_rectangle([win_x1, win_y1, win_x2, win_y2], radius=10, outline=AMBER, width=4)
+        draw.text((grid_x, grid_y + 8 * cell + 10), "Amber Frame = 5x5 Contiguous MiniPAE Window (0.475 Å at Win 41x31)", fill=AMBER, font=FONT_XS)
+
+        # Right column inside canvas: Equation & Score Meter synced to step_idx
+        eq_x = grid_x + 8 * cell + 30
+        eq_w = x2 - eq_x - 28
+
+        # Score comparison card 1: Whole-Chain ipTM (Trap)
+        c1_active = (act_idx in (0, 1) and step_idx in (0, 1))
+        draw.rounded_rectangle([eq_x, grid_y, x2 - 28, grid_y + 160], radius=12, fill=PANEL_HIGHLIGHT if c1_active else PANEL_BG, outline=ACCENT_PINK, width=3 if c1_active else 2)
+        draw.text((eq_x + 18, grid_y + 14), "[X] Global ipTM (Divides by L_B = 80 aa)", fill=ACCENT_PINK, font=FONT_SM)
+        draw.text((eq_x + 18, grid_y + 48), "Denominator includes 70-aa IDR tail (28.5 Å)", fill=TEXT_MAIN, font=FONT_XS)
+        draw.rounded_rectangle([eq_x + 18, grid_y + 88, eq_x + 18 + int((eq_w - 36) * 0.15), grid_y + 116], radius=6, fill=ACCENT_PINK)
+        draw.text((eq_x + 18, grid_y + 124), "ipTM = 0.1250  (FALSE NEGATIVE!)", fill=ACCENT_PINK, font=FONT_MONO_SM)
+
+        # Score comparison card 2: Contact-Restricted ipSAE (Solution)
+        c2_active = (act_idx >= 2 or step_idx >= 2)
+        cy2 = grid_y + 178
+        draw.rounded_rectangle([eq_x, cy2, x2 - 28, cy2 + 174], radius=12, fill=PANEL_HIGHLIGHT if c2_active else PANEL_BG, outline=EMERALD, width=3 if c2_active else 2)
+        draw.text((eq_x + 18, cy2 + 14), "[OK] Contact-Only ipSAE (PAE_ij < 10.0 Å)", fill=EMERALD, font=FONT_SM)
+        draw.text((eq_x + 18, cy2 + 46), "d0(N_i) uses ONLY N_i = 10 contacting residues!", fill=TEXT_MAIN, font=FONT_XS)
+        bar_fill = min(1.0, 0.8315)
+        draw.rounded_rectangle([eq_x + 18, cy2 + 86, eq_x + 18 + int((eq_w - 36) * bar_fill), cy2 + 114], radius=6, fill=EMERALD)
+        draw.text((eq_x + 18, cy2 + 126), "ipSAE_min = 0.8315 (+0.7065 IDR Rescue!)", fill=EMERALD, font=FONT_MONO_SM)
+
+        # Bottom Bar: 5x5 MiniPAE vs Decoy & 1,090 B Zero-TOAST "PGPA" CSR Storage
+        bot_y = grid_y + 8 * cell + 52
+        draw.rounded_rectangle([x1 + 28, bot_y, x2 - 28, y2 - 24], radius=14, fill=PANEL_BG, outline=SECONDARY_PURPLE, width=2)
+        draw.text((x1 + 48, bot_y + 16), "STORAGE & DECOY GATE: ZERO-TOAST 'PGPA' QUANTIZED CSR CONTAINER", fill=SECONDARY_PURPLE, font=FONT_SM)
+        draw_fitted_line(
+            draw,
+            "• 5x5 MiniPAE Window: 0.475 Å (True 10-aa SLiM)  vs.  25.08 Å (1-Contact Random-Coil Decoy -> REJECTED)",
+            x1 + 48,
+            bot_y + 54,
+            w - 96,
+            EMERALD,
+            (FONT_SM, FONT_XS),
+        )
+        draw_fitted_line(
+            draw,
+            "• PGPA Inline CSR: 211,600 B Dense float4[]  -->  1,090 B Inline Heap Tuple (194.13x Smaller, 0 B TOAST, 16B O(1) Header Peek)",
+            x1 + 48,
+            bot_y + 92,
+            w - 96,
+            LIGHT_BLUE,
+            (FONT_SM, FONT_XS),
+        )
+
+    elif visual_mode == "enzref_pslim":
+        # Visual Canvas for Layer 20: EnzRef Origin-Centered Vector Geometry & pSLiM 8-aa Window Linker Gate
+        draw_fitted_line(
+            draw,
+            "ENZREF VECTOR GEOMETRY (WHY DEAD BINDERS COLLAPSE TO ZERO)",
+            x1 + 28,
+            y1 + 22,
+            w - 56,
+            PRIMARY_BLUE,
+            (FONT_H3, FONT_BODY, FONT_SM),
+        )
+        top_box = (x1 + 28, y1 + 68, x2 - 28, y1 + 410)
         draw.rounded_rectangle(top_box, radius=14, fill=(11, 15, 25), outline=PRIMARY_BLUE, width=2)
 
-        # Left sub-diagram: Single Box Trap (misses pk1 & pk2)
-        lx = x1 + 195
-        ly = y1 + 210
-        draw.text((x1 + 44, y1 + 78), "[X] Single Blind Box (Center of Mass)", fill=ACCENT_PINK, font=FONT_SM)
+        ox, oy = x1 + 135, y1 + 335
+        rx_pt, ry_pt = x1 + 370, y1 + 170
+        px_pt, py_pt = x1 + 690, y1 + 135
+        mx_pt, my_pt = (rx_pt + px_pt) // 2, (ry_pt + py_pt) // 2
+
+        draw.line([(ox, oy), (rx_pt, ry_pt)], fill=LIGHT_BLUE, width=4)
+        draw.line([(ox, oy), (px_pt, py_pt)], fill=SECONDARY_PURPLE, width=4)
+        draw.line([(ox, oy), (mx_pt, my_pt)], fill=AMBER, width=3)
+        draw.line([(rx_pt, ry_pt), (px_pt, py_pt)], fill=EMERALD, width=6)
+
+        draw.ellipse([ox - 12, oy - 12, ox + 12, oy + 12], fill=PRIMARY_BLUE, outline=(255, 255, 255), width=2)
+        draw.text((ox - 30, oy + 18), "Enzyme Origin v_bg", fill=PRIMARY_BLUE, font=FONT_SM)
+
+        draw.ellipse([rx_pt - 10, ry_pt - 10, rx_pt + 10, ry_pt + 10], fill=LIGHT_BLUE, outline=(255, 255, 255), width=2)
+        draw.text((rx_pt - 140, ry_pt - 34), "d_react = r - v_bg", fill=LIGHT_BLUE, font=FONT_SM)
+
+        draw.ellipse([px_pt - 10, py_pt - 10, px_pt + 10, py_pt + 10], fill=SECONDARY_PURPLE, outline=(255, 255, 255), width=2)
+        draw.text((px_pt - 40, py_pt - 34), "d_prod = p - v_bg", fill=SECONDARY_PURPLE, font=FONT_SM)
+
+        draw.text((mx_pt - 85, my_pt - 42), "c_fwd = p - r (Catalytic Vector)", fill=EMERALD, font=FONT_BODY)
+        draw.text((x1 + 310, y1 + 295), "• Dead Binder (p == r)  -->  c_fwd = 0  -->  FluxRank = 0.0000", fill=ACCENT_PINK, font=FONT_SM)
+        draw.text((x1 + 310, y1 + 335), "• Reverse Reaction (p <-> r)  -->  Flux(e,p,r) = -Flux(e,r,p)", fill=EMERALD, font=FONT_SM)
+
+        bot_box = (x1 + 28, y1 + 430, x2 - 28, y2 - 24)
+        draw.rounded_rectangle(bot_box, radius=14, fill=PANEL_BG, outline=SECONDARY_PURPLE, width=2)
+        draw.text((x1 + 48, y1 + 448), "DISORDERED MICROPROTEIN pSLiM 8-AA WINDOW & LINKER SANITY GATE", fill=SECONDARY_PURPLE, font=FONT_SM)
+
+        bar_y = y1 + 505
+        draw.rounded_rectangle([x1 + 48, bar_y, x1 + 260, bar_y + 56], radius=10, fill=(6, 78, 59), outline=EMERALD, width=2)
+        draw.text((x1 + 66, bar_y + 17), "SLiM A [1..8] (M1)", fill=EMERALD, font=FONT_SM)
+
+        draw.rounded_rectangle([x1 + 268, bar_y + 8, x1 + 585, bar_y + 48], radius=8, fill=(30, 41, 59), outline=LIGHT_BLUE, width=2)
+        draw.text((x1 + 284, bar_y + 17), "Linker: GGGSGGGGS (GRAVY -0.4)", fill=LIGHT_BLUE, font=FONT_XS)
+
+        draw.rounded_rectangle([x1 + 593, bar_y, x2 - 48, bar_y + 56], radius=10, fill=(76, 29, 149), outline=SECONDARY_PURPLE, width=2)
+        draw.text((x1 + 610, bar_y + 17), "SLiM B [28..35] (M2)", fill=SECONDARY_PURPLE, font=FONT_SM)
+
+        draw_fitted_line(
+            draw,
+            "• 8-aa ZCA-Whitened Windows (||w||_2 = 1.0) prevent 10x whole-protein motif dilution (617,845 windows/sec)",
+            x1 + 48,
+            bar_y + 82,
+            w - 96,
+            TEXT_MAIN,
+            (FONT_SM, FONT_XS),
+        )
+        draw_fitted_line(
+            draw,
+            "• Linker Gate: GRAVY <= 0.45 & HydroRun < 5 -> Single_Polypeptide_Fusion (else Bicistronic_Operon_Required)",
+            x1 + 48,
+            bar_y + 118,
+            w - 96,
+            EMERALD,
+            (FONT_SM, FONT_XS),
+        )
+
+    elif visual_mode == "multipocket_posebusters":
+        # Visual Canvas for Layer 19: Multi-Pocket SAS Voxel Hashing & 21-Check PoseBusters Dual-Ledger Gate
+        draw_fitted_line(
+            draw,
+            "24-RAY FIBONACCI SAS CONCAVITY vs. SINGLE BLIND DOCKING BOX",
+            x1 + 28,
+            y1 + 22,
+            w - 56,
+            PRIMARY_BLUE,
+            (FONT_H3, FONT_BODY, FONT_SM),
+        )
+        top_box = (x1 + 28, y1 + 68, x2 - 28, y1 + 365)
+        draw.rounded_rectangle(top_box, radius=14, fill=(11, 15, 25), outline=PRIMARY_BLUE, width=2)
+
+        lx, ly = x1 + 210, y1 + 215
+        draw.text((x1 + 48, y1 + 82), "[X] Single Center-of-Mass Box", fill=ACCENT_PINK, font=FONT_SM)
         draw.ellipse([lx - 115, ly - 75, lx - 15, ly + 75], fill=(30, 58, 95), outline=LIGHT_BLUE, width=2)
         draw.ellipse([lx + 15, ly - 75, lx + 115, ly + 75], fill=(58, 28, 75), outline=SECONDARY_PURPLE, width=2)
         draw.rectangle([lx - 45, ly - 45, lx + 45, ly + 45], outline=ACCENT_PINK, width=3)
-        draw.text((lx - 72, ly + 82), "Lands in empty hinge!", fill=ACCENT_PINK, font=FONT_XS)
+        draw.text((lx - 78, ly + 84), "Lands in empty hinge!", fill=ACCENT_PINK, font=FONT_XS)
 
-        # Right sub-diagram: 5.0 Å Voxel Grid + Fibonacci SAS Probes finding pk1 & pk2
-        rx = x1 + 575
-        ry = y1 + 210
-        draw.text((x1 + 400, y1 + 78), "[OK] 5.0 Å Voxel Hash + SAS Concavity (pk1 & pk2)", fill=EMERALD, font=FONT_SM)
+        rx, ry = x1 + 610, y1 + 215
+        draw.text((x1 + 430, y1 + 82), "[OK] 5.0 Å Voxel Grid + 24-Ray SAS (pk1 & pk2)", fill=EMERALD, font=FONT_SM)
         for gx in range(rx - 140, rx + 150, 35):
             draw.line([(gx, ry - 80), (gx, ry + 80)], fill=(25, 35, 52), width=1)
         for gy in range(ry - 80, ry + 90, 35):
@@ -682,85 +879,299 @@ def draw_heuristic_diagram(
         draw.ellipse([rx + 15, ry - 75, rx + 125, ry + 75], fill=(48, 22, 68), outline=SECONDARY_PURPLE, width=2)
         pulse = int(4 * math.sin(t * 4.0))
         draw.ellipse([rx - 85 - pulse, ry - 25 - pulse, rx - 45 + pulse, ry + 15 + pulse], fill=EMERALD, outline=(255, 255, 255), width=2)
-        draw.text((rx - 110, ry + 26), "★ pk1 (MBL Zn2+)", fill=EMERALD, font=FONT_XS)
+        draw.text((rx - 115, ry + 28), "pk1 (MBL Zn2+)", fill=EMERALD, font=FONT_XS)
         draw.ellipse([rx + 45 - pulse, ry - 20 - pulse, rx + 85 + pulse, ry + 20 + pulse], fill=AMBER, outline=(255, 255, 255), width=2)
-        draw.text((rx + 30, ry + 26), "★ pk2 (Rhodanese)", fill=AMBER, font=FONT_XS)
+        draw.text((rx + 25, ry + 28), "pk2 (Rhodanese)", fill=AMBER, font=FONT_XS)
 
-        # Bottom: The 21-Check PoseBusters Physical Gate & Non-Hiding Dual-Ledger Salt Rescue
-        bot_box = (x1 + 24, y1 + 374, x2 - 24, y2 - 20)
+        bot_box = (x1 + 28, y1 + 382, x2 - 28, y2 - 24)
         draw.rounded_rectangle(bot_box, radius=14, fill=PANEL_BG, outline=EMERALD, width=2)
-        draw.text((x1 + 44, y1 + 392), "HEURISTIC 2: 21-CHECK POSEBUSTERS & DUAL-LEDGER SALT RESCUE", fill=EMERALD, font=FONT_BODY)
+        draw.text((x1 + 48, y1 + 398), "21-CHECK POSEBUSTERS & NON-HIDING DUAL-LEDGER SALT RESCUE", fill=EMERALD, font=FONT_SM)
 
         checks = [
-            ("1. Vendor Salt Stripping", "[Na+].Diclofenac  ->  Active Diclofenac (>=3 heavy atoms; bare [Na+] rejected)", EMERALD),
-            ("2. 3x3 Jacobi SVD Ring Planarity", "Best-fit plane RMSD <= 0.25 Å (catches warped aromatic rings instantly)", LIGHT_BLUE),
-            ("3. Pairwise VdW Steric Ratio", "d_ij / (r_vdW,i + r_vdW,j) >= 0.75 (blocks atomic overlaps & clash hallucinations)", AMBER),
-            ("4. Non-Hiding Dual-Ledger Contract", "passes_all_21 = TRUE  |  raw_passes_all_21 = FALSE  |  tag = 'desalted_from_salt'", SECONDARY_PURPLE),
+            ("1. Vendor Salt Stripping", "[Na+].Diclofenac -> Active Drug (>=3 heavy atoms; bare [Na+] rejected)", EMERALD),
+            ("2. 3x3 Jacobi SVD Ring Planarity", "Best-fit aromatic plane RMSD <= 0.25 Å (catches warped rings)", LIGHT_BLUE),
+            ("3. Pairwise VdW Steric Ratio", "d_ij / (r_vdW,i + r_vdW,j) >= 0.75 (blocks steric clash hallucinations)", AMBER),
+            ("4. Non-Hiding Dual Ledger", "passes_all_21 = TRUE  |  raw_passes_all_21 = FALSE  |  'desalted_from_salt'", SECONDARY_PURPLE),
         ]
-        cy_c = y1 + 436
-        for c_title, c_desc, col in checks:
-            draw.rounded_rectangle([x1 + 44, cy_c, x2 - 44, cy_c + 56], radius=10, fill=PANEL_DARK, outline=col, width=2)
-            draw.text((x1 + 60, cy_c + 8), c_title, fill=col, font=FONT_SM)
-            draw.text((x1 + 60, cy_c + 32), fit_single_line(draw, c_desc, w - 125, FONT_XS), fill=TEXT_MAIN, font=FONT_XS)
+        cy_c = y1 + 438
+        for idx_c, (c_title, c_desc, col) in enumerate(checks):
+            is_spot = (idx_c == step_idx % len(checks))
+            draw.rounded_rectangle([x1 + 48, cy_c, x2 - 48, cy_c + 56], radius=10, fill=PANEL_HIGHLIGHT if is_spot else PANEL_DARK, outline=col, width=3 if is_spot else 1)
+            draw.text((x1 + 64, cy_c + 7), c_title, fill=col, font=FONT_SM)
+            draw_fitted_line(draw, c_desc, x1 + 64, cy_c + 32, w - 128, TEXT_MAIN, (FONT_XS, FONT_XXS))
             cy_c += 64
 
-    elif visual_mode == "enzref_pslim":
-        # Top: EnzRef Reference-Centered Vector Geometry (Why Dead Binders Collapse to Zero)
-        draw.text((x1 + 28, y1 + 20), "HEURISTIC 1: ENZREF REFERENCE-CENTERED ROLE CONTRAST", fill=PRIMARY_BLUE, font=FONT_H2)
-        top_box = (x1 + 24, y1 + 64, x2 - 24, y1 + 365)
+    elif visual_mode == "morton_kabsch":
+        # Visual Canvas for Ep 2: 64-Bit Morton Z-Order Curve, 21-Level Octree Pruning & 3x3 Jacobi Kabsch SVD
+        draw_fitted_line(
+            draw,
+            "64-BIT MORTON Z-ORDER OCTREE PRUNING & 3x3 KABSCH SVD",
+            x1 + 28,
+            y1 + 22,
+            w - 56,
+            PRIMARY_BLUE,
+            (FONT_H3, FONT_BODY, FONT_SM),
+        )
+        top_box = (x1 + 28, y1 + 68, x2 - 28, y1 + 420)
         draw.rounded_rectangle(top_box, radius=14, fill=(11, 15, 25), outline=PRIMARY_BLUE, width=2)
 
-        ox, oy = x1 + 125, y1 + 295
-        rx_pt, ry_pt = x1 + 340, y1 + 165
-        px_pt, py_pt = x1 + 610, y1 + 135
-        mx_pt, my_pt = (rx_pt + px_pt) // 2, (ry_pt + py_pt) // 2
+        # Draw 4x4 Octree / Quadtree grid with Z-order curve & 5.0 Å query sphere
+        gx0, gy0 = x1 + 68, y1 + 100
+        g_cell = 68
+        z_pts = []
+        for r in range(4):
+            for c in range(4):
+                rx, ry = gx0 + c * g_cell, gy0 + r * g_cell
+                inside = (1 <= r <= 2) and (1 <= c <= 2)
+                border = (0 <= r <= 3) and (0 <= c <= 3) and not inside and ((r in (1, 2)) or (c in (1, 2)))
+                fc = (6, 78, 59) if inside else (45, 35, 15) if border else (18, 22, 33)
+                oc = EMERALD if inside else AMBER if border else (40, 50, 70)
+                draw.rounded_rectangle([rx, ry, rx + g_cell - 4, ry + g_cell - 4], radius=6, fill=fc, outline=oc, width=2)
+                z_pts.append((rx + g_cell // 2, ry + g_cell // 2))
+        for i in range(len(z_pts) - 1):
+            draw.line([z_pts[i], z_pts[i + 1]], fill=LIGHT_BLUE, width=2)
+        scx, scy = gx0 + 2 * g_cell, gy0 + 2 * g_cell
+        draw.ellipse([scx - 108, scy - 108, scx + 108, scy + 108], outline=ACCENT_PINK, width=3)
 
-        # Vectors from Enzyme Background v_bg (Origin)
-        draw.line([(ox, oy), (rx_pt, ry_pt)], fill=LIGHT_BLUE, width=4)
-        draw.line([(ox, oy), (px_pt, py_pt)], fill=SECONDARY_PURPLE, width=4)
-        draw.line([(ox, oy), (mx_pt, my_pt)], fill=AMBER, width=3)
-        # Directed Forward Role Contrast c_fwd = d_prod - d_react
-        draw.line([(rx_pt, ry_pt), (px_pt, py_pt)], fill=EMERALD, width=5)
+        info_x = gx0 + 4 * g_cell + 36
+        draw.text((info_x, y1 + 104), "Bit-Interleaving (X, Y, Z) -> 64-Bit BIGINT:", fill=LIGHT_BLUE, font=FONT_SM)
+        draw.text((info_x, y1 + 140), "X = 101   Y = 011   Z = 110", fill=TEXT_MAIN, font=FONT_MONO)
+        draw.text((info_x, y1 + 174), "Morton Key = [Z2 Y2 X2 | Z1 Y1 X1 | Z0 Y0 X0]", fill=EMERALD, font=FONT_MONO_SM)
+        draw.text((info_x, y1 + 224), "• Emerald Cubes (fully_inside = TRUE):", fill=EMERALD, font=FONT_SM)
+        draw.text((info_x + 18, y1 + 254), "Skip sqrt(dx^2 + dy^2 + dz^2) completely!", fill=TEXT_MAIN, font=FONT_XS)
+        draw.text((info_x, y1 + 292), "• Dark Cubes (Disjoint Octants):", fill=TEXT_MUTED, font=FONT_SM)
+        draw.text((info_x + 18, y1 + 322), "Pruned in O(log N) -> 74x fewer atoms scanned!", fill=AMBER, font=FONT_XS)
 
-        draw.ellipse([ox - 12, oy - 12, ox + 12, oy + 12], fill=PRIMARY_BLUE, outline=(255, 255, 255), width=2)
-        draw.text((ox - 30, oy + 18), "Enzyme Origin v_bg", fill=PRIMARY_BLUE, font=FONT_XS)
-
-        draw.ellipse([rx_pt - 10, ry_pt - 10, rx_pt + 10, ry_pt + 10], fill=LIGHT_BLUE, outline=(255, 255, 255), width=2)
-        draw.text((rx_pt - 135, ry_pt - 28), "Reactant d_react = r - v_bg", fill=LIGHT_BLUE, font=FONT_XS)
-
-        draw.ellipse([px_pt - 10, py_pt - 10, px_pt + 10, py_pt + 10], fill=SECONDARY_PURPLE, outline=(255, 255, 255), width=2)
-        draw.text((px_pt + 16, py_pt - 10), "Product d_prod = p - v_bg", fill=SECONDARY_PURPLE, font=FONT_XS)
-
-        draw.text((mx_pt - 75, my_pt - 36), "c_fwd = p - r (Turnover Vector!)", fill=EMERALD, font=FONT_SM)
-        draw.text((x1 + 280, y1 + 265), "• Dead Binder (p == r)  -->  c_fwd = 0  -->  FluxRank = 0.000", fill=ACCENT_PINK, font=FONT_SM)
-        draw.text((x1 + 280, y1 + 298), "• Swap(r <-> p)  -->  c_fwd flips sign  -->  Flux(e,p,r) = -Flux(e,r,p)", fill=EMERALD, font=FONT_SM)
-
-        # Bottom: pSLiM Sliding Window ZCA Whitening & Hydrophobic-Core Linker Junction Gate
-        bot_box = (x1 + 24, y1 + 382, x2 - 24, y2 - 20)
-        draw.rounded_rectangle(bot_box, radius=14, fill=PANEL_BG, outline=SECONDARY_PURPLE, width=2)
-        draw.text((x1 + 44, y1 + 400), "HEURISTIC 2: pSLiM 8-AA WINDOW ZCA + LINKER JUNCTION GATE", fill=SECONDARY_PURPLE, font=FONT_BODY)
-
-        # Disordered microprotein bar with Motif A, Flexible Linker, Motif B
-        bar_y = y1 + 460
-        draw.rounded_rectangle([x1 + 54, bar_y, x1 + 254, bar_y + 52], radius=10, fill=(6, 78, 59), outline=EMERALD, width=2)
-        draw.text((x1 + 72, bar_y + 16), "SLiM A [1..8] (M1)", fill=EMERALD, font=FONT_XS)
-
-        draw.rounded_rectangle([x1 + 258, bar_y + 8, x1 + 538, bar_y + 44], radius=8, fill=(30, 41, 59), outline=LIGHT_BLUE, width=2)
-        draw.text((x1 + 280, bar_y + 16), "Linker: GGGSGGGGS (GRAVY -0.4)", fill=LIGHT_BLUE, font=FONT_XS)
-
-        draw.rounded_rectangle([x1 + 542, bar_y, x2 - 54, bar_y + 52], radius=10, fill=(76, 29, 149), outline=SECONDARY_PURPLE, width=2)
-        draw.text((x1 + 558, bar_y + 16), "SLiM B [28..35] (M2)", fill=SECONDARY_PURPLE, font=FONT_XS)
-
-        rules = (
-            "Why 8-aa Windows? Full-protein averaging dilutes an 8-aa motif by 10x; Sine-bell + ZCA whitening restores unit vec16. "
-            "Linker Gate: If linker GRAVY > 0.45 or has >=5 hydrophobic residues [IVLFWMC], fusion slices a buried core and precipitates—so "
-            "we switch from Single_Polypeptide_Fusion to Bicistronic_Operon_Required."
+        bot_box = (x1 + 28, y1 + 440, x2 - 28, y2 - 24)
+        draw.rounded_rectangle(bot_box, radius=14, fill=PANEL_BG, outline=EMERALD, width=2)
+        draw.text((x1 + 48, y1 + 460), "3x3 JACOBI SVD KABSCH ALIGNMENT: H = P^T Q  -->  R = V * diag(1, 1, det(VU^T)) * U^T", fill=EMERALD, font=FONT_SM)
+        draw_fitted_line(
+            draw,
+            "• Checking sign of det(V U^T) prevents mirror-image D-amino acid reflection (chirality bug)!",
+            x1 + 48,
+            y1 + 510,
+            w - 96,
+            TEXT_MAIN,
+            (FONT_SM, FONT_XS),
         )
-        draw_wrapped_box(draw, rules, x1 + 48, y1 + 530, w - 96, FONT_XS, TEXT_MAIN, line_h=26, max_lines=4)
+        draw_fitted_line(
+            draw,
+            "• Aligns catalytic triads across 2.34M proteins in microseconds inside PostgreSQL shared buffers.",
+            x1 + 48,
+            y1 + 555,
+            w - 96,
+            LIGHT_BLUE,
+            (FONT_SM, FONT_XS),
+        )
+
+    elif visual_mode == "zca_whitening":
+        # Visual Canvas for Ep 4: The 15-D Anisotropic SwiGLU Cone vs Full Symmetric ZCA Whitening Sphere
+        draw_fitted_line(
+            draw,
+            "UNTANGLING THE ANISOTROPIC CONE WITH SYMMETRIC ZCA WHITENING",
+            x1 + 28,
+            y1 + 22,
+            w - 56,
+            PRIMARY_BLUE,
+            (FONT_H3, FONT_BODY, FONT_SM),
+        )
+        top_box = (x1 + 28, y1 + 68, x2 - 28, y1 + 430)
+        draw.rounded_rectangle(top_box, radius=14, fill=(11, 15, 25), outline=PRIMARY_BLUE, width=2)
+
+        # Left: Narrow Anisotropic Cone (PR = 5.8 / 1280 dims, mean cos = 0.94)
+        lx, ly = x1 + 215, y1 + 265
+        draw.text((x1 + 50, y1 + 86), "[X] Raw 1,280-D ESM-2 Cone (PR = 5.8 dims)", fill=ACCENT_PINK, font=FONT_SM)
+        draw.polygon([(lx - 130, ly + 95), (lx + 95, ly - 95), (lx + 135, ly - 45)], fill=(65, 20, 42), outline=ACCENT_PINK)
+        for dx, dy in [(-20, 20), (15, -18), (45, -42), (70, -65), (90, -78), (30, -25)]:
+            draw.ellipse([lx + dx - 5, ly + dy - 5, lx + dx + 5, ly + dy + 5], fill=AMBER)
+        draw.text((x1 + 50, y1 + 382), "Unrelated proteins score 0.94 cosine!", fill=ACCENT_PINK, font=FONT_XS)
+
+        # Right: Isotropic ZCA-Whitened Unit Sphere (W = V * Lambda^{-1/2} * V^T)
+        rx, ry = x1 + 625, y1 + 255
+        draw.text((x1 + 445, y1 + 86), "[OK] ZCA-Whitened Sphere (W = V Lambda^-1/2 V^T)", fill=EMERALD, font=FONT_SM)
+        draw.ellipse([rx - 110, ry - 110, rx + 110, ry + 110], fill=(10, 48, 42), outline=EMERALD, width=3)
+        for ang in range(0, 360, 45):
+            rad_a = math.radians(ang)
+            px = int(rx + 82 * math.cos(rad_a))
+            py = int(ry + 82 * math.sin(rad_a))
+            draw.line([(rx, ry), (px, py)], fill=PRIMARY_TEAL, width=2)
+            draw.ellipse([px - 6, py - 6, px + 6, py + 6], fill=LIGHT_BLUE, outline=(255, 255, 255), width=1)
+        draw.text((x1 + 445, y1 + 382), "SCOPe-40 Top-1 Superfamily: 58.55% -> 88.32%!", fill=EMERALD, font=FONT_XS)
+
+        bot_box = (x1 + 28, y1 + 450, x2 - 28, y2 - 24)
+        draw.rounded_rectangle(bot_box, radius=14, fill=PANEL_BG, outline=SECONDARY_PURPLE, width=2)
+        draw.text((x1 + 48, y1 + 470), "1,304-BYTE ZERO-TOAST BioVecInt8G128 VARLENA & 1-BIT RABITQ PRISM", fill=SECONDARY_PURPLE, font=FONT_SM)
+        draw_fitted_line(
+            draw,
+            "• RaBitQ Error Bound eps Tightens 2.78x (2.8108 -> 1.0118) once off-diagonal covariance is removed",
+            x1 + 48,
+            y1 + 516,
+            w - 96,
+            TEXT_MAIN,
+            (FONT_SM, FONT_XS),
+        )
+        draw_fitted_line(
+            draw,
+            "• Group-wise int8 quantization (G=128) fits 1,280 dims in 1,304 B (< 2,000 B TOAST threshold, 0 B TOAST I/O!)",
+            x1 + 48,
+            y1 + 558,
+            w - 96,
+            EMERALD,
+            (FONT_SM, FONT_XS),
+        )
+
+    elif visual_mode == "allostery_csr":
+        # Visual Canvas for Ep 3: 500 ns 5-LOX Allosteric Triterpenoids & CSR Sparse Graph Diff
+        draw_fitted_line(
+            draw,
+            "ALLOSTERIC WHISPERS: 20 Å DISTAL BINDING & CSR SPARSE GRAPH DIFF",
+            x1 + 28,
+            y1 + 22,
+            w - 56,
+            PRIMARY_BLUE,
+            (FONT_H3, FONT_BODY, FONT_SM),
+        )
+        top_box = (x1 + 28, y1 + 68, x2 - 28, y1 + 420)
+        draw.rounded_rectangle(top_box, radius=14, fill=(11, 15, 25), outline=PRIMARY_BLUE, width=2)
+
+        # Draw 20 Å allosteric pathway from Triterpenoid (AKBA / Amyrin) -> Cryptic Hinges (Ile126, Val29, Leu66) -> Catalytic Fe2+ Core
+        nodes = [
+            (x1 + 145, y1 + 245, "Distal Allosteric Site\n(AKBA / alpha-Amyrin)", SECONDARY_PURPLE),
+            (x1 + 430, y1 + 165, "Cryptic Hinge Ile126\n(& Val29 / Leu66)", AMBER),
+            (x1 + 715, y1 + 245, "Catalytic Fe2+ Core\n(20 Å Away -> Frozen!)", EMERALD),
+        ]
+        draw.line([(nodes[0][0], nodes[0][1]), (nodes[1][0], nodes[1][1])], fill=AMBER, width=5)
+        draw.line([(nodes[1][0], nodes[1][1]), (nodes[2][0], nodes[2][1])], fill=EMERALD, width=5)
+        for nx, ny, lbl, col in nodes:
+            draw.ellipse([nx - 36, ny - 36, nx + 36, ny + 36], fill=PANEL_DARK, outline=col, width=4)
+            for idx_l, l_part in enumerate(lbl.split("\n")):
+                draw.text((nx - 85, ny + 48 + idx_l * 24), l_part, fill=col if idx_l == 0 else TEXT_MAIN, font=FONT_XS)
+
+        bot_box = (x1 + 28, y1 + 440, x2 - 28, y2 - 24)
+        draw.rounded_rectangle(bot_box, radius=14, fill=PANEL_BG, outline=EMERALD, width=2)
+        draw.text((x1 + 48, y1 + 460), "DOUBLE-ENTRY THERMODYNAMIC AUDIT & CSR SET-DIFFERENCING", fill=EMERALD, font=FONT_SM)
+        draw_fitted_line(
+            draw,
+            "• Cycle Closure: Sum(Per-Residue Gas + Polar) vs. Global Delta-G isolates the +22 kcal/mol cavity shift",
+            x1 + 48,
+            y1 + 508,
+            w - 96,
+            TEXT_MAIN,
+            (FONT_SM, FONT_XS),
+        )
+        draw_fitted_line(
+            draw,
+            "• Opposite Forces, Same Cryptic Locks: AKBA pulls ionically (+0.41) while Amyrin locks hydrophobically (-0.68)",
+            x1 + 48,
+            y1 + 552,
+            w - 96,
+            LIGHT_BLUE,
+            (FONT_SM, FONT_XS),
+        )
 
     else:
-        # For all other modes, render the dual-organism 3D comparison stage directly!
-        draw_dual_organism_comparison_stage(draw, box, pair_cfg, t, local_t, compact=False)
+        # Default / Ep 1 (`central_dogma_gist`): Soda-Lake Charge Armor (pI 4.38) & 1D Genomic Safe-Harbor Intervals
+        draw_fitted_line(
+            draw,
+            "EXTREMOPHILE BRINE ARMOR (pI 4.38) & 1D SAFE-HARBOR INTERVAL TREES",
+            x1 + 28,
+            y1 + 22,
+            w - 56,
+            PRIMARY_BLUE,
+            (FONT_H3, FONT_BODY, FONT_SM),
+        )
+        top_box = (x1 + 28, y1 + 68, x2 - 28, y1 + 410)
+        draw.rounded_rectangle(top_box, radius=14, fill=(11, 15, 25), outline=PRIMARY_BLUE, width=2)
+
+        # Left: Mesophilic Enzyme in 3.5 M NaCl (Precipitates) vs Right: Lake Magadi D3SWG7 (Acidic Asp/Glu Hydration Shield)
+        lx, ly = x1 + 215, y1 + 240
+        draw.text((x1 + 52, y1 + 84), "[X] Standard Enzyme (pI 6.40 in 3.5 M Salt)", fill=ACCENT_PINK, font=FONT_SM)
+        draw.ellipse([lx - 75, ly - 75, lx + 75, ly + 75], fill=(60, 25, 38), outline=ACCENT_PINK, width=3)
+        draw.text((lx - 85, ly + 90), "Salt strips water -> Clumps!", fill=ACCENT_PINK, font=FONT_XS)
+
+        rx, ry = x1 + 615, y1 + 240
+        draw.text((x1 + 430, y1 + 84), "[OK] Lake Magadi D3SWG7 (pI 4.38 Brine Shield)", fill=EMERALD, font=FONT_SM)
+        draw.ellipse([rx - 88, ry - 88, rx + 88, ry + 88], outline=ORANGE, width=3)
+        draw.ellipse([rx - 65, ry - 65, rx + 65, ry + 65], fill=(10, 58, 48), outline=EMERALD, width=3)
+        draw.text((rx - 48, ry - 10), "0.44 Å Triad", fill=EMERALD, font=FONT_XS)
+        draw.text((rx - 115, ry + 98), "Asp-/Glu- Carboxylate Cage Holds H2O!", fill=ORANGE, font=FONT_XS)
+
+        bot_box = (x1 + 28, y1 + 430, x2 - 28, y2 - 24)
+        draw.rounded_rectangle(bot_box, radius=14, fill=PANEL_BG, outline=SECONDARY_PURPLE, width=2)
+        draw.text((x1 + 48, y1 + 450), "1D GENOMIC SAFE-HARBOR INTERVAL TREE (int4range GiST && and <->)", fill=SECONDARY_PURPLE, font=FONT_SM)
+        draw.line([(x1 + 58, y1 + 525), (x2 - 58, y1 + 525)], fill=TEXT_MUTED, width=3)
+        draw.rounded_rectangle([x1 + 90, y1 + 503, x1 + 260, y1 + 547], radius=8, fill=(20, 48, 82), outline=LIGHT_BLUE, width=2)
+        draw.text((x1 + 112, y1 + 515), "Promoter [8k..9.2k]", fill=LIGHT_BLUE, font=FONT_XS)
+        draw.rounded_rectangle([x1 + 320, y1 + 500, x1 + 545, y1 + 550], radius=8, fill=(6, 78, 59), outline=EMERALD, width=3)
+        draw.text((x1 + 340, y1 + 515), "Safe Harbor [10.5k..11.8k]", fill=EMERALD, font=FONT_XS)
+        draw.rounded_rectangle([x1 + 610, y1 + 503, x2 - 70, y1 + 547], radius=8, fill=(75, 20, 38), outline=ACCENT_PINK, width=2)
+        draw.text((x1 + 630, y1 + 515), "Oncogene (Zero Overlap!)", fill=ACCENT_PINK, font=FONT_XS)
+        draw_fitted_line(
+            draw,
+            "• Henderson-Hasselbalch bisection + 1D GiST interval trees run directly on PostgreSQL 8 KB heap pages.",
+            x1 + 48,
+            y1 + 575,
+            w - 96,
+            TEXT_MAIN,
+            (FONT_SM, FONT_XS),
+        )
+
+
+def draw_progressive_left_slide(
+    draw: ImageDraw.ImageDraw,
+    box: Tuple[int, int, int, int],
+    section_badge: str,
+    accent_color: Tuple[int, int, int],
+    items: List[Tuple[str, str, Optional[str]]],
+    active_idx: int,
+    lead_summary: Optional[str] = None,
+) -> None:
+    """
+    Renders a clean, low-density progressive slide on the left panel where ONLY `active_idx`
+    is expanded as the main spotlight card (synchronized with the narrator's current sentence),
+    while the other items appear as compact 1-line progress pills.
+    """
+    x1, y1, x2, y2 = box
+    w = x2 - x1
+    draw.rounded_rectangle([x1, y1, x2, y2], radius=18, fill=PANEL_BG, outline=accent_color, width=2)
+
+    # Top header + Slide progress dots
+    draw_fitted_line(draw, section_badge, x1 + 28, y1 + 22, w - 180, accent_color, (FONT_H2, FONT_H3, FONT_BODY))
+    pill_txt = f"Focus Beat {active_idx + 1} of {len(items)}"
+    pw = text_width(draw, pill_txt, FONT_XS) + 24
+    draw.rounded_rectangle([x2 - pw - 24, y1 + 20, x2 - 24, y1 + 52], radius=12, fill=PANEL_DARK, outline=accent_color, width=2)
+    draw.text((x2 - pw - 12, y1 + 28), pill_txt, fill=TEXT_MAIN, font=FONT_XS)
+
+    cur_y = y1 + 68
+    if lead_summary:
+        cur_y = draw_wrapped_box(draw, lead_summary, x1 + 28, cur_y, w - 56, FONT_SM, TEXT_MUTED, line_h=26, max_lines=3)
+        cur_y += 12
+
+    for idx, (head, body, extra) in enumerate(items):
+        is_active = idx == active_idx
+        is_done = idx < active_idx
+        if is_active:
+            # Large, spacious spotlight card for the sentence currently being spoken!
+            card_h = 286 if extra else 224
+            card_bot = min(y2 - 24, cur_y + card_h)
+            draw.rounded_rectangle([x1 + 24, cur_y, x2 - 24, card_bot], radius=16, fill=PANEL_HIGHLIGHT, outline=PRIMARY_BLUE, width=3)
+            badge = f"NOW EXPLAINING ({idx + 1}/{len(items)})"
+            draw.text((x1 + 48, cur_y + 16), badge, fill=AMBER, font=FONT_XS)
+            draw_fitted_line(draw, head, x1 + 48, cur_y + 44, w - 96, (255, 255, 255), (FONT_H3, FONT_BODY, FONT_SM))
+            by = draw_wrapped_box(draw, body, x1 + 48, cur_y + 84, w - 96, FONT_BODY, TEXT_MAIN, line_h=28, max_lines=3 if extra else 4)
+            if extra:
+                draw_wrapped_box(draw, extra, x1 + 48, by + 10, w - 96, FONT_SM, EMERALD, line_h=24, max_lines=2)
+            cur_y = card_bot + 14
+        else:
+            # Compact 1-line progress bar pill (zero wall-of-text clutter!)
+            pill_h = 54
+            if cur_y + pill_h > y2 - 18:
+                break
+            status_tag = "[OK]" if is_done else f"[{idx + 1}]"
+            st_col = EMERALD if is_done else TEXT_MUTED
+            draw.rounded_rectangle([x1 + 24, cur_y, x2 - 24, cur_y + pill_h], radius=10, fill=PANEL_DARK, outline=EMERALD if is_done else (45, 55, 78), width=1)
+            draw_fitted_line(draw, f"{status_tag}  {head}", x1 + 44, cur_y + 16, w - 88, st_col, (FONT_SM, FONT_XS))
+            cur_y += pill_h + 12
 
 
 def render_frame(
@@ -787,41 +1198,45 @@ def render_frame(
     visual_mode = cfg.get("visual_mode", "multipocket_posebusters")
     act_steps = cfg.get("act_steps", DEFAULT_ACT_STEPS)
     pair_cfg = cfg.get("organism_pair", {})
-    series_tag = cfg.get("series_tag", "🧬 pg_bio Science & Heuristics Series — Teaching Computational Biology")
+    series_tag = cfg.get("series_tag", "pg_bio Science & Heuristics Series — Teaching Computational Biology")
 
-    draw_header(draw, layer, act_idx, act_steps, progress, t, total_sec)
+    # Determine speech-synchronized chunk & sub-slide index
+    c_idx, total_chunks, _ = draw_caption_and_footer(draw, narration, local_t, series_tag)
 
     if act_idx == 0:
-        # ACT I: THE PARADOX / REAL-WORLD MYSTERY + LIVE 3D ORGANISM COMPARISON MOTION
-        draw_smart_title(draw, display_title, 56, 98, W - 112, PRIMARY_BLUE)
+        # ACT I: THE PARADOX — 4 Progressive Sub-Slides synced directly to the spoken sentences + 2D Concept Canvas (NO 3D spinning!)
+        bullets = cfg.get("bullets", [])[:4]
+        n_sub = max(1, len(bullets))
+        sub_idx = min(n_sub - 1, int(local_t * n_sub))
+        draw_header(draw, layer, act_idx, act_steps, progress, t, total_sec, sub_idx, n_sub)
+
+        draw_smart_title(draw, display_title, 56, 96, W - 112, PRIMARY_BLUE)
         sub = cfg.get("subtitle", "A Veritasium-Style Journey into Molecular Heuristics")
-        draw.text((56, 148), fit_single_line(draw, sub, W - 112, FONT_H2), fill=SECONDARY_PURPLE, font=FONT_H2)
+        draw_fitted_line(draw, sub, 56, 144, W - 112, SECONDARY_PURPLE, (FONT_H3, FONT_BODY, FONT_SM))
 
-        # Left Panel: The Biological Paradox & Intuition Hook
-        draw.rounded_rectangle([56, 198, 930, 898], radius=18, fill=PANEL_BG, outline=ACCENT_PINK, width=2)
-        paradox_heading = cfg.get("act1_heading", "ACT I: THE BIOLOGICAL PARADOX")
-        draw.text((84, 222), paradox_heading, fill=ACCENT_PINK, font=FONT_H2)
-        y = draw_wrapped_box(draw, cfg["bio_problem"], 84, 270, 816, FONT_BODY, TEXT_MAIN, line_h=33, max_lines=6)
+        chunks = split_narration_chunks(narration, max_words_per_chunk=22)
+        items = [
+            (
+                b.lstrip("• ").strip(),
+                chunks[min(i, len(chunks) - 1)] if chunks else cfg["bio_problem"],
+                f"Target Discovery Benchmark: {cfg['speedup']}" if i == sub_idx else None,
+            )
+            for i, b in enumerate(bullets)
+        ]
+        draw_progressive_left_slide(
+            draw,
+            (56, 188, 930, 898),
+            "ACT I: THE BIOLOGICAL PARADOX",
+            ACCENT_PINK,
+            items,
+            sub_idx,
+        )
 
-        draw.rounded_rectangle([84, max(488, y + 14), 902, 874], radius=14, fill=PANEL_DARK, outline=PRIMARY_BLUE, width=2)
-        box_title = cfg.get("act1_box_title", "Key Questions We Will Solve Together:")
-        draw.text((108, max(506, y + 30)), box_title, fill=PRIMARY_BLUE, font=FONT_BODY)
-        by = max(548, y + 72)
-        for b in cfg.get("bullets", [])[:4]:
-            draw.text((108, by), fit_single_line(draw, b, 770, FONT_SM), fill=TEXT_MAIN, font=FONT_SM)
-            by += 36
-
-        # Right Panel: Live 3D Dual-Organism Comparison Stage (rotating in sync!)
-        draw.rounded_rectangle([960, 198, 1864, 898], radius=18, fill=PANEL_DARK, outline=PRIMARY_BLUE, width=2)
-        draw_dual_organism_comparison_stage(draw, (960, 198, 1864, 898), pair_cfg, t, local_t, compact=False)
+        draw.rounded_rectangle([960, 188, 1864, 898], radius=18, fill=PANEL_DARK, outline=PRIMARY_BLUE, width=2)
+        draw_topic_2d_canvas(draw, visual_mode, (960, 188, 1864, 898), act_idx, sub_idx, t, local_t, cfg)
 
     elif act_idx == 1:
-        # ACT II: THE HIDDEN TRAP (Why Naive Heuristics Fail — Story-Specific, NOT repetitive anti-Python!)
-        act2_title = cfg.get("act2_title", "Act II: Why Naive Intuition & Raw Scores Fall Into a Trap")
-        draw_smart_title(draw, act2_title, 56, 98, W - 112, PRIMARY_BLUE)
-
-        # Left Panel: The Naive Trap vs The Physical Reality
-        draw.rounded_rectangle([56, 168, 930, 898], radius=18, fill=PANEL_BG, outline=ACCENT_PINK, width=2)
+        # ACT II: THE HIDDEN TRAP — 4 Progressive Sub-Slides (1 Trap Card spotlighted per slide in sync with speech!)
         trap_cards = cfg.get(
             "trap_cards",
             [
@@ -830,110 +1245,126 @@ def render_frame(
                 ("The Consequence in the Lab", "90% of top-ranked computer hits fail or precipitate the moment they enter a test tube."),
                 ("The Heuristic Shift", "Decompose the geometry and center on the reference state before scoring."),
             ],
-        )
-        draw.text((84, 194), "WHERE NAIVE ALGORITHMS GO BLIND", fill=ACCENT_PINK, font=FONT_H2)
-        for idx, (t_title, t_desc) in enumerate(trap_cards[:4]):
-            top = 248 + idx * 154
-            col = EMERALD if idx == 3 else ACCENT_PINK if idx in (1, 2) else LIGHT_BLUE
-            draw.rounded_rectangle([84, top, 902, top + 136], radius=12, fill=PANEL_DARK, outline=col, width=2)
-            draw.text((108, top + 14), fit_single_line(draw, f"{idx+1}. {t_title}", 770, FONT_BODY), fill=col, font=FONT_BODY)
-            draw_wrapped_box(draw, t_desc, 108, top + 52, 770, FONT_SM, TEXT_MAIN, line_h=26, max_lines=3)
+        )[:4]
+        n_sub = max(1, len(trap_cards))
+        sub_idx = min(n_sub - 1, int(local_t * n_sub))
+        draw_header(draw, layer, act_idx, act_steps, progress, t, total_sec, sub_idx, n_sub)
 
-        # Right Panel: Visual Heuristic Diagram
+        act2_title = cfg.get("act2_title", f"Act II: {trap_cards[sub_idx][0]}")
+        draw_smart_title(draw, act2_title, 56, 98, W - 112, PRIMARY_BLUE)
+
+        items = [(t_title, t_desc, None) for t_title, t_desc in trap_cards]
+        draw_progressive_left_slide(
+            draw,
+            (56, 168, 930, 898),
+            "WHERE NAIVE ALGORITHMS GO BLIND",
+            ACCENT_PINK,
+            items,
+            sub_idx,
+        )
+
         draw.rounded_rectangle([960, 168, 1864, 898], radius=18, fill=PANEL_DARK, outline=PRIMARY_BLUE, width=2)
-        draw_heuristic_diagram(draw, visual_mode, (960, 168, 1864, 898), t, local_t, pair_cfg)
+        draw_topic_2d_canvas(draw, visual_mode, (960, 168, 1864, 898), act_idx, sub_idx, t, local_t, cfg)
 
     elif act_idx == 2:
-        # ACT III: THE HEURISTIC EUREKA (Step-by-Step Intuitive Breakdown of Why the Technique Works)
-        act3_title = cfg.get("act3_title", "Act III: How the Heuristic Actually Works (Step by Step)")
+        # ACT III: THE HEURISTIC EUREKA — 3 Progressive Sub-Slides (1 Step spotlighted at a time!)
+        mappings = cfg.get("rosetta_mappings", [])[:3]
+        n_sub = max(1, len(mappings))
+        sub_idx = min(n_sub - 1, int(local_t * n_sub))
+        draw_header(draw, layer, act_idx, act_steps, progress, t, total_sec, sub_idx, n_sub)
+
+        act3_title = cfg.get("act3_title", f"Act III: {mappings[sub_idx][0]}" if mappings else "Act III: Step-by-Step Heuristic")
         draw_smart_title(draw, act3_title, 56, 98, W - 112, PRIMARY_BLUE)
 
-        draw.rounded_rectangle([56, 168, 980, 898], radius=18, fill=PANEL_BG, outline=SECONDARY_PURPLE, width=2)
-        draw.text((84, 194), "STEP-BY-STEP HEURISTIC BREAKDOWN", fill=SECONDARY_PURPLE, font=FONT_H2)
+        items = [(m_title, f"Physical Intuition: {m_why}", f"Mathematical Invariant: {m_how}") for m_title, m_why, m_how in mappings]
+        draw_progressive_left_slide(
+            draw,
+            (56, 168, 930, 898),
+            "STEP-BY-STEP HEURISTIC BREAKDOWN",
+            SECONDARY_PURPLE,
+            items,
+            sub_idx,
+        )
 
-        mappings = cfg.get("rosetta_mappings", [])
-        for idx, (m_title, m_why, m_how) in enumerate(mappings[:3]):
-            top = 248 + idx * 208
-            draw.rounded_rectangle([84, top, 952, top + 190], radius=14, fill=PANEL_DARK, outline=PRIMARY_BLUE, width=2)
-            draw.text((108, top + 14), fit_single_line(draw, m_title, 820, FONT_BODY), fill=PRIMARY_BLUE, font=FONT_BODY)
-            draw_wrapped_box(draw, f"Intuition: {m_why}", 108, top + 52, 820, FONT_SM, TEXT_MAIN, line_h=25, max_lines=2)
-            draw_wrapped_box(draw, f"Why It Works: {m_how}", 108, top + 114, 820, FONT_SM, EMERALD, line_h=25, max_lines=2)
-
-        draw.rounded_rectangle([1008, 168, 1864, 898], radius=18, fill=PANEL_DARK, outline=EMERALD, width=2)
-        draw_heuristic_diagram(draw, visual_mode, (1008, 168, 1864, 898), t, local_t, pair_cfg)
+        draw.rounded_rectangle([960, 168, 1864, 898], radius=18, fill=PANEL_DARK, outline=EMERALD, width=2)
+        draw_topic_2d_canvas(draw, visual_mode, (960, 168, 1864, 898), act_idx, sub_idx, t, local_t, cfg)
 
     elif act_idx == 3:
-        # ACT IV: SIDE-BY-SIDE 3D ORGANISM COMPARISON MOTION + EXPRESSING THE HEURISTIC IN SQL
-        act4_title = cfg.get("act4_title", "Act IV: Watching the Heuristic Align Two Extremophile Organisms in 3D")
+        # ACT IV: THE FOCUSED 3D STRUCTURAL PROOF + DECLARATIVE SQL QUERY
+        # (This is the ONLY act with 3D organism motion, and it locks onto the pocket at local_t >= 0.55!)
+        sub_idx = 0 if local_t < 0.35 else (1 if local_t < 0.65 else 2)
+        draw_header(draw, layer, act_idx, act_steps, progress, t, total_sec, sub_idx, 3)
+
+        act4_title = cfg.get("act4_title", "Act IV: Focused 3D Structural Alignment & Declarative Query")
         draw_smart_title(draw, act4_title, 56, 98, W - 112, PRIMARY_BLUE)
 
-        # Left half: Live SQL Terminal expressing the heuristic cleanly
-        draw.rounded_rectangle([56, 168, 980, 898], radius=18, fill=PANEL_DARK, outline=PRIMARY_BLUE, width=2)
+        draw.rounded_rectangle([56, 168, 956, 898], radius=18, fill=PANEL_DARK, outline=PRIMARY_BLUE, width=2)
         draw.ellipse([84, 192, 104, 212], fill=ACCENT_PINK)
         draw.ellipse([116, 192, 136, 212], fill=AMBER)
         draw.ellipse([148, 192, 168, 212], fill=PRIMARY_TEAL)
         draw.text((190, 190), "Expressing the Heuristic as a Declarative Query", fill=TEXT_MUTED, font=FONT_MONO_SM)
-        draw.line([(56, 228), (980, 228)], fill=(45, 55, 78), width=2)
+        draw.line([(56, 228), (956, 228)], fill=(45, 55, 78), width=2)
 
         sql_lines = cfg.get("sql_lines", [])
-        visible_lines = max(1, min(len(sql_lines), int((local_t / 0.28) * len(sql_lines)) + 1))
+        visible_lines = max(1, min(len(sql_lines), int((local_t / 0.32) * len(sql_lines)) + 1))
         sy = 246
         for idx, line in enumerate(sql_lines[:visible_lines]):
-            cursor_str = " █" if (idx == visible_lines - 1 and local_t < 0.28 and int(t * 6) % 2 == 0) else ""
-            line_fit = fit_single_line(draw, line + cursor_str, 880, FONT_MONO_SM)
-            draw.text(
-                (80, sy),
-                line_fit,
-                fill=SECONDARY_PURPLE if any(k in line for k in ("SELECT", "FROM", "WHERE", "WITH", "JOIN")) else TEXT_MAIN,
-                font=FONT_MONO_SM,
-            )
+            cursor_str = " █" if (idx == visible_lines - 1 and local_t < 0.32 and int(t * 6) % 2 == 0) else ""
+            col = SECONDARY_PURPLE if any(k in line for k in ("SELECT", "FROM", "WHERE", "WITH", "JOIN", "LATERAL")) else TEXT_MAIN
+            draw_fitted_line(draw, line + cursor_str, 78, sy, 856, col, (FONT_MONO_SM, FONT_XS, FONT_XXS))
             sy += 28
 
-        if local_t >= 0.25:
+        if local_t >= 0.30:
             res_lines = cfg.get("sql_results", [])
-            ry = 520
+            ry = 512
             for idx, rline in enumerate(res_lines):
                 color = EMERALD if idx == len(res_lines) - 1 else AMBER if idx in (3, 4) else TEXT_MAIN
-                draw.text((80, ry), fit_single_line(draw, rline, 880, FONT_MONO_SM), fill=color, font=FONT_MONO_SM)
+                draw_fitted_line(draw, rline, 78, ry, 856, color, (FONT_MONO_SM, FONT_XS, FONT_XXS))
                 ry += 27
 
-            draw.rounded_rectangle([80, 765, 956, 874], radius=12, fill=PANEL_BG, outline=EMERALD, width=2)
-            draw.text((100, 780), "Heuristic Realization:", fill=EMERALD, font=FONT_SM)
-            draw_wrapped_box(draw, cfg["cs_mechanism"], 100, 810, 836, FONT_XS, TEXT_MAIN, line_h=22, max_lines=2)
+            draw.rounded_rectangle([78, 748, 934, 876], radius=12, fill=PANEL_HIGHLIGHT, outline=EMERALD, width=2)
+            focus_note = (
+                "3D Stage Locked on Conserved Pocket: Notice how the catalytic residues align within <0.6 Å!"
+                if local_t >= 0.55
+                else "3D Stage Aligning: Rotating Kabsch-superposed C-alpha backbones into shared pocket frame..."
+            )
+            draw.text((98, 762), focus_note, fill=EMERALD, font=FONT_SM)
+            draw_wrapped_box(draw, cfg["cs_mechanism"], 98, 796, 816, FONT_XS, TEXT_MAIN, line_h=23, max_lines=3)
 
-        # Right half: Live Synchronized 3D Dual-Organism Motion
-        draw.rounded_rectangle([1008, 168, 1864, 898], radius=18, fill=PANEL_DARK, outline=EMERALD, width=2)
-        draw_dual_organism_comparison_stage(draw, (1008, 168, 1864, 898), pair_cfg, t, local_t, compact=True)
+        # Focused 3D Dual-Organism Stage (rotates smoothly then locks onto pocket!)
+        draw.rounded_rectangle([984, 168, 1864, 898], radius=18, fill=PANEL_DARK, outline=EMERALD, width=2)
+        draw_dual_organism_comparison_stage(draw, (984, 168, 1864, 898), pair_cfg, t, local_t, compact=True)
 
     else:
-        # ACT V: REAL-WORLD SCIENTIFIC DISCOVERY & RESEARCH TAKEAWAYS
-        act5_title = cfg.get("act5_title", "Act V: From Mathematical Insight to Extremophile Discovery")
-        draw_smart_title(draw, act5_title, 56, 98, W - 112, PRIMARY_BLUE)
-
-        # Left Panel: What the Heuristic Unlocked
-        draw.rounded_rectangle([56, 168, 980, 898], radius=18, fill=PANEL_BG, outline=EMERALD, width=2)
-        draw.text((84, 196), "WHAT THIS HEURISTIC REVEALS IN NATURE", fill=EMERALD, font=FONT_H2)
-
+        # ACT V: DISCOVERY IMPACT & RESEARCH TAKEAWAYS — 3 Progressive Sub-Slides + 2D Summary Canvas (NO 3D spinning!)
         takeaways = cfg.get(
             "takeaways",
             [
                 ("1. Nature Conserves 3D Physics, Not 1D Spelling", "Across 3.5 billion years, extremophiles rewrite 70% of their surface sequence to survive salt, acid, or heat while locking the catalytic pocket within 0.5 Å."),
-                ("2. Good Heuristics Expose Hidden Invariants", "Whether it is 24-ray SAS concavity, reference-centered reaction vectors, or ZCA whitening, the right math makes false positives collapse to zero."),
+                ("2. Good Heuristics Expose Hidden Invariants", "Whether it is contact-restricted ipSAE, 24-ray SAS concavity, reference-centered EnzRef vectors, or ZCA whitening, the right math makes false positives collapse to zero."),
                 ("3. Interactive Research in Your Browser", f"Rotate these aligned organisms in 3D at {BLOG_URL}/pg-bio-videos/ and explore the open-source research engine at {REPO_URL}."),
             ],
+        )[:3]
+        n_sub = max(1, len(takeaways))
+        sub_idx = min(n_sub - 1, int(local_t * n_sub))
+        draw_header(draw, layer, act_idx, act_steps, progress, t, total_sec, sub_idx, n_sub)
+
+        act5_title = cfg.get("act5_title", "Act V: From Mathematical Insight to Extremophile Discovery")
+        draw_smart_title(draw, act5_title, 56, 98, W - 112, PRIMARY_BLUE)
+
+        items = [(t_head, t_body, f"Verified Result: {cfg['speedup']}") for t_head, t_body in takeaways]
+        draw_progressive_left_slide(
+            draw,
+            (56, 168, 930, 898),
+            "WHAT THIS HEURISTIC REVEALS IN NATURE",
+            EMERALD,
+            items,
+            sub_idx,
         )
-        ty = 254
-        for t_head, t_body in takeaways[:3]:
-            draw.rounded_rectangle([84, ty, 952, ty + 190], radius=14, fill=PANEL_DARK, outline=PRIMARY_BLUE, width=2)
-            draw.text((108, ty + 16), fit_single_line(draw, t_head, 820, FONT_BODY), fill=AMBER, font=FONT_BODY)
-            draw_wrapped_box(draw, t_body, 108, ty + 56, 820, FONT_SM, TEXT_MAIN, line_h=28, max_lines=4)
-            ty += 208
 
-        # Right Panel: Dual Organism 3D Stage in Brine-Armor + Pocket Highlight Mode
-        draw.rounded_rectangle([1008, 168, 1864, 898], radius=18, fill=PANEL_DARK, outline=SECONDARY_PURPLE, width=2)
-        draw_dual_organism_comparison_stage(draw, (1008, 168, 1864, 898), pair_cfg, t, local_t, compact=False)
+        draw.rounded_rectangle([960, 168, 1864, 898], radius=18, fill=PANEL_DARK, outline=SECONDARY_PURPLE, width=2)
+        draw_topic_2d_canvas(draw, visual_mode, (960, 168, 1864, 898), act_idx, sub_idx, t, local_t, cfg)
 
-    draw_caption_and_footer(draw, narration, local_t, series_tag)
     return img
 
 
@@ -948,9 +1379,9 @@ def default_payload(args: argparse.Namespace) -> Dict[str, Any]:
         "speedup": args.speedup,
         "subtitle": "Understanding the Physical & Mathematical Heuristics Behind the Discovery",
         "organism_pair": {
-            "stage_header": "3D MIRRORED ORGANISM COMPARISON (0.44 Å KABSCH ALIGNED)",
-            "org1_label": "Bait: A0ABD5UZ94 (Mesophilic Reference Hydrolase)",
-            "org2_label": "Discovery: D3SWG7 (Natrialba magadii · Lake Magadi pH 10.5)",
+            "stage_header": "3D KABSCH ALIGNMENT: LAKE MAGADI SODA-LAKE ARCHAEON",
+            "org1_label": "Bait: A0ABD5UZ94 (Reference Hydrolase · 312 aa)",
+            "org2_label": "Discovery: D3SWG7 (Natrialba magadii · 0.44 Å · pH 10.5)",
             "pdb1": "AF-A0ABD5UZ94-F1-model_v4_aligned.pdb",
             "pdb2": "AF-D3SWG7-F1-model_v4.pdb",
             "pocket_indices": [25, 34, 42, 55, 70, 82],
@@ -1001,7 +1432,7 @@ def default_payload(args: argparse.Namespace) -> Dict[str, Any]:
             f"Have you ever wondered how a protein from a boiling volcanic geyser or a pH 11 soda lake can run the exact same chemical reaction as a human enzyme, even when two thirds of its amino acids have mutated? Today we are exploring {args.title}.",
             f"Here is the trap that catches almost every naive algorithm: {args.bio_problem} When we rely on a single average score or a single bounding box, we miss the physical geometry that actually governs chemistry.",
             f"So what heuristic solves this? {args.cs_mechanism} By breaking the problem down into local 3D geometry and reference-centered vectors, the false positives drop away.",
-            "Look at the two rotating organisms on the right. As they turn in lockstep, notice how their outer surfaces are completely different to survive extreme salt and pH, yet the glowing emerald catalytic pocket in the center aligns to less than half an Angstrom.",
+            "Now let us bring in the 3D structures on the right. As they align and lock onto the active site, notice how their outer surfaces are completely different to survive extreme salt and pH, yet the glowing emerald catalytic pocket in the center locks in to less than half an Angstrom.",
             "When we understand the heuristic first, expressing it as a query becomes effortless—and suddenly we can explore millions of extremophile organisms in seconds. Dive into the interactive 3D models at ideia dot me.",
         ],
     }
@@ -1038,7 +1469,7 @@ def main() -> None:
     act_frame_counts = [max(FPS * 3, int(math.ceil(d * FPS))) for d in act_durations]
     total_frames = sum(act_frame_counts)
     total_sec = total_frames / FPS
-    print(f"Voiceover ready ({total_sec:.1f}s across 5 acts). Rendering {total_frames} synchronized 1080p frames with 3D PDB organism motion...")
+    print(f"Voiceover ready ({total_sec:.1f}s across 5 acts). Rendering {total_frames} synchronized 1080p multi-slide frames...")
 
     tmp_path = out_path.with_suffix(".tmp.mp4")
     cmd = [
@@ -1116,7 +1547,7 @@ def main() -> None:
     if rc != 0:
         raise RuntimeError(f"ffmpeg exited with {rc}: {stderr_out}")
     tmp_path.replace(out_path)
-    print(f"Rendered 1080p MP4 with 3D Organism Motion ({total_frames} frames, {total_sec:.1f}s): {out_path}")
+    print(f"Rendered 1080p MP4 with Multi-Slide Sync & Focused Act-IV 3D Stage ({total_frames} frames, {total_sec:.1f}s): {out_path}")
 
 
 if __name__ == "__main__":
