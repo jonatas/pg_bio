@@ -463,7 +463,7 @@ def draw_component_1_top_bar(
         draw.text((step_x + 11, 25), label, fill=txt_c, font=FONT_XS)
         step_x += sw + 8
 
-    slide_badge = f"MOTION {motion_slide_num:03d}/{total_motion_slides:03d}  |  {format_mm_ss(elapsed_sec)} / {format_mm_ss(total_sec)}"
+    slide_badge = f"SLIDE {motion_slide_num:02d}/{total_motion_slides:02d}  |  {format_mm_ss(elapsed_sec)} / {format_mm_ss(total_sec)}"
     tw = text_width(draw, slide_badge, FONT_XS) + 28
     draw.rounded_rectangle([W - 44 - tw, 15, W - 44, 55], radius=12, fill=PANEL_BG, outline=SECONDARY_PURPLE, width=2)
     draw.text((W - 44 - tw + 14, 25), slide_badge, fill=TEXT_MAIN, font=FONT_XS)
@@ -859,30 +859,26 @@ def draw_scene_equation_derivation(
     draw.rounded_rectangle([x1 + 64, y1 + 92, x2 - 64, y1 + 184], radius=16, fill=PANEL_DARK, outline=PRIMARY_BLUE, width=3)
     draw_fitted_line(draw, eq_main, cx, y1 + 122, 1440, (255, 255, 255), (FONT_MONO_LG, FONT_MONO, FONT_MONO_SM), center_x=True)
 
-    # Progressive Term Spotlight: highlight active term based on sub_phase
+    # Progressive Term Spotlight: ONLY show revealed terms (idx <= active_term).
+    # Future terms (idx > active_term) are 100% HIDDEN — never show "Upcoming Step"!
     active_term = min(len(terms) - 1, int(sub_phase * len(terms)))
     ty = y1 + 216
     for idx, (t_head, t_desc, col) in enumerate(terms):
+        if idx > active_term:
+            continue
         is_cur = idx == active_term
-        is_vis = idx <= active_term
-        if not is_vis:
-            # Unrevealed future term: subtle placeholder bar so screen stays uncluttered
-            draw.rounded_rectangle([x1 + 84, ty, x2 - 84, ty + 76], radius=12, fill=(16, 20, 30), outline=(36, 44, 62), width=1)
-            draw.text((x1 + 112, ty + 24), f"Upcoming Step {idx + 1}: {t_head}", fill=(80, 92, 115), font=FONT_BODY)
-            ty += 98
-        else:
-            card_h = 152 if is_cur else 118
-            draw.rounded_rectangle(
-                [x1 + 64, ty, x2 - 64, ty + card_h],
-                radius=16,
-                fill=PANEL_HIGHLIGHT if is_cur else PANEL_DARK,
-                outline=col,
-                width=4 if is_cur else 2,
-            )
-            tag = "ACTIVE TERM  |  " if is_cur else "[VERIFIED]  "
-            draw_fitted_line(draw, tag + t_head, x1 + 96, ty + 20, 1420, col, (FONT_H3, FONT_BODY))
-            draw_fitted_line(draw, t_desc, x1 + 96, ty + 68, 1420, TEXT_MAIN, (FONT_BODY_LG if is_cur else FONT_BODY, FONT_SM))
-            ty += card_h + 22
+        card_h = 160 if is_cur else 124
+        draw.rounded_rectangle(
+            [x1 + 64, ty, x2 - 64, ty + card_h],
+            radius=16,
+            fill=PANEL_HIGHLIGHT if is_cur else PANEL_DARK,
+            outline=col,
+            width=4 if is_cur else 2,
+        )
+        tag = "NOW DERIVING  |  " if is_cur else "[ESTABLISHED]  "
+        draw_fitted_line(draw, tag + t_head, x1 + 96, ty + 22, 1420, col, (FONT_H3, FONT_BODY))
+        draw_fitted_line(draw, t_desc, x1 + 96, ty + 74, 1420, TEXT_MAIN, (FONT_BODY_LG if is_cur else FONT_BODY, FONT_SM))
+        ty += card_h + 24
 
 
 def draw_scene_vector_geometry_canvas(
@@ -1187,58 +1183,79 @@ def draw_scene_csr_memory_anatomy(
     t: float,
 ) -> None:
     """
-    Scene Primitive 8: PostgreSQL 8 KB Heap Page vs. 2,000 B TOAST Threshold & 16-Byte Header Peek.
+    Scene Primitive 8: Behind-the-Scenes PostgreSQL 18 & Rust Engine Architecture
+    (8 KB Heap Page vs. Out-of-Line TOAST Chunks #1..#18 + Progressive Behind-the-Scenes Engine Steps).
     """
     x1, y1, x2, y2 = STAGE_BOX
     draw.rounded_rectangle([x1, y1, x2, y2], radius=24, fill=PANEL_BG, outline=SECONDARY_PURPLE, width=3)
 
     draw_fitted_line(
         draw,
-        "POSTGRESQL 8 KB HEAP PAGE ANATOMY: ZERO-TOAST INLINE STORAGE & 16-BYTE HEADER PEEK",
+        "BEHIND THE SCENES: HOW RUST & POSTGRESQL 18 EXECUTE THIS IN SHARED BUFFERS",
         (x1 + x2) // 2,
-        y1 + 36,
+        y1 + 34,
         1520,
         SECONDARY_PURPLE,
         (FONT_H2, FONT_H3),
         center_x=True,
     )
 
-    # Top comparison: 211,600 B Dense Matrix (106 TOAST chunks!) vs 1,090 B Inline "PGPA" CSR Tuple
-    bx1 = x1 + 72
-    bx2 = x2 - 72
-    draw.rounded_rectangle([bx1, y1 + 104, bx2, y1 + 264], radius=16, fill=PANEL_DARK, outline=ACCENT_PINK, width=2)
-    draw.text((bx1 + 28, y1 + 124), "[X] Dense float4[] PAE Matrix (211,600 Bytes >> 2,000 B TOAST Threshold):", fill=ACCENT_PINK, font=FONT_H3)
+    bx1 = x1 + 68
+    bx2 = x2 - 68
+    # Top Card: Out-of-Line pg_toast Chunks (#1..#18 cleanly centered inside each box!)
+    draw.rounded_rectangle([bx1, y1 + 96, bx2, y1 + 244], radius=16, fill=PANEL_DARK, outline=ACCENT_PINK, width=2)
+    draw.text((bx1 + 28, y1 + 114), "[X] Without Compression: 211,600 Bytes Splits Into 106 Out-of-Line TOAST Chunks (#1..#106):", fill=ACCENT_PINK, font=FONT_H3)
     for k in range(18):
         cx_k = bx1 + 28 + k * 80
-        draw.rounded_rectangle([cx_k, y1 + 174, cx_k + 70, y1 + 234], radius=6, fill=(75, 22, 42), outline=ACCENT_PINK, width=1)
-        draw.text((cx_k + 8, y1 + 195), f"TOAST#{k+1}", fill=TEXT_MAIN, font=FONT_XXS)
+        draw.rounded_rectangle([cx_k, y1 + 162, cx_k + 68, y1 + 220], radius=8, fill=(75, 22, 42), outline=ACCENT_PINK, width=2)
+        lbl_k = f"#{k+1}"
+        lw_k = text_width(draw, lbl_k, FONT_SM)
+        draw.text((cx_k + (68 - lw_k) // 2, y1 + 178), lbl_k, fill=(255, 255, 255), font=FONT_SM)
 
-    # Bottom: 1,090 B Inline "PGPA" CSR inside 8,192 B Heap Page
-    hy1 = y1 + 296
-    draw.rounded_rectangle([bx1, hy1, bx2, y2 - 48], radius=18, fill=PANEL_DARK, outline=EMERALD, width=3)
-    draw.text((bx1 + 28, hy1 + 24), "[OK] 'PGPA' Quantized CSR Container (1,090 Bytes < 2,000 B Threshold -> 100% Inline, 0 B TOAST!):", fill=EMERALD, font=FONT_H3)
+    # Bottom Card: Behind-the-Scenes 4-Stage Rust Engine Pipeline (revealed progressively, future steps hidden!)
+    hy1 = y1 + 268
+    draw.rounded_rectangle([bx1, hy1, bx2, y2 - 38], radius=18, fill=PANEL_DARK, outline=EMERALD, width=3)
+    draw.text((bx1 + 28, hy1 + 22), "[OK] Behind the Scenes in pg_bio: 4-Stage Zero-TOAST Rust Engine Pipeline:", fill=EMERALD, font=FONT_H3)
 
-    # 16-Byte Header Anatomy Diagram
-    fields = [
-        ("Bytes 0..4", "magic='PGPA'", PRIMARY_BLUE),
-        ("Bytes 6..10", "n_a=150, n_b=80", LIGHT_BLUE),
-        ("Bytes 10..12", "nnz=100 (<12 Å)", SECONDARY_PURPLE),
-        ("Byte 13", "mini_pae=0.5 Å", AMBER),
-        ("Byte 14", "ipsae=0.832", EMERALD),
-        ("Bytes 16..1090", "u16 RowPtr + u8 PAE", PRIMARY_TEAL),
-    ]
-    fx = bx1 + 28
-    active_f = int(sub_phase * len(fields)) % len(fields)
-    for idx_f, (b_rng, b_val, col) in enumerate(fields):
-        fw = 232 if idx_f < 5 else 260
-        is_hi = idx_f == active_f
-        draw.rounded_rectangle([fx, hy1 + 88, fx + fw - 10, hy1 + 210], radius=12, fill=PANEL_HIGHLIGHT if is_hi else PANEL_BG, outline=col, width=4 if is_hi else 2)
-        draw.text((fx + 14, hy1 + 108), b_rng, fill=TEXT_MUTED, font=FONT_XS)
-        draw_fitted_line(draw, b_val, fx + 14, hy1 + 148, fw - 34, col, (FONT_MONO, FONT_MONO_SM))
-        fx += fw
+    if visual_mode == "central_dogma_gist":
+        engine_steps = [
+            ("1. Zero-Copy 8 KB Varlena Slice", "Reads DNA/protein sequence bytes directly in PostgreSQL shared buffers (0 Python socket copy).", PRIMARY_BLUE),
+            ("2. 100-Step SIMD pKa Bisection", "Evaluates Henderson-Hasselbalch charge Q(pH) across Asp/Glu carboxylates in 200 nanoseconds.", ORANGE),
+            ("3. 1D int4range GiST Index Probe", "Prunes non-overlapping genomic intervals via R-Tree bounding boxes in O(log N).", SECONDARY_PURPLE),
+            ("4. 3x3 Jacobi SVD Kabsch Kernel", "Verifies 0.44 Å catalytic triad alignment without external libraries.", EMERALD),
+        ]
+    elif visual_mode == "morton_kabsch":
+        engine_steps = [
+            ("1. 21-Bit Coordinate Quantization", "Maps 3D (X, Y, Z) floats into 21-bit integers with sub-millimeter precision.", PRIMARY_BLUE),
+            ("2. Bit-Interleaving (z_order_encode)", "Interleaves [Z_i | Y_i | X_i] bits into a single 64-bit BIGINT B-Tree index key.", LIGHT_BLUE),
+            ("3. 21-Level Octree Interior Pruning", "Skips Euclidean sqrt() on cubes marked fully_inside = TRUE (74x fewer atoms).", AMBER),
+            ("4. Stack-Allocated 3x3 Jacobi SVD", "Computes optimal Kabsch rotation matrix R with det(V U^T) chirality protection.", EMERALD),
+        ]
+    else:
+        engine_steps = [
+            ("1. Contact Pruning (PAE < 12.0 Å)", "Discards 99% of disordered background noise before writing to disk.", PRIMARY_BLUE),
+            ("2. 1-Byte u8 Quantization ('PGPA' CSR)", "Packs row offsets + 0.1 Å u8 values into 1,090 B (< 2,000 B TOAST threshold -> 0 TOAST I/O!).", LIGHT_BLUE),
+            ("3. O(1) 16-Byte Header Slice Peek", "Reads bytes 0..16 (min_pae, mini_pae_5x5, ipsae_min) via PG_DETOAST_DATUM_SLICE without unpacking.", AMBER),
+            ("4. Fused In-Database Rust Evaluation", "Audits 26,316 co-folded complexes/sec/core inside shared buffers (46.37x faster than Python).", EMERALD),
+        ]
 
-    draw.text((bx1 + 28, hy1 + 245), "• O(1) 16-Byte Header Peek (bio_peek_pae_csr_header): Filters millions of complexes without unpacking CSR arrays!", fill=AMBER, font=FONT_BODY_LG)
-    draw.text((bx1 + 28, hy1 + 295), "• 194.13x Storage Compression  |  26,316 Complexes/sec/core (46.37x Faster than Python/NumPy)", fill=EMERALD, font=FONT_H3)
+    active_step = min(len(engine_steps) - 1, int(sub_phase * len(engine_steps)))
+    sy = hy1 + 74
+    for idx_s, (s_title, s_desc, col) in enumerate(engine_steps):
+        if idx_s > active_step:
+            continue  # Hide future unrevealed steps completely!
+        is_cur = idx_s == active_step
+        row_h = 82 if is_cur else 68
+        draw.rounded_rectangle(
+            [bx1 + 28, sy, bx2 - 28, sy + row_h],
+            radius=12,
+            fill=PANEL_HIGHLIGHT if is_cur else PANEL_BG,
+            outline=col,
+            width=3 if is_cur else 1,
+        )
+        draw_fitted_line(draw, s_title, bx1 + 48, sy + 10, 520, col, (FONT_BODY, FONT_SM))
+        draw_fitted_line(draw, s_desc, bx1 + 48, sy + 42 if is_cur else sy + 38, (bx2 - bx1) - 96, TEXT_MAIN, (FONT_SM, FONT_XS))
+        sy += row_h + 12
 
 
 def render_3d_protein_trace(
@@ -1415,61 +1432,84 @@ def select_scene_for_beat(
     local_t: float,
     act_duration_sec: float,
     visual_mode: str,
-) -> Tuple[str, str]:
+) -> Tuple[str, str, float]:
     """
-    Routes each 3-4 second spoken phrase beat to the single most relevant full-stage visual
-    primitive, ensuring:
-      - The 3D organism view (`ORGANISM_3D_BRIEF`) only appears during a single <= 15-second
-        window in Act IV when the narrator explicitly discusses the 3D organism comparison,
-        and is hidden for the remaining 92% of the video!
-      - Every beat alternates dynamically between concept spotlights, matrix zooms, Morton curves,
-        equation derivations, vector geometry, SQL terminals, and plotted query charts.
+    Calm, Human-Readable Pacing (12 to 18 Seconds Per Visual Slide, Max 20 Seconds!):
+      - Instead of switching full-screen templates every 3-4 seconds, each Act is divided
+        into 2 or 3 calm visual windows lasting 12 to 18 seconds each (`slide_local_phase` 0.0 -> 1.0).
+      - Inside each 12-18s slide window, items reveal progressively one at a time (with
+        future items completely hidden) so the viewer has plenty of time to absorb the diagram!
+      - The 3D organism view (`ORGANISM_3D_BRIEF`) only appears in a single <= 14-second
+        window in the middle of Act IV and is stationary once aligned.
     """
-    low = beat_text.lower()
+    # Split each act into calm 14-18 second windows (2 or 3 slides per act, never > 20s per slide)
+    n_slides_in_act = max(2, min(3, int(math.ceil(act_duration_sec / 17.0))))
+    exact_slide = local_t * n_slides_in_act
+    slide_idx = min(n_slides_in_act - 1, int(exact_slide))
+    slide_phase = exact_slide - slide_idx
 
-    # Strictly cap 3D organism view to a single <= 15 second window inside Act IV!
-    if act_idx == 3:
-        elapsed_in_act4 = local_t * act_duration_sec
-        # Only show 3D organism comparison between 6s and 20s of Act IV (at most 14 seconds total!)
-        if 6.0 <= elapsed_in_act4 <= 20.0:
-            return ("ORGANISM_3D_BRIEF", "Act IV: Focused 14-Second 3D Catalytic Pocket Alignment (Camera Locked)")
-        elif elapsed_in_act4 < 6.0:
-            return ("SQL_FOCUS_TERMINAL", "Act IV: Expressing the Heuristic as a Declarative SQL Query")
-        else:
-            return ("QUERY_RESULT_PLOT", "Act IV: Plotting the Live In-Database Query Results")
-
-    # Keyword-sensitive dynamic scene routing across Acts I, II, III, and V
-    if any(k in low for k in ("morton", "z-order", "octree", "interleav", "64-bit", "b-tree", "cube", "sphere")):
-        return ("MORTON_CURVE_DRAW", "How a 1D 64-Bit Morton Z-Order Curve Slices 3D Atomic Space")
-    if any(k in low for k in ("toast", "1,090", "211,600", "csr", "header", "byte", "heap", "1,304", "pgpa")):
-        return ("CSR_MEMORY_ANATOMY", "Inside the 8 KB PostgreSQL Heap Page: Zero-TOAST CSR & 16-Byte Header Peek")
-    if any(k in low for k in ("matrix", "pae", "5-by-5", "5x5", "minipae", "diagonal", "window", "covariance")):
-        return ("MATRIX_HEATMAP_ZOOM", "Zooming Into the Numerical Matrix & Contiguous 5x5 Window")
-    if any(k in low for k in ("sql", "select ", "query", "lateral", "function")):
-        return ("SQL_FOCUS_TERMINAL", "Declarative SQL Execution Inside Shared Buffers")
-    if any(k in low for k in ("benchmark", "percent", "recall", "faster", "yield", "0.8315", "0.125", "25.08")):
-        if beat_idx % 2 == 1:
-            return ("QUERY_RESULT_PLOT", "Quantitative Benchmark Proof: Naive Baseline vs. Heuristic")
-
-    # Structured alternation per Act so the visual changes every 3-5 seconds
     if act_idx == 0:
-        cycle = ["CONCEPT_SPOTLIGHT", "MATRIX_HEATMAP_ZOOM", "CONCEPT_SPOTLIGHT", "VECTOR_GEOMETRY_CANVAS"]
-        kind = cycle[beat_idx % len(cycle)]
-        return (kind, "Act I: The Biological Paradox & Real-World Mystery")
+        seq = [
+            ("CONCEPT_SPOTLIGHT", "Act I: The Biological Paradox & Real-World Mystery"),
+            ("MATRIX_HEATMAP_ZOOM", "Act I: Inspecting the Physical & Numerical Matrix"),
+            ("VECTOR_GEOMETRY_CANVAS", "Act I: How the Physical Geometry Behaves"),
+        ]
+        kind, head = seq[slide_idx % len(seq)]
+        return (kind, head, slide_phase)
+
     elif act_idx == 1:
-        cycle = ["CONCEPT_SPOTLIGHT", "MATRIX_HEATMAP_ZOOM", "EQUATION_DERIVATION", "QUERY_RESULT_PLOT"]
-        kind = cycle[beat_idx % len(cycle)]
-        return (kind, "Act II: Why Naive Intuition & Whole-Chain Averages Fall Into a Trap")
+        seq = [
+            ("CONCEPT_SPOTLIGHT", "Act II: Why Naive Intuition Falls Into a Trap"),
+            ("MATRIX_HEATMAP_ZOOM", "Act II: Watching Where Whole-Chain Averaging Goes Blind"),
+            ("EQUATION_DERIVATION", "Act II: Isolating the Mathematical Denominator Trap"),
+        ]
+        kind, head = seq[slide_idx % len(seq)]
+        return (kind, head, slide_phase)
+
     elif act_idx == 2:
-        cycle = ["EQUATION_DERIVATION", "VECTOR_GEOMETRY_CANVAS", "MATRIX_HEATMAP_ZOOM", "CSR_MEMORY_ANATOMY"]
         if visual_mode == "morton_kabsch":
-            cycle = ["MORTON_CURVE_DRAW", "EQUATION_DERIVATION", "MORTON_CURVE_DRAW", "QUERY_RESULT_PLOT"]
-        kind = cycle[beat_idx % len(cycle)]
-        return (kind, "Act III: Step-by-Step Mathematical & Physical Heuristic")
+            seq = [
+                ("MORTON_CURVE_DRAW", "Act III: Drawing the 64-Bit Morton Z-Order Curve in 3D Space"),
+                ("EQUATION_DERIVATION", "Act III: Step-by-Step Mathematical Heuristic"),
+                ("CSR_MEMORY_ANATOMY", "Act III: Behind the Scenes in PostgreSQL 18 & Rust"),
+            ]
+        else:
+            seq = [
+                ("EQUATION_DERIVATION", "Act III: Step-by-Step Mathematical Heuristic Derivation"),
+                ("VECTOR_GEOMETRY_CANVAS", "Act III: Visualizing the Geometric Invariant"),
+                ("CSR_MEMORY_ANATOMY", "Act III: Behind the Scenes in PostgreSQL 18 & Rust"),
+            ]
+        kind, head = seq[slide_idx % len(seq)]
+        return (kind, head, slide_phase)
+
+    elif act_idx == 3:
+        # Act IV: Slide 1 = Declarative SQL Terminal (~13s) -> Slide 2 = Brief 14s 3D Pocket Lock -> Slide 3 = Plotted Results (~13s)
+        if n_slides_in_act == 2:
+            elapsed_in_act4 = local_t * act_duration_sec
+            if elapsed_in_act4 < 12.0:
+                return ("SQL_FOCUS_TERMINAL", "Act IV: Expressing the Heuristic as a Declarative SQL Query", elapsed_in_act4 / 12.0)
+            elif elapsed_in_act4 < 25.0:
+                return ("ORGANISM_3D_BRIEF", "Act IV: Brief 3D Catalytic Pocket Alignment (Camera Locked)", (elapsed_in_act4 - 12.0) / 13.0)
+            else:
+                rem = max(1.0, act_duration_sec - 25.0)
+                return ("QUERY_RESULT_PLOT", "Act IV: Plotting the Live In-Database Query Results", (elapsed_in_act4 - 25.0) / rem)
+        else:
+            seq = [
+                ("SQL_FOCUS_TERMINAL", "Act IV: Expressing the Heuristic as a Declarative SQL Query"),
+                ("ORGANISM_3D_BRIEF", "Act IV: Brief 3D Catalytic Pocket Alignment (Camera Locked)"),
+                ("QUERY_RESULT_PLOT", "Act IV: Plotting the Live In-Database Query Results"),
+            ]
+            kind, head = seq[slide_idx % len(seq)]
+            return (kind, head, slide_phase)
+
     else:
-        cycle = ["QUERY_RESULT_PLOT", "CSR_MEMORY_ANATOMY", "SQL_FOCUS_TERMINAL", "CONCEPT_SPOTLIGHT"]
-        kind = cycle[beat_idx % len(cycle)]
-        return (kind, "Act V: From Mathematical Insight to Extremophile Discovery")
+        seq = [
+            ("QUERY_RESULT_PLOT", "Act V: Quantitative Benchmark Proof — Naive Baseline vs. Heuristic"),
+            ("CSR_MEMORY_ANATOMY", "Act V: Behind-the-Scenes Zero-TOAST Storage & SIMD Execution"),
+            ("CONCEPT_SPOTLIGHT", "Act V: From Mathematical Insight to Extremophile Discovery"),
+        ]
+        kind, head = seq[slide_idx % len(seq)]
+        return (kind, head, slide_phase)
 
 
 def render_frame(
@@ -1511,9 +1551,16 @@ def render_frame(
     micro_step = min(3, int(sub_phase * 4))
     motion_slide_num = min(total_motion_slides, beat_offset + beat_idx * 4 + micro_step + 1)
 
-    scene_kind, scene_headline = select_scene_for_beat(
+    scene_kind, scene_headline, slide_phase = select_scene_for_beat(
         act_idx, beat_idx, n_beats, active_beat_text, local_t, act_duration_sec, visual_mode
     )
+
+    # Use calm slide_phase (0.0 -> 1.0 over 13-17 seconds) for visual diagrams so they evolve
+    # at a relaxed, human-readable pace instead of jumping every 3 seconds!
+    n_slides_in_act = max(2, min(3, int(math.ceil(act_duration_sec / 17.0))))
+    slide_idx_in_act = min(n_slides_in_act - 1, int(local_t * n_slides_in_act))
+    calm_slide_num = act_idx * 3 + slide_idx_in_act + 1
+    calm_slide_total = 15
 
     # COMPONENT 1: Top Progress Bar & Single Headline
     draw_component_1_top_bar(
@@ -1524,8 +1571,8 @@ def render_frame(
         progress,
         t,
         total_sec,
-        motion_slide_num,
-        total_motion_slides,
+        calm_slide_num,
+        calm_slide_total,
         scene_headline,
     )
 
@@ -1541,48 +1588,44 @@ def render_frame(
                 ("Explore Interactive 3D Models in Your Browser", f"{BLOG_URL}/pg-bio-videos/"),
             ],
         )
-        # Advance linearly across the act (`int(local_t * len(...))`) instead of `beat_idx % len(...)`
-        # so consecutive CONCEPT_SPOTLIGHT scenes never repeat the same question!
         if act_idx == 0 and bullets:
-            b_idx = min(len(bullets) - 1, int(local_t * len(bullets)))
+            b_idx = min(len(bullets) - 1, int(slide_phase * len(bullets)))
             focus_title = bullets[b_idx].lstrip("• ").strip()
             accent = PRIMARY_BLUE
         elif act_idx == 1 and traps:
-            t_idx = min(len(traps) - 1, int(local_t * len(traps)))
+            t_idx = min(len(traps) - 1, int(slide_phase * len(traps)))
             focus_title = f"{traps[t_idx][0]}: {traps[t_idx][1]}"
             accent = ACCENT_PINK
         else:
-            k_idx = min(len(takeaways) - 1, int(local_t * len(takeaways)))
+            k_idx = min(len(takeaways) - 1, int(slide_phase * len(takeaways)))
             tk = takeaways[k_idx]
             focus_title = f"{tk[0]} — {tk[1]}"
             accent = EMERALD
-        draw_scene_concept_spotlight(draw, active_beat_text, focus_title, cfg.get("speedup", ""), sub_phase, t, accent)
+        draw_scene_concept_spotlight(draw, active_beat_text, focus_title, cfg.get("speedup", ""), slide_phase, t, accent)
 
     elif scene_kind == "MATRIX_HEATMAP_ZOOM":
-        draw_scene_matrix_heatmap_zoom(draw, visual_mode, active_beat_text, sub_phase, t)
+        draw_scene_matrix_heatmap_zoom(draw, visual_mode, active_beat_text, slide_phase, t)
 
     elif scene_kind == "MORTON_CURVE_DRAW":
-        draw_scene_morton_curve_animation(draw, active_beat_text, sub_phase, t)
+        draw_scene_morton_curve_animation(draw, active_beat_text, slide_phase, t)
 
     elif scene_kind == "EQUATION_DERIVATION":
-        draw_scene_equation_derivation(draw, visual_mode, active_beat_text, sub_phase, t)
+        draw_scene_equation_derivation(draw, visual_mode, active_beat_text, slide_phase, t)
 
     elif scene_kind == "VECTOR_GEOMETRY_CANVAS":
-        draw_scene_vector_geometry_canvas(draw, visual_mode, active_beat_text, sub_phase, t)
+        draw_scene_vector_geometry_canvas(draw, visual_mode, active_beat_text, slide_phase, t)
 
     elif scene_kind == "SQL_FOCUS_TERMINAL":
-        draw_scene_sql_focus_terminal(draw, cfg, sub_phase, t)
+        draw_scene_sql_focus_terminal(draw, cfg, slide_phase, t)
 
     elif scene_kind == "QUERY_RESULT_PLOT":
-        draw_scene_query_result_plot(draw, visual_mode, cfg, sub_phase, t)
+        draw_scene_query_result_plot(draw, visual_mode, cfg, slide_phase, t)
 
     elif scene_kind == "CSR_MEMORY_ANATOMY":
-        draw_scene_csr_memory_anatomy(draw, visual_mode, active_beat_text, sub_phase, t)
+        draw_scene_csr_memory_anatomy(draw, visual_mode, active_beat_text, slide_phase, t)
 
     elif scene_kind == "ORGANISM_3D_BRIEF":
-        elapsed_in_act4 = local_t * act_duration_sec
-        win_p = max(0.0, min(1.0, (elapsed_in_act4 - 6.0) / 14.0))
-        draw_scene_3d_organism_brief_moment(draw, pair_cfg, win_p, t)
+        draw_scene_3d_organism_brief_moment(draw, pair_cfg, slide_phase, t)
 
     # COMPONENT 3: Spoken Phrase Spotlight Bar
     draw_component_3_caption_bar(draw, active_beat_text, beat_idx, n_beats, sub_phase)
