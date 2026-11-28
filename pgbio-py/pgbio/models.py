@@ -295,6 +295,21 @@ class BioBeneinReversionCandidate:
     reversion_verdict: str
 
 
+@dataclass
+class BioCrypticFlexPocket:
+    pocket_rank: int
+    pocket_id: str
+    p2rank_score: float
+    mean_lining_h3di: float
+    max_hinge_h3di: float
+    cryptic_breathing_score: float
+    delta_g_open_kcal: float
+    pocket_thermodynamic_regime: str
+    z_order_center: int
+    fastscan_16b: bytes
+
+
+
 
 
 
