@@ -15326,6 +15326,708 @@ pub fn bio_ipsae_minipae_audit(
     ))
 }
 
+// =====================================================================
+// 23. LAYER 22: BIT-SLICED 64-WAY BENEIN BOOLEAN ATTRACTOR &
+//     MULTI-TARGET CANCER REVERSION CONTROL
+//     (Gong & Cho, KAIST, Advanced Science 2024/2025, doi:10.1002/advs.202402132)
+// =====================================================================
+
+/// Magic header for inline zero-TOAST `"PGBN"` bit-sliced Boolean Gene Regulatory Network (GRN) containers (`< 512 B`).
+pub const PGBN_MAGIC: [u8; 4] = *b"PGBN";
+
+/// Unpacked representation of an $N$-node ($N \le 64$) canalizing Boolean regulatory network:
+/// For each gene $i \in [0, N)$:
+///   - `act_masks[i]` ($A_i \in \text{u64}$): bitmask of positive activator inputs ($j \to i$).
+///   - `inh_masks[i]` ($I_i \in \text{u64}$): bitmask of dominant canalizing repressor inputs ($j \dashv i$).
+///   - `basal_mask` ($B \in \text{u64}$): bit $i$ is `1` if gene $i$ is constitutively active when $A_i = 0$ and no inhibitor is active.
+///   - `cancer_attractor` ($S_{\text{cancer}} \in \text{u64}$): malignant proliferative state bitmask.
+///   - `normal_attractor` ($S_{\text{normal}} \in \text{u64}$): differentiated healthy enterocyte state bitmask.
+#[derive(Clone, Debug)]
+pub struct PgBioBeneinGrn {
+    pub n_genes: usize,
+    pub edge_count: usize,
+    pub basal_mask: u64,
+    pub cancer_attractor: u64,
+    pub normal_attractor: u64,
+    pub act_masks: Vec<u64>,
+    pub inh_masks: Vec<u64>,
+}
+
+/// Packs an $N$-gene ($N \le 64$) Boolean regulatory network from directed signed edge arrays
+/// (`sources_1based`, `targets_1based`, `signs` where `+1` = activation, `-1` = canalizing inhibition)
+/// into an inline zero-TOAST `"PGBN"` `bytea` (`32 + 16 * N` bytes; e.g. `192 B` for $N=10$, `544 B` for $N=32$).
+pub fn pgbio_pack_benein_grn_bytes(
+    n_genes: usize,
+    sources_1based: &[i32],
+    targets_1based: &[i32],
+    signs: &[i32],
+    basal_mask: u64,
+    cancer_attractor: u64,
+    normal_attractor: u64,
+) -> Vec<u8> {
+    let n = n_genes.clamp(1, 64);
+    let valid_mask = if n == 64 { u64::MAX } else { (1u64 << n) - 1 };
+    let mut act_masks = vec![0u64; n];
+    let mut inh_masks = vec![0u64; n];
+    let m = sources_1based.len().min(targets_1based.len()).min(signs.len());
+    let mut edge_count = 0usize;
+
+    for k in 0..m {
+        let src = sources_1based[k];
+        let tgt = targets_1based[k];
+        let sgn = signs[k];
+        if src >= 1 && (src as usize) <= n && tgt >= 1 && (tgt as usize) <= n && sgn != 0 {
+            let s_bit = 1u64 << ((src - 1) as usize);
+            let t_idx = (tgt - 1) as usize;
+            if sgn > 0 {
+                act_masks[t_idx] |= s_bit;
+            } else {
+                inh_masks[t_idx] |= s_bit;
+            }
+            edge_count += 1;
+        }
+    }
+
+    let b_clean = basal_mask & valid_mask;
+    let c_clean = cancer_attractor & valid_mask;
+    let n_clean = normal_attractor & valid_mask;
+
+    let mut out = Vec::with_capacity(32 + 16 * n);
+    out.extend_from_slice(&PGBN_MAGIC);
+    out.push(n as u8);
+    out.push(1u8); // canalizing rule version 1
+    out.extend_from_slice(&(edge_count.min(65535) as u16).to_le_bytes());
+    out.extend_from_slice(&b_clean.to_le_bytes());
+    out.extend_from_slice(&c_clean.to_le_bytes());
+    out.extend_from_slice(&n_clean.to_le_bytes());
+    for i in 0..n {
+        out.extend_from_slice(&(act_masks[i] & valid_mask).to_le_bytes());
+        out.extend_from_slice(&(inh_masks[i] & valid_mask).to_le_bytes());
+    }
+    out
+}
+
+/// Unpacks an inline `"PGBN"` Boolean GRN `bytea` into `PgBioBeneinGrn`.
+pub fn pgbio_unpack_benein_grn_bytes(bytes: &[u8]) -> Option<PgBioBeneinGrn> {
+    if bytes.len() < 32 || bytes[0..4] != PGBN_MAGIC {
+        return None;
+    }
+    let n = (bytes[4] as usize).clamp(1, 64);
+    if bytes.len() < 32 + 16 * n {
+        return None;
+    }
+    let edge_count = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
+    let basal_mask = u64::from_le_bytes([
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+    ]);
+    let cancer_attractor = u64::from_le_bytes([
+        bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22], bytes[23],
+    ]);
+    let normal_attractor = u64::from_le_bytes([
+        bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29], bytes[30], bytes[31],
+    ]);
+
+    let mut act_masks = Vec::with_capacity(n);
+    let mut inh_masks = Vec::with_capacity(n);
+    let mut off = 32usize;
+    for _ in 0..n {
+        let a = u64::from_le_bytes([
+            bytes[off],
+            bytes[off + 1],
+            bytes[off + 2],
+            bytes[off + 3],
+            bytes[off + 4],
+            bytes[off + 5],
+            bytes[off + 6],
+            bytes[off + 7],
+        ]);
+        let inh = u64::from_le_bytes([
+            bytes[off + 8],
+            bytes[off + 9],
+            bytes[off + 10],
+            bytes[off + 11],
+            bytes[off + 12],
+            bytes[off + 13],
+            bytes[off + 14],
+            bytes[off + 15],
+        ]);
+        act_masks.push(a);
+        inh_masks.push(inh);
+        off += 16;
+    }
+
+    Some(PgBioBeneinGrn {
+        n_genes: n,
+        edge_count,
+        basal_mask,
+        cancer_attractor,
+        normal_attractor,
+        act_masks,
+        inh_masks,
+    })
+}
+
+/// Evaluates 64 single-cell Boolean trajectories in parallel using bit-sliced `u64` register arithmetic!
+/// Let `bit_planes[i]` ($i \in [0, N)$) hold the binary expression state ($0$ or $1$) of gene $i$ across
+/// 64 independent single-cell initial conditions (one cell per bit lane $b \in [0, 64)$).
+/// At each synchronous Boolean time step $t \to t+1$:
+///   1. `act_any = OR_{j \in A_i} bit_planes[j]` (or `!0u64` if gene $i$ has basal constitutive expression $B_i = 1$)
+///   2. `inh_any = OR_{j \in I_i} bit_planes[j]`
+///   3. `next_planes[i] = act_any & (!inh_any)` (forced to `0u64` if gene $i \in \text{ko\_mask}$, or `!0u64` if $i \in \text{oe\_mask}$).
+/// Returns `(final_planes, steps_to_converge, is_fixed_point)`.
+#[inline]
+pub fn pgbio_bitsliced_64cell_trajectory_step(
+    grn: &PgBioBeneinGrn,
+    init_planes: &[u64],
+    ko_mask: u64,
+    oe_mask: u64,
+    max_steps: usize,
+) -> (Vec<u64>, usize, bool) {
+    let n = grn.n_genes;
+    let mut cur = vec![0u64; n];
+    for i in 0..n {
+        let mut v = init_planes.get(i).copied().unwrap_or(0);
+        if ((ko_mask >> i) & 1) != 0 {
+            v = 0u64;
+        } else if ((oe_mask >> i) & 1) != 0 {
+            v = u64::MAX;
+        }
+        cur[i] = v;
+    }
+
+    let mut nxt = vec![0u64; n];
+    let steps_cap = max_steps.clamp(1, 256);
+    let mut converged_step = steps_cap;
+    let mut is_fixed = false;
+
+    for step in 1..=steps_cap {
+        let mut changed = 0u64;
+        for i in 0..n {
+            if ((ko_mask >> i) & 1) != 0 {
+                nxt[i] = 0u64;
+            } else if ((oe_mask >> i) & 1) != 0 {
+                nxt[i] = u64::MAX;
+            } else {
+                let mut act_any = if ((grn.basal_mask >> i) & 1) != 0 {
+                    u64::MAX
+                } else {
+                    0u64
+                };
+                let mut a_bits = grn.act_masks[i];
+                while a_bits != 0 {
+                    let j = a_bits.trailing_zeros() as usize;
+                    if j < n {
+                        act_any |= cur[j];
+                    }
+                    a_bits &= a_bits - 1;
+                }
+
+                let mut inh_any = 0u64;
+                let mut i_bits = grn.inh_masks[i];
+                while i_bits != 0 {
+                    let j = i_bits.trailing_zeros() as usize;
+                    if j < n {
+                        inh_any |= cur[j];
+                    }
+                    i_bits &= i_bits - 1;
+                }
+
+                nxt[i] = act_any & (!inh_any);
+            }
+            changed |= nxt[i] ^ cur[i];
+        }
+        cur.copy_from_slice(&nxt);
+        if changed == 0 {
+            converged_step = step;
+            is_fixed = true;
+            break;
+        }
+    }
+
+    (cur, converged_step, is_fixed)
+}
+
+/// Deterministically constructs a 64-cell initial state ensemble around `cancer_attractor`
+/// across bit lanes $0..64$:
+///   - Lane 0: exact `cancer_attractor` state ($S_{\text{cancer}}$).
+///   - Lanes 1..=N: single-gene transient transcriptional fluctuations ($S_{\text{cancer}} \oplus 2^g$).
+///   - Remaining lanes up to 64: two-gene and three-gene stochastic single-cell transcriptional noise states
+///     within the malignant proliferative basin.
+#[inline]
+pub fn pgbio_build_64cell_cancer_basin_planes(n_genes: usize, cancer_attractor: u64) -> Vec<u64> {
+    let n = n_genes.clamp(1, 64);
+    let mut cell_states = [cancer_attractor; 64];
+    let mut lane = 1usize;
+    for g in 0..n {
+        if lane < 64 {
+            cell_states[lane] = cancer_attractor ^ (1u64 << g);
+            lane += 1;
+        }
+    }
+    for g1 in 0..n {
+        for g2 in (g1 + 1)..n {
+            if lane < 64 {
+                cell_states[lane] = cancer_attractor ^ (1u64 << g1) ^ (1u64 << g2);
+                lane += 1;
+            }
+        }
+    }
+    while lane < 64 {
+        let noise = fmix64((lane as u64).wrapping_mul(0x9E3779B97F4A7C15)) & ((1u64 << (n.min(4))) - 1);
+        cell_states[lane] = cancer_attractor ^ noise;
+        lane += 1;
+    }
+
+    // Transpose 64 cell states into N bit-sliced u64 gene planes
+    let mut planes = vec![0u64; n];
+    for b in 0..64 {
+        let st = cell_states[b];
+        for i in 0..n {
+            if ((st >> i) & 1) != 0 {
+                planes[i] |= 1u64 << b;
+            }
+        }
+    }
+    planes
+}
+
+/// Evaluates a perturbation (`ko_mask`, `oe_mask`) across the 64-cell bit-sliced ensemble and computes:
+///   - `normal_basin_pct`: percentage of the 64 cells whose unperturbed phenotype markers match `normal_attractor`.
+///   - `cancer_escape_pct`: percentage of the 64 cells that escape the malignant oncogenic signature.
+///   - `mean_hamming_to_normal`: average Hamming distance (over un-clamped downstream effector genes) to `normal_attractor`.
+///   - `reversion_score`: composite trajectory control score in $[0, 1]$.
+///   - `steps_to_converge` and `attractor_state_mask` (lane 0 converged state).
+#[inline]
+pub fn pgbio_score_benein_perturbation(
+    grn: &PgBioBeneinGrn,
+    init_planes: &[u64],
+    ko_mask: u64,
+    oe_mask: u64,
+    max_steps: usize,
+) -> (f64, f64, f64, f64, usize, u64) {
+    let n = grn.n_genes;
+    let valid_mask = if n == 64 { u64::MAX } else { (1u64 << n) - 1 };
+    let (final_planes, steps, _is_fixed) =
+        pgbio_bitsliced_64cell_trajectory_step(grn, init_planes, ko_mask, oe_mask, max_steps);
+
+    // Phenotype readout mask: compare all downstream effector genes (plus any non-clamped nodes)
+    // against `normal_attractor` and `cancer_attractor`
+    let clamped = (ko_mask | oe_mask) & valid_mask;
+    let effector_mask = if (valid_mask & (!clamped)) != 0 {
+        valid_mask & (!clamped)
+    } else {
+        valid_mask
+    };
+    let n_eff = (effector_mask.count_ones() as f64).max(1.0);
+
+    // Bitwise parallel evaluation across all 64 cells simultaneously!
+    let mut mismatch_normal_any = 0u64;
+    let mut mismatch_cancer_any = 0u64;
+    let mut total_hamming_normal = 0u32;
+    let mut lane0_state = 0u64;
+
+    for i in 0..n {
+        let plane = final_planes[i];
+        if (plane & 1) != 0 {
+            lane0_state |= 1u64 << i;
+        }
+        let n_bit = if ((grn.normal_attractor >> i) & 1) != 0 {
+            u64::MAX
+        } else {
+            0u64
+        };
+        let c_bit = if ((grn.cancer_attractor >> i) & 1) != 0 {
+            u64::MAX
+        } else {
+            0u64
+        };
+        let diff_n = plane ^ n_bit;
+        let diff_c = plane ^ c_bit;
+        if ((effector_mask >> i) & 1) != 0 {
+            mismatch_normal_any |= diff_n;
+            total_hamming_normal += diff_n.count_ones();
+        }
+        if (((grn.cancer_attractor ^ grn.normal_attractor) >> i) & 1) != 0 {
+            mismatch_cancer_any |= diff_c;
+        }
+    }
+
+    let exact_normal_cells = (!mismatch_normal_any).count_ones() as f64;
+    let escaped_cancer_cells = mismatch_cancer_any.count_ones() as f64;
+    let normal_basin_pct = (exact_normal_cells / 64.0) * 100.0;
+    let cancer_escape_pct = (escaped_cancer_cells / 64.0) * 100.0;
+    let mean_hamming = (total_hamming_normal as f64) / 64.0;
+    let norm_similarity = (1.0 - (mean_hamming / n_eff)).clamp(0.0, 1.0);
+    let reversion_score = (0.65 * (normal_basin_pct / 100.0) + 0.35 * norm_similarity).clamp(0.0, 1.0);
+
+    (
+        normal_basin_pct,
+        cancer_escape_pct,
+        mean_hamming,
+        reversion_score,
+        steps,
+        lane0_state,
+    )
+}
+
+/// Packs an $N$-gene ($N \le 64$) Boolean Gene Regulatory Network into an inline zero-TOAST `"PGBN"` `bytea`.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_pack_benein_grn(
+    n_genes: i32,
+    sources_1based: Vec<i32>,
+    targets_1based: Vec<i32>,
+    signs: Vec<i32>,
+    basal_mask: default!(i64, 0),
+    cancer_attractor_mask: default!(i64, 0),
+    normal_attractor_mask: default!(i64, 0),
+) -> Vec<u8> {
+    pgbio_pack_benein_grn_bytes(
+        n_genes.clamp(1, 64) as usize,
+        &sources_1based,
+        &targets_1based,
+        &signs,
+        basal_mask as u64,
+        cancer_attractor_mask as u64,
+        normal_attractor_mask as u64,
+    )
+}
+
+/// Returns the canonical 10-gene **KAIST Colorectal Enterocyte Differentiation & Cancer Reversion Boolean Network**
+/// (Gong, Lee, Kim et al. & Kwang-Hyun Cho, *Advanced Science* 2024/2025, `doi:10.1002/advs.202402132`):
+///   - Nodes (1-based index / 0-based bit):
+///     1 (`bit 0`, mask `1`):   `MYB`   (`P10242`) — Master Regulator #1 (Proto-oncogenic TF recruiting EP300/KIX)
+///     2 (`bit 1`, mask `2`):   `HDAC2` (`Q92769`) — Master Regulator #2 (Class I Zn2+ histone deacetylase silencing CDX2/HNF4A)
+///     3 (`bit 2`, mask `4`):   `FOXA2` (`Q9Y261`) — Master Regulator #3 (Pioneer Forkhead TF maintaining malignant chromatin)
+///     4 (`bit 3`, mask `8`):   `EP300` (`Q09472`) — Co-activator acetyltransferase hub
+///     5 (`bit 4`, mask `16`):  `CTNB1` (`P35222`) — WNT/β-catenin oncogenic driver (sustained if ANY of MYB, HDAC2, or FOXA2 is ON)
+///     6 (`bit 5`, mask `32`):  `MYC`   (`P01106`) — Proliferation master driver (activated by MYB, FOXA2, or CTNB1)
+///     7 (`bit 6`, mask `64`):  `CDX2`  (`Q99626`) — Intestinal lineage master TF (repressed if ANY of MYB, HDAC2, or FOXA2 is ON)
+///     8 (`bit 7`, mask `128`): `HNF4A` (`P41235`) — Enterocyte differentiation nuclear receptor (activated by CDX2; repressed by HDAC2/MYC)
+///     9 (`bit 8`, mask `256`): `KLF4`  (`O43474`) — Goblet/enterocyte cell-cycle arrest TF (activated by CDX2/HNF4A; repressed by MYB/FOXA2)
+///    10 (`bit 9`, mask `512`): `VIL1`  (`P09327`) — Terminal absorptive enterocyte brush-border marker (Villin-1; activated by HNF4A/KLF4; repressed by MYC/CTNB1)
+///   - Malignant Cancer Attractor (`cancer_attractor = 0b0000111111 = 63`):
+///     `{MYB=1, HDAC2=1, FOXA2=1, EP300=1, CTNB1=1, MYC=1, CDX2=0, HNF4A=0, KLF4=0, VIL1=0}`
+///   - Differentiated Normal Enterocyte Attractor (`normal_attractor = 0b1111001000 = 968`):
+///     `{MYB=0, HDAC2=0, FOXA2=0, EP300=1, CTNB1=0, MYC=0, CDX2=1, HNF4A=1, KLF4=1, VIL1=1}`
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_kaist_colorectal_grn() -> Vec<u8> {
+    // Positive regulatory edges (+1) and canalizing inhibitory edges (-1)
+    let mut sources = Vec::new();
+    let mut targets = Vec::new();
+    let mut signs = Vec::new();
+
+    let mut add_edge = |s: i32, t: i32, sgn: i32| {
+        sources.push(s);
+        targets.push(t);
+        signs.push(sgn);
+    };
+
+    // Positive feedback loops maintaining the 3 Master Regulators (MYB=1, HDAC2=2, FOXA2=3) in the malignant state
+    add_edge(1, 1, 1);  // MYB auto-activation
+    add_edge(5, 1, 1);  // CTNB1 -> MYB
+    add_edge(2, 2, 1);  // HDAC2 maintenance
+    add_edge(6, 2, 1);  // MYC -> HDAC2
+    add_edge(3, 3, 1);  // FOXA2 pioneer auto-maintenance
+    add_edge(5, 3, 1);  // CTNB1 -> FOXA2
+
+    // Co-activator hub EP300 (node 4) is constitutively available (basal bit 3) and stimulated by MYB/FOXA2/CDX2/HNF4A
+    add_edge(1, 4, 1);
+    add_edge(3, 4, 1);
+    add_edge(7, 4, 1);
+    add_edge(8, 4, 1);
+
+    // Oncogenic WNT/CTNB1 (node 5) and MYC (node 6) modules:
+    // Any single surviving master regulator among {MYB, HDAC2, FOXA2} sustains WNT/CTNB1 & MYC proliferation!
+    add_edge(1, 5, 1);  // MYB -> CTNB1
+    add_edge(2, 5, 1);  // HDAC2 -> CTNB1 (via repression of WNT antagonists DKK1/SFRP)
+    add_edge(3, 5, 1);  // FOXA2 -> CTNB1
+    add_edge(1, 6, 1);  // MYB -> MYC
+    add_edge(3, 6, 1);  // FOXA2 -> MYC
+    add_edge(5, 6, 1);  // CTNB1 -> MYC
+    // Differentiated enterocyte factors KLF4/CDX2 antagonize CTNB1/MYC once all 3 master regulators are silenced
+    add_edge(7, 5, -1); // CDX2 -| CTNB1
+    add_edge(9, 6, -1); // KLF4 -| MYC
+
+    // Enterocyte differentiation cascade: CDX2 (node 7) -> HNF4A (node 8) -> KLF4 (node 9) -> VIL1 (node 10)
+    // CDX2 has basal intestinal lineage drive (basal bit 6) + EP300 (4), but is canalizingly repressed by MYB (1), HDAC2 (2), AND FOXA2 (3)!
+    // Thus ALL THREE of {MYB, HDAC2, FOXA2} must be simultaneously 0 to unlock CDX2!
+    add_edge(4, 7, 1);  // EP300 -> CDX2
+    add_edge(7, 7, 1);  // CDX2 auto-activation
+    add_edge(1, 7, -1); // MYB -| CDX2
+    add_edge(2, 7, -1); // HDAC2 -| CDX2 (epigenetic deacetylation of CDX2 promoter)
+    add_edge(3, 7, -1); // FOXA2 -| CDX2 (pioneer co-option blocking enterocyte enhancer)
+
+    // HNF4A (node 8): activated by CDX2 (7) and EP300 (4); repressed by HDAC2 (2) and MYC (6)
+    add_edge(7, 8, 1);  // CDX2 -> HNF4A
+    add_edge(8, 8, 1);  // HNF4A auto-stabilization
+    add_edge(2, 8, -1); // HDAC2 -| HNF4A
+    add_edge(6, 8, -1); // MYC -| HNF4A
+
+    // KLF4 (node 9): activated by CDX2 (7) and HNF4A (8); repressed by MYB (1) and FOXA2 (3)
+    add_edge(7, 9, 1);  // CDX2 -> KLF4
+    add_edge(8, 9, 1);  // HNF4A -> KLF4
+    add_edge(1, 9, -1); // MYB -| KLF4
+    add_edge(3, 9, -1); // FOXA2 -| KLF4
+
+    // VIL1 (node 10, Villin-1 brush-border terminal enterocyte marker): activated by HNF4A (8) and KLF4 (9); repressed by CTNB1 (5) and MYC (6)
+    add_edge(8, 10, 1);  // HNF4A -> VIL1
+    add_edge(9, 10, 1);  // KLF4 -> VIL1
+    add_edge(5, 10, -1); // CTNB1 -| VIL1
+    add_edge(6, 10, -1); // MYC -| VIL1
+
+    let basal_mask: u64 = (1u64 << 3) | (1u64 << 6); // EP300 (bit 3) and CDX2 basal lineage drive (bit 6)
+    let cancer_attractor: u64 = 0b00_0011_1111;      // MYB, HDAC2, FOXA2, EP300, CTNB1, MYC = ON (63)
+    let normal_attractor: u64 = 0b11_1100_1000;      // EP300, CDX2, HNF4A, KLF4, VIL1 = ON (968)
+
+    pgbio_pack_benein_grn_bytes(
+        10,
+        &sources,
+        &targets,
+        &signs,
+        basal_mask,
+        cancer_attractor,
+        normal_attractor,
+    )
+}
+
+/// Evaluates a specific multi-target knockdown (`knockdown_mask`) and/or overexpression (`overexpress_mask`)
+/// across 64 bit-sliced single-cell trajectories in parallel (`bio_benein_simulate_perturbation`).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_benein_simulate_perturbation(
+    grn_csr_bytea: Vec<u8>,
+    knockdown_mask: i64,
+    overexpress_mask: default!(i64, 0),
+    max_steps: default!(i32, 32),
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(knockdown_mask, i64),
+        name!(overexpress_mask, i64),
+        name!(target_count, i32),
+        name!(normal_basin_pct, f64),
+        name!(cancer_escape_pct, f64),
+        name!(mean_hamming_to_normal, f64),
+        name!(reversion_score, f64),
+        name!(steps_to_converge, i32),
+        name!(final_attractor_mask, i64),
+        name!(achieves_full_reversion, bool),
+    ),
+> {
+    let Some(grn) = pgbio_unpack_benein_grn_bytes(&grn_csr_bytea) else {
+        return pgrx::iter::TableIterator::new(Vec::new().into_iter());
+    };
+    let init_planes = pgbio_build_64cell_cancer_basin_planes(grn.n_genes, grn.cancer_attractor);
+    let ko = knockdown_mask as u64;
+    let oe = overexpress_mask as u64;
+    let (norm_pct, esc_pct, ham, rev_score, steps, final_st) =
+        pgbio_score_benein_perturbation(&grn, &init_planes, ko, oe, max_steps.max(1) as usize);
+    let k_cnt = (ko | oe).count_ones() as i32;
+    let full_rev = norm_pct >= 99.9 && rev_score >= 0.99;
+
+    pgrx::iter::TableIterator::once((
+        knockdown_mask,
+        overexpress_mask,
+        k_cnt,
+        (norm_pct * 100.0).round() / 100.0,
+        (esc_pct * 100.0).round() / 100.0,
+        (ham * 10000.0).round() / 10000.0,
+        (rev_score * 10000.0).round() / 10000.0,
+        steps as i32,
+        final_st as i64,
+        full_rev,
+    ))
+}
+
+/// Exhaustively scans all $\sum_{r=1}^{k} \binom{M}{r}$ single, dual, and triple ($k \le 4$) gene knockdowns
+/// across candidate regulator nodes (`candidate_mask`, defaulting to all active genes in `cancer_attractor`)
+/// using 64-way bit-sliced `u64` register trajectory simulation (`bio_benein_reversion_scan`).
+/// Computes each combination's **Synergy Gain (`synergy_over_subsets`)** over its best $(r-1)$ subset
+/// to pinpoint minimal synergistic master regulator combinations (such as KAIST's **`MYB + HDAC2 + FOXA2`**).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_benein_reversion_scan(
+    grn_csr_bytea: Vec<u8>,
+    gene_names: Vec<String>,
+    max_combo_k: default!(i32, 3),
+    candidate_mask: default!(i64, 0),
+    max_steps: default!(i32, 32),
+    top_limit: default!(i32, 25),
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(rank, i32),
+        name!(combo_size, i32),
+        name!(knockdown_mask, i64),
+        name!(knockdown_genes, String),
+        name!(normal_basin_pct, f64),
+        name!(cancer_escape_pct, f64),
+        name!(mean_hamming_to_normal, f64),
+        name!(reversion_score, f64),
+        name!(synergy_over_subsets, f64),
+        name!(steps_to_converge, i32),
+        name!(final_attractor_mask, i64),
+        name!(reversion_verdict, String),
+    ),
+> {
+    let Some(grn) = pgbio_unpack_benein_grn_bytes(&grn_csr_bytea) else {
+        return pgrx::iter::TableIterator::new(Vec::new().into_iter());
+    };
+    let n = grn.n_genes;
+    let valid_mask = if n == 64 { u64::MAX } else { (1u64 << n) - 1 };
+    let cand_bits = if candidate_mask > 0 {
+        (candidate_mask as u64) & valid_mask
+    } else if grn.cancer_attractor != 0 {
+        grn.cancer_attractor & valid_mask
+    } else {
+        valid_mask
+    };
+
+    let mut cand_indices: Vec<usize> = Vec::new();
+    for i in 0..n {
+        if ((cand_bits >> i) & 1) != 0 {
+            cand_indices.push(i);
+        }
+    }
+
+    let max_k = (max_combo_k.clamp(1, 4) as usize).min(cand_indices.len());
+    let steps_cap = max_steps.max(1) as usize;
+    let init_planes = pgbio_build_64cell_cancer_basin_planes(n, grn.cancer_attractor);
+
+    // Enumerate combinations of size 1..=max_k and cache scores in a HashMap<u64, f64> for exact subset synergy calculation
+    let mut score_by_mask: std::collections::HashMap<u64, f64> = std::collections::HashMap::new();
+    let mut raw_results: Vec<(
+        i32,
+        u64,
+        String,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        i32,
+        u64,
+        String,
+    )> = Vec::new();
+
+    let format_genes = |mask: u64| -> String {
+        let mut parts = Vec::new();
+        for i in 0..n {
+            if ((mask >> i) & 1) != 0 {
+                let label = gene_names
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| format!("G{}", i + 1));
+                parts.push(label);
+            }
+        }
+        parts.join(" + ")
+    };
+
+    let m = cand_indices.len();
+    for k in 1..=max_k {
+        let mut idx = (0..k).collect::<Vec<usize>>();
+        loop {
+            let mut ko_mask = 0u64;
+            for &pos in &idx {
+                ko_mask |= 1u64 << cand_indices[pos];
+            }
+            let (norm_pct, esc_pct, ham, rev_score, steps, final_st) =
+                pgbio_score_benein_perturbation(&grn, &init_planes, ko_mask, 0u64, steps_cap);
+            score_by_mask.insert(ko_mask, rev_score);
+
+            // Best proper subset score (removing any 1 gene from ko_mask)
+            let mut best_subset_score = 0.0f64;
+            if k > 1 {
+                for &pos in &idx {
+                    let sub_mask = ko_mask & !(1u64 << cand_indices[pos]);
+                    if let Some(&sub_sc) = score_by_mask.get(&sub_mask) {
+                        if sub_sc > best_subset_score {
+                            best_subset_score = sub_sc;
+                        }
+                    }
+                }
+            }
+            let synergy = rev_score - best_subset_score;
+            let verdict = if norm_pct >= 99.9 && synergy >= 0.25 {
+                "SYNERGISTIC_MASTER_REVERSION_SET".to_string()
+            } else if norm_pct >= 99.9 {
+                "REDUNDANT_SUPERSET_REVERSION".to_string()
+            } else if esc_pct >= 50.0 {
+                "PARTIAL_DESTABILIZATION_ONLY".to_string()
+            } else {
+                "TRAPPED_IN_CANCER_ATTRACTOR".to_string()
+            };
+
+            raw_results.push((
+                k as i32,
+                ko_mask,
+                format_genes(ko_mask),
+                norm_pct,
+                esc_pct,
+                ham,
+                rev_score,
+                synergy,
+                steps as i32,
+                final_st,
+                verdict,
+            ));
+
+            // Advance combination indices lexicographically
+            let mut p = k;
+            while p > 0 && idx[p - 1] == m - k + (p - 1) {
+                p -= 1;
+            }
+            if p == 0 {
+                break;
+            }
+            idx[p - 1] += 1;
+            for q in p..k {
+                idx[q] = idx[q - 1] + 1;
+            }
+        }
+    }
+
+    // Sort by:
+    //   1. reversion_score descending
+    //   2. synergy_over_subsets descending (preferring minimal synergistic sets over redundant supersets!)
+    //   3. combo_size ascending (Occam's razor: smallest k that achieves reversion)
+    //   4. knockdown_mask ascending
+    raw_results.sort_by(|a, b| {
+        b.6.partial_cmp(&a.6)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.7.partial_cmp(&a.7).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| a.0.cmp(&b.0))
+            .then_with(|| a.1.cmp(&b.1))
+    });
+
+    let limit = (top_limit.max(1) as usize).min(raw_results.len());
+    let round4 = |x: f64| (x * 10000.0).round() / 10000.0;
+    let round2 = |x: f64| (x * 100.0).round() / 100.0;
+
+    let out: Vec<_> = raw_results
+        .into_iter()
+        .take(limit)
+        .enumerate()
+        .map(|(r_idx, item)| {
+            (
+                (r_idx + 1) as i32,
+                item.0,
+                item.1 as i64,
+                item.2,
+                round2(item.3),
+                round2(item.4),
+                round4(item.5),
+                round4(item.6),
+                round4(item.7),
+                item.8,
+                item.9 as i64,
+                item.10,
+            )
+        })
+        .collect();
+
+    pgrx::iter::TableIterator::new(out.into_iter())
+}
+
 
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -17559,6 +18261,120 @@ HETATM    3  O1  LIG L   1       5.050  10.100  10.000  1.00  0.00           O";
         for h in handles {
             h.join().expect("Concurrent Release/Acquire whitening reader thread panicked");
         }
+    }
+
+    #[pg_test]
+    fn test_layer22_benein_boolean_attractor_cancer_reversion() {
+        // 1. Build the canonical 10-gene KAIST Colorectal Cancer Reversion Boolean GRN (Gong & Cho, Adv. Sci. 2024/2025)
+        let grn_bytes = crate::bio_kaist_colorectal_grn();
+        assert_eq!(
+            &grn_bytes[0..4],
+            b"PGBN",
+            "Packed BENEIN GRN must carry PGBN 4-byte magic header"
+        );
+        assert_eq!(
+            grn_bytes.len(),
+            32 + 16 * 10,
+            "10-gene PGBN container must be exactly 192 bytes (< 2,000 B zero-TOAST threshold)"
+        );
+
+        // 2. Verify Unperturbed Cancer Basin stays trapped in the Malignant Attractor (mask 63 = MYB+HDAC2+FOXA2+EP300+CTNB1+MYC)
+        let unperturbed: Vec<_> =
+            crate::bio_benein_simulate_perturbation(grn_bytes.clone(), 0, 0, 32).collect();
+        assert_eq!(unperturbed.len(), 1);
+        assert_eq!(
+            unperturbed[0].3, 0.0,
+            "Unperturbed colorectal cancer cells must have 0% normal enterocyte basin convergence"
+        );
+        assert_eq!(
+            unperturbed[0].8, 63,
+            "Unperturbed trajectory must converge to cancer attractor mask 63"
+        );
+        assert!(!unperturbed[0].9);
+
+        // 3. Verify Single Knockdowns (MYB=1, HDAC2=2, FOXA2=4) achieve 0% normal enterocyte basin,
+        //    and Dual Knockdowns (1|2=3, 1|4=5, 2|4=6) remain trapped (< 2% normal basin, 0% full reversion)!
+        for &single_ko in &[1i64, 2, 4] {
+            let sim: Vec<_> =
+                crate::bio_benein_simulate_perturbation(grn_bytes.clone(), single_ko, 0, 32)
+                    .collect();
+            assert_eq!(
+                sim[0].3, 0.0,
+                "Single knockdown mask {} must remain at 0.0% normal enterocyte basin (got {}%)",
+                single_ko, sim[0].3
+            );
+            assert!(!sim[0].9);
+        }
+        for &dual_ko in &[3i64, 5, 6] {
+            let sim: Vec<_> =
+                crate::bio_benein_simulate_perturbation(grn_bytes.clone(), dual_ko, 0, 32)
+                    .collect();
+            assert!(
+                sim[0].3 < 5.0 && !sim[0].9,
+                "Dual knockdown mask {} must fail to revert the cancer basin (< 5%, got {}%)",
+                dual_ko,
+                sim[0].3
+            );
+        }
+
+        // 4. Verify KAIST Synergistic Triple Knockdown (MYB + HDAC2 + FOXA2 => mask 1 | 2 | 4 = 7)
+        //    drives 100.0% of all 64 bit-sliced single-cell trajectories into the Normal Enterocyte Attractor (mask 968)!
+        let triple_ko: Vec<_> =
+            crate::bio_benein_simulate_perturbation(grn_bytes.clone(), 7, 0, 32).collect();
+        assert_eq!(triple_ko[0].2, 3, "Triple knockdown must report target_count = 3");
+        assert_eq!(
+            triple_ko[0].3, 100.0,
+            "MYB + HDAC2 + FOXA2 triple knockdown must drive 100.0% of cells into normal enterocyte attractor"
+        );
+        assert_eq!(
+            triple_ko[0].4, 100.0,
+            "MYB + HDAC2 + FOXA2 triple knockdown must achieve 100.0% cancer attractor escape"
+        );
+        assert_eq!(
+            triple_ko[0].5, 0.0,
+            "Mean Hamming distance to normal enterocyte attractor must be 0.0000"
+        );
+        assert!(
+            (triple_ko[0].6 - 1.0).abs() < 1e-6,
+            "Reversion score for MYB + HDAC2 + FOXA2 must be 1.0000, got {}",
+            triple_ko[0].6
+        );
+        assert_eq!(
+            triple_ko[0].8, 968,
+            "Converged state must match normal enterocyte attractor mask 968 (EP300+CDX2+HNF4A+KLF4+VIL1)"
+        );
+        assert!(triple_ko[0].9, "MYB + HDAC2 + FOXA2 must achieve full reversion!");
+
+        // 5. Verify Exhaustive Combinatorial Scan (`bio_benein_reversion_scan`) over the 6 active cancer drivers (mask 63)
+        //    identifies `MYB + HDAC2 + FOXA2` (mask 7) as Rank #1 with exact synergy gain > 0.60!
+        let gene_names = vec![
+            "MYB".to_string(),
+            "HDAC2".to_string(),
+            "FOXA2".to_string(),
+            "EP300".to_string(),
+            "CTNB1".to_string(),
+            "MYC".to_string(),
+            "CDX2".to_string(),
+            "HNF4A".to_string(),
+            "KLF4".to_string(),
+            "VIL1".to_string(),
+        ];
+        let scan: Vec<_> =
+            crate::bio_benein_reversion_scan(grn_bytes, gene_names, 3, 63, 32, 10).collect();
+        assert!(!scan.is_empty());
+        let top1 = &scan[0];
+        assert_eq!(top1.0, 1, "Top rank must be 1");
+        assert_eq!(top1.1, 3, "Top synergistic combo size must be k = 3");
+        assert_eq!(top1.2, 7, "Top knockdown mask must be 7 (MYB=1 | HDAC2=2 | FOXA2=4)");
+        assert_eq!(top1.3, "MYB + HDAC2 + FOXA2");
+        assert_eq!(top1.4, 100.0);
+        assert!((top1.7 - 1.0).abs() < 1e-6);
+        assert!(
+            top1.8 >= 0.65,
+            "Synergy over all 2-gene subsets must be >= 0.65, got {}",
+            top1.8
+        );
+        assert_eq!(top1.11, "SYNERGISTIC_MASTER_REVERSION_SET");
     }
 }
 

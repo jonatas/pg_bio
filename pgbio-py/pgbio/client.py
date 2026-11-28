@@ -20,6 +20,7 @@ from .models import (
     PoseBustersAudit,
     BioEnzRefResult,
     BioIpsaeMinipaeAudit,
+    BioBeneinReversionCandidate,
 )
 
 class PgBioClient:
@@ -1134,6 +1135,76 @@ class PgBioClient:
                     gate_verdict=r[18],
                     packed_csr_bytes=int(r[19]),
                 )
+
+    def benein_reversion_scan(
+        self,
+        grn_csr_bytea: Optional[bytes] = None,
+        gene_names: Optional[List[str]] = None,
+        max_combo_k: int = 3,
+        candidate_mask: int = 0,
+        max_steps: int = 32,
+        top_limit: int = 25,
+    ) -> List[BioBeneinReversionCandidate]:
+        """
+        Executes Layer 22 Bit-Sliced 64-Way BENEIN Boolean Attractor & Synergistic Cancer Reversion Scan
+        (`bio_benein_reversion_scan`, Gong & Cho KAIST Adv. Sci. 2024/2025). If `grn_csr_bytea` is None,
+        uses `bio_kaist_colorectal_grn()`.
+        """
+        default_names = [
+            "MYB",
+            "HDAC2",
+            "FOXA2",
+            "EP300",
+            "CTNB1",
+            "MYC",
+            "CDX2",
+            "HNF4A",
+            "KLF4",
+            "VIL1",
+        ]
+        names = gene_names if gene_names is not None else default_names
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                if grn_csr_bytea is None:
+                    cur.execute(
+                        """
+                        SELECT rank, combo_size, knockdown_mask, knockdown_genes,
+                               normal_basin_pct, cancer_escape_pct, mean_hamming_to_normal,
+                               reversion_score, synergy_over_subsets, steps_to_converge,
+                               final_attractor_mask, reversion_verdict
+                        FROM bio_benein_reversion_scan(bio_kaist_colorectal_grn(), %s::text[], %s, %s, %s, %s);
+                        """,
+                        (names, max_combo_k, candidate_mask, max_steps, top_limit),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT rank, combo_size, knockdown_mask, knockdown_genes,
+                               normal_basin_pct, cancer_escape_pct, mean_hamming_to_normal,
+                               reversion_score, synergy_over_subsets, steps_to_converge,
+                               final_attractor_mask, reversion_verdict
+                        FROM bio_benein_reversion_scan(%s, %s::text[], %s, %s, %s, %s);
+                        """,
+                        (grn_csr_bytea, names, max_combo_k, candidate_mask, max_steps, top_limit),
+                    )
+                return [
+                    BioBeneinReversionCandidate(
+                        rank=int(r[0]),
+                        combo_size=int(r[1]),
+                        knockdown_mask=int(r[2]),
+                        knockdown_genes=r[3],
+                        normal_basin_pct=float(r[4]),
+                        cancer_escape_pct=float(r[5]),
+                        mean_hamming_to_normal=float(r[6]),
+                        reversion_score=float(r[7]),
+                        synergy_over_subsets=float(r[8]),
+                        steps_to_converge=int(r[9]),
+                        final_attractor_mask=int(r[10]),
+                        reversion_verdict=r[11],
+                    )
+                    for r in cur.fetchall()
+                ]
+
 
 
 
