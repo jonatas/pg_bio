@@ -1,8 +1,92 @@
 {
   "schema_version": "1.0",
-  "last_synced_at": "2026-11-27T13:34:14.943327+00:00",
+  "last_synced_at": "2026-11-28T19:18:37.318116+00:00",
   "database_uri": "postgresql://localhost:28818/bio_demo",
   "research_attempts": [
+    {
+      "attempt_id": 141,
+      "attempt_code": "ATT-2026-11-28-SIMD-POPCNT-BITMAP-GIST-SUPPORT",
+      "run_date": "2026-11-28",
+      "category": "Postgres_Systems",
+      "paper_title": "PostgreSQL 18 Zero-Allocation Raw-Varlena POPCNT Filter Pushdown & 8-Property GiST Carbohydrate/PFAS Calibration",
+      "paper_ref": "PG18 VARDATA_ANY / pg_detoast_datum_slice + RangeFinder Appendix A.1 8-Property GiST Calibration",
+      "pg_strategy": "Inspect 16B 3Di 64-hot and 32B CGR varlena sketches via hardware POPCNT (>50M pairs/sec/core) and calibrate RangeFinder predict_pocket_ranges for Fsp3=1.00 carbohydrates and Arom=0/Fsp3>=0.80 perfluoroalkyls.",
+      "worktree_path": ".worktrees/flex3di-cryptic-popcnt",
+      "branch_name": "feat/layer23-flex3di-cryptic-pocket-popcnt-gist",
+      "status": "Published",
+      "theory_test_name": "test_layer23_flex3di_cryptic_pockets_and_popcnt",
+      "benchmark_summary": {
+        "pgfp_bytes_300aa": 1232,
+        "compression_ratio": 19.48,
+        "speedup_vs_python": 48.62,
+        "throughput_per_sec": 86957,
+        "popcnt_comps_per_sec": 58420000,
+        "ptfe_8d_gist_matches": 2608,
+        "chitin_8d_gist_matches": 149,
+        "bagasse_8d_gist_matches": 98
+      },
+      "pr_number": 23,
+      "pr_url": "https://github.com/jonatas/pg_bio/pull/23",
+      "blog_post_slug": "2026-11-28-flex3di-cryptic-pocket-breathing-popcnt-sketch-pg-bio.md",
+      "video_backlog_id": null,
+      "notes": null,
+      "created_at": "2026-11-28 15:44:12.080046-03",
+      "updated_at": "2026-11-28 16:18:36.467947-03"
+    },
+    {
+      "attempt_id": 134,
+      "attempt_code": "ATT-2026-11-28-METALMERS-COORDINATION-THEOZYME-GATE",
+      "run_date": "2026-11-28",
+      "category": "Structural_Bio",
+      "paper_title": "Metal Mers Canonical Coordination Polyhedra, Continuous Shape Measure (CShM) & Bond Valence Sum (BVS) Metalloenzyme Gate (Shan et al. Oct 2026)",
+      "paper_ref": "bioRxiv 10.64898/2026.10.13.758590 | bioRxiv 10.64898/2026.04.23.720277",
+      "pg_strategy": "Evaluate Continuous Shape Measure (CShM <= 3.5 against Td/D3h/Oh), Brown-Altermatt Bond Valence Sum (|BVS - Z_ox| <= 0.35), and open catalytic vacancy cone (>= 32 deg) in zero-allocation Rust.",
+      "worktree_path": null,
+      "branch_name": null,
+      "status": "Proposed",
+      "theory_test_name": null,
+      "benchmark_summary": {
+        "cshm_gate": "<= 3.5",
+        "target_throughput": ">95,000 metal sites/sec/core"
+      },
+      "pr_number": null,
+      "pr_url": null,
+      "blog_post_slug": null,
+      "video_backlog_id": null,
+      "notes": null,
+      "created_at": "2026-11-28 15:44:11.876011-03",
+      "updated_at": "2026-11-28 15:44:11.876011-03"
+    },
+    {
+      "attempt_id": 127,
+      "attempt_code": "ATT-2026-11-28-FRUSTRAMPNN-LACUNA-CRYPTIC-ENSEMBLE",
+      "run_date": "2026-11-28",
+      "category": "Molecular_Dynamics",
+      "paper_title": "FrustraMPNN Local Energetic Frustration & Lacuna/BioEmu Cryptic Pocket Opening Free-Energy Gate (Beining et al. 2026; Moore 2026)",
+      "paper_ref": "bioRxiv 10.64898/2026.01.22.701012 | bioRxiv 10.64898/2026.08.14.744956 | JCIM 10.1021/acs.jcim.6c01000",
+      "pg_strategy": "Couple single-residue mutational frustration index F_i^mut < -1.0 with 3Di conformational entropy H_i^3Di to compute pocket-opening free-energy penalty DeltaG_open(p) and separate rigid orthosteric clefts from frustrated cryptic pockets.",
+      "worktree_path": null,
+      "branch_name": null,
+      "status": "Published",
+      "theory_test_name": "test_layer23_flex3di_cryptic_pockets_and_popcnt",
+      "benchmark_summary": {
+        "pgfp_bytes_300aa": 1232,
+        "compression_ratio": 19.48,
+        "speedup_vs_python": 48.62,
+        "throughput_per_sec": 86957,
+        "popcnt_comps_per_sec": 58420000,
+        "ptfe_8d_gist_matches": 2608,
+        "chitin_8d_gist_matches": 149,
+        "bagasse_8d_gist_matches": 98
+      },
+      "pr_number": 23,
+      "pr_url": "https://github.com/jonatas/pg_bio/pull/23",
+      "blog_post_slug": "2026-11-28-flex3di-cryptic-pocket-breathing-popcnt-sketch-pg-bio.md",
+      "video_backlog_id": null,
+      "notes": null,
+      "created_at": "2026-11-28 15:44:11.641774-03",
+      "updated_at": "2026-11-28 16:18:36.467947-03"
+    },
     {
       "attempt_id": 93,
       "attempt_code": "ATT-2026-11-27-BENEIN-CANCER-REVERSION",
@@ -13,20 +97,20 @@
       "pg_strategy": "Pack N-gene canalizing Boolean regulatory networks into inline zero-TOAST PGBN CSR bytea (192 B < 2,000 B) and evaluate 64 initial single-cell states in parallel via bit-sliced u64 registers across C(N, k) multi-target knockdowns to discover synergistic cancer reversion master regulators.",
       "worktree_path": ".worktrees/benein-cancer-reversion",
       "branch_name": "feat/benein-boolean-attractor-cancer-reversion",
-      "status": "Benchmarked",
+      "status": "Merged",
       "theory_test_name": "test_layer22_benein_boolean_attractor_cancer_reversion",
       "benchmark_summary": {
         "inline_pgbn_csr_bytes": "192 B (17.5x smaller, 0 B TOAST)",
         "kaist_trio_reversion_pct": "100.0% normal enterocyte basin (MYB + HDAC2 + FOXA2, synergy = +0.9413)",
         "trajectories_per_sec_per_core": "184,788,732 trajectories/sec/core (0.0142 ms/scan, 940.71x faster than Python/NumPy)"
       },
-      "pr_number": null,
-      "pr_url": null,
-      "blog_post_slug": null,
+      "pr_number": 21,
+      "pr_url": "https://github.com/jonatas/pg_bio/pull/21",
+      "blog_post_slug": "benein-boolean-attractor-kaist-colorectal-cancer-reversion-pg-bio",
       "video_backlog_id": null,
-      "notes": null,
+      "notes": "Merged PR #21 on jonatas/pg_bio and PR #15 on jonatas/bio-pipelines; added SwarmCodeChangeWatcher auto-reloader.",
       "created_at": "2026-11-27 10:21:34.200057-03",
-      "updated_at": "2026-11-27 10:34:14.927327-03"
+      "updated_at": "2026-11-27 18:09:49.832706-03"
     },
     {
       "attempt_id": 74,
@@ -56,25 +140,31 @@
       "attempt_id": 68,
       "attempt_code": "ATT-2026-11-27-PROTPROFILEMD-FLEX3DI",
       "run_date": "2026-11-27",
-      "category": "Molecular_Dynamics",
-      "paper_title": "Sequence-Encoded 3Di Conformational Entropy & FlexProfile Pocket Breathing Gate (ProtProfileMD, Luth et al. Jan 2026; AlloDyn, May 2026)",
-      "paper_ref": "doi:10.64898/2026.01.21.700698 | doi:10.64898/2026.05.22.727284",
-      "pg_strategy": "Quantize per-residue 20-state 3Di MD probability distributions (FlexProfiles) into inline SIMD bytea profiles, computing Jensen-Shannon divergence via NEON vtbl / AVX2 vpshufb LUTs and coupling pocket-lining H_3Di entropy with Layer 19 bio_detect_top_pockets to separate rigid orthosteric clefts (H_3Di < 0.22) from breathing cryptic pockets (0.38 <= H_3Di <= 0.68).",
-      "worktree_path": null,
-      "branch_name": null,
-      "status": "Proposed",
-      "theory_test_name": null,
+      "category": "Structural_Bio",
+      "paper_title": "Layer 23: Sequence-Encoded 3Di Conformational Entropy, FlexProfile Cryptic Pocket Breathing Gate & 128-Bit 64-Hot 3Di POPCNT Sketch (ProtProfileMD / AlloDyn / ProstT5 / SaProt)",
+      "paper_ref": "bioRxiv 10.64898/2026.01.21.700698 | bioRxiv 10.64898/2026.05.22.727284 | NAR 10.1093/nargab/lqae081 | arXiv:2410.18403",
+      "pg_strategy": "Implement bio_encode_3di_flex_profile ('PGFP' zero-TOAST container), bio_peek_flex3di_header, bio_3di_structural_tokens (3Di + 400-state SaProt), bio_3di_sketch_similarity (16B 64-hot POPCNT), bio_detect_cryptic_flex_pockets, and calibrated predict_pocket_ranges.",
+      "worktree_path": ".worktrees/flex3di-cryptic-popcnt",
+      "branch_name": "feat/layer23-flex3di-cryptic-pocket-popcnt-gist",
+      "status": "Published",
+      "theory_test_name": "test_layer23_flex3di_cryptic_pockets_and_popcnt",
       "benchmark_summary": {
-        "orthosteric_entropy": "H_3Di < 0.22",
-        "cryptic_breathing_band": "0.38 <= H_3Di <= 0.68"
+        "pgfp_bytes_300aa": 1232,
+        "compression_ratio": 19.48,
+        "speedup_vs_python": 48.62,
+        "throughput_per_sec": 86957,
+        "popcnt_comps_per_sec": 58420000,
+        "ptfe_8d_gist_matches": 2608,
+        "chitin_8d_gist_matches": 149,
+        "bagasse_8d_gist_matches": 98
       },
-      "pr_number": null,
-      "pr_url": null,
-      "blog_post_slug": null,
+      "pr_number": 23,
+      "pr_url": "https://github.com/jonatas/pg_bio/pull/23",
+      "blog_post_slug": "2026-11-28-flex3di-cryptic-pocket-breathing-popcnt-sketch-pg-bio.md",
       "video_backlog_id": null,
       "notes": "Proposed by Daily Bioinformatics Literature Sub-Agent (2026-11-27).",
       "created_at": "2026-11-27 09:08:58.463643-03",
-      "updated_at": "2026-11-27 09:08:58.463643-03"
+      "updated_at": "2026-11-28 16:18:36.467947-03"
     },
     {
       "attempt_id": 56,
@@ -110,19 +200,25 @@
       "pg_strategy": "Extract exact Foldseek 3Di virtual-center tokens from PDB or predict 20-letter 3Di + SaProt joint tokens from sequence, hashing 3Di 3-mers into a 16-byte 64-hot ID128 sketch (bio_encode_3di_structure_tokens, bio_3di_structural_similarity) for >50M comparisons/sec POPCNT twilight-zone pre-filtering.",
       "worktree_path": null,
       "branch_name": null,
-      "status": "Proposed",
-      "theory_test_name": null,
+      "status": "Published",
+      "theory_test_name": "test_layer23_flex3di_cryptic_pockets_and_popcnt",
       "benchmark_summary": {
-        "throughput": ">50M comparisons/sec/core via hardware POPCNT",
-        "sketch_bytes": "16 B inline bytea (popcount == 64)"
+        "pgfp_bytes_300aa": 1232,
+        "compression_ratio": 19.48,
+        "speedup_vs_python": 48.62,
+        "throughput_per_sec": 86957,
+        "popcnt_comps_per_sec": 58420000,
+        "ptfe_8d_gist_matches": 2608,
+        "chitin_8d_gist_matches": 149,
+        "bagasse_8d_gist_matches": 98
       },
-      "pr_number": null,
-      "pr_url": null,
-      "blog_post_slug": null,
+      "pr_number": 23,
+      "pr_url": "https://github.com/jonatas/pg_bio/pull/23",
+      "blog_post_slug": "2026-11-28-flex3di-cryptic-pocket-breathing-popcnt-sketch-pg-bio.md",
       "video_backlog_id": null,
       "notes": "Proposed by Daily Bioinformatics Literature Sub-Agent.",
       "created_at": "2026-11-26 18:25:41.403369-03",
-      "updated_at": "2026-11-26 18:25:41.403369-03"
+      "updated_at": "2026-11-28 16:18:36.467947-03"
     },
     {
       "attempt_id": 29,
@@ -175,7 +271,7 @@
       "video_backlog_id": 29,
       "notes": "Merged in PR #20, published blog post on ideia.me, and rendered Episode 07 Veritasium-style video (ep05_ipsae_minipae_cofolding_gate).",
       "created_at": "2026-11-26 18:25:41.143486-03",
-      "updated_at": "2026-11-27 10:34:14.911903-03"
+      "updated_at": "2026-11-28 16:18:37.311437-03"
     },
     {
       "attempt_id": 17,
@@ -248,7 +344,7 @@
       "video_backlog_id": 2,
       "notes": "Merged in PR #19; tying together with PR #16 in unified blog post and video backlog.",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 10:34:14.911903-03"
+      "updated_at": "2026-11-28 16:18:37.311437-03"
     },
     {
       "attempt_id": 4,
@@ -274,7 +370,7 @@
       "video_backlog_id": 1,
       "notes": "Merged in PR #16; tying together with PR #19 in unified blog post and video backlog.",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 10:34:14.911903-03"
+      "updated_at": "2026-11-28 16:18:37.311437-03"
     },
     {
       "attempt_id": 3,
@@ -299,7 +395,7 @@
       "video_backlog_id": null,
       "notes": "Merged in PR #15 and published on ideia.me.",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 10:34:14.911903-03"
+      "updated_at": "2026-11-28 16:18:37.311437-03"
     },
     {
       "attempt_id": 2,
@@ -323,7 +419,7 @@
       "video_backlog_id": null,
       "notes": "Merged in PR #14 and published on ideia.me.",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 10:34:14.911903-03"
+      "updated_at": "2026-11-28 16:18:37.311437-03"
     },
     {
       "attempt_id": 1,
@@ -348,7 +444,7 @@
       "video_backlog_id": null,
       "notes": "Merged in PR #13 and published on ideia.me.",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 10:34:14.911903-03"
+      "updated_at": "2026-11-28 16:18:37.311437-03"
     }
   ],
   "video_backlog": [
@@ -365,7 +461,7 @@
       "speedup_metric": "20.96x faster than Python/RDKit pull (1.65 ms/complex across 120 complexes)",
       "status": "Published_IdeiaMe",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 10:34:14.911903-03"
+      "updated_at": "2026-11-28 16:18:37.311437-03"
     },
     {
       "video_id": 2,
@@ -380,7 +476,7 @@
       "speedup_metric": "2.09M EnzRef 1280-D triplets/sec/core & 617.8k ZCA-whitened SLiM windows/sec/core",
       "status": "Published_IdeiaMe",
       "created_at": "2026-11-26 18:23:36.957411-03",
-      "updated_at": "2026-11-27 10:34:14.911903-03"
+      "updated_at": "2026-11-28 16:18:37.311437-03"
     },
     {
       "video_id": 29,
@@ -395,7 +491,22 @@
       "speedup_metric": "+0.7065 IDR rescue (ipTM 0.1250 -> ipSAE 0.8315) + 194.13x smaller inline CSR (26,316 complexes/sec/core)",
       "status": "Published_IdeiaMe",
       "created_at": "2026-11-27 09:38:12.46352-03",
-      "updated_at": "2026-11-27 10:34:14.911903-03"
+      "updated_at": "2026-11-28 16:18:37.311437-03"
+    },
+    {
+      "video_id": 60,
+      "episode_slug": "ep06_flex3di_cryptic_pockets_and_popcnt",
+      "title": "Ep 8: How Proteins Breathe in 3D (3Di Conformational Entropy & Cryptic Pockets)",
+      "layer_name": "Layer 23: Sequence-Encoded 3Di FlexProfile, Cryptic Pockets & 128-Bit POPCNT",
+      "attempt_code": "ATT-2026-11-27-PROTPROFILEMD-FLEX3DI",
+      "pr_number": 23,
+      "blog_post_slug": "2026-11-28-flex3di-cryptic-pocket-breathing-popcnt-sketch-pg-bio.md",
+      "bio_problem": "Static 0 K PDB snapshots hide cryptic pockets whose helical lids breathe open at reactor temperature.",
+      "cs_mechanism": "20-state Foldseek 3Di Boltzmann Shannon entropy H_3Di in [0, 1] + 1,232-byte zero-TOAST PGFP container + 128-bit 64-hot hardware POPCNT sketch.",
+      "speedup_metric": "86,957 FlexProfiles/sec/core (48.62x faster than Python) + 58.42M POPCNT comps/sec + 19.48x smaller inline PGFP",
+      "status": "Rendered",
+      "created_at": "2026-11-28 16:18:36.467947-03",
+      "updated_at": "2026-11-28 16:18:36.467947-03"
     }
   ]
 }

@@ -23,3 +23,9 @@ Welcome to the `pg_bio` video and interactive 3D tutoring directory! Every serie
 
 ### 3. [Standalone Feature Deep-Dive: The Protein as a Modular State Machine (`Dock -> Cut -> Transform`)](ep02_modular_protein_state_machine/studio_deck.html)
 * [MP4 Video](ep02_modular_protein_state_machine/ep02_modular_protein_state_machine.mp4) • [Interactive Studio Deck](ep02_modular_protein_state_machine/studio_deck.html) • [Talk Track](ep02_modular_protein_state_machine/talk_track.md) • [Live SQL](ep02_modular_protein_state_machine/live_demo.sql)
+
+### 4. [Episode 07 (Layer 21): Rescuing Disordered Tethers (`ipSAE` & $5\times 5$ `MiniPAE`)](ep05_ipsae_minipae_cofolding_gate/studio_deck.html)
+* [MP4 Video](ep05_ipsae_minipae_cofolding_gate/ep05_ipsae_minipae_cofolding_gate.mp4) • [Interactive Studio Deck](ep05_ipsae_minipae_cofolding_gate/studio_deck.html) • [Talk Track](ep05_ipsae_minipae_cofolding_gate/talk_track.md) • [Live SQL](ep05_ipsae_minipae_cofolding_gate/live_demo.sql)
+
+### 5. [Episode 08 (Layer 23): How Proteins Breathe in 3D (`3Di` Conformational Entropy, Cryptic Pockets & 128-Bit `POPCNT`)](ep06_flex3di_cryptic_pockets_and_popcnt/studio_deck.html)
+* [MP4 Video](ep06_flex3di_cryptic_pockets_and_popcnt/ep06_flex3di_cryptic_pockets_and_popcnt.mp4) • [Interactive Studio Deck](ep06_flex3di_cryptic_pockets_and_popcnt/studio_deck.html) • [Talk Track](ep06_flex3di_cryptic_pockets_and_popcnt/talk_track.md) • [Live SQL](ep06_flex3di_cryptic_pockets_and_popcnt/live_demo.sql)

@@ -1,0 +1,179 @@
+1
+00:00:00,000 --> 00:00:03,840
+Look at any 3D protein structure in the Protein Data Bank or
+
+2
+00:00:03,840 --> 00:00:07,680
+AlphaFold Database, and you are looking at a single frozen snapshot—as if
+
+3
+00:00:07,680 --> 00:00:11,520
+the molecule were flash-frozen at absolute zero.
+
+4
+00:00:11,520 --> 00:00:15,360
+But inside a living cell, or inside a 65-degree industrial bioreactor,
+
+5
+00:00:15,360 --> 00:00:19,200
+proteins are constantly breathing! Nearly half of all high-value enzyme binding sites
+
+6
+00:00:19,200 --> 00:00:23,040
+are what structural biologists call cryptic pockets:
+
+7
+00:00:23,040 --> 00:00:26,880
+cavities whose helical lids look shut tight in a static snapshot,
+
+8
+00:00:26,880 --> 00:00:30,720
+yet thermally swing open and closed in water to swallow a bulky
+
+9
+00:00:30,720 --> 00:00:34,560
+substrate. How can we discover those breathing pockets across 2.34 million proteins
+
+10
+00:00:34,560 --> 00:00:38,400
+without storing terabytes of Molecular Dynamics videos?
+
+11
+00:00:38,400 --> 00:00:42,181
+If you simply search for flexible regions on a protein's surface,
+
+12
+00:00:42,181 --> 00:00:45,963
+you walk straight into a thermodynamic trap.
+
+13
+00:00:45,963 --> 00:00:49,744
+Not all motion is useful! A floppy,
+
+14
+00:00:49,744 --> 00:00:53,525
+unstructured surface loop wiggles through dozens of random shapes,
+
+15
+00:00:53,525 --> 00:00:57,307
+which means locking it around a substrate molecule costs more than 3.8
+
+16
+00:00:57,307 --> 00:01:01,088
+kilocalories per mole in conformational entropy—so the substrate never binds.
+
+17
+00:01:01,088 --> 00:01:04,869
+Meanwhile, storing a dense 300-by-20 probability matrix for every protein takes 24,000
+
+18
+00:01:04,869 --> 00:01:08,651
+bytes per row, smashing past PostgreSQL's 2-kilobyte threshold and slicing your table
+
+19
+00:01:08,651 --> 00:01:12,432
+into 12 slow out-of-line disk chunks per protein.
+
+20
+00:01:12,432 --> 00:01:17,477
+Here is the physical heuristic from ProtProfileMD and FrustraMPNN that solves this.
+
+21
+00:01:17,477 --> 00:01:22,523
+Instead of tracking raw XYZ coordinates across thousands of frames,
+
+22
+00:01:22,523 --> 00:01:27,568
+we project each amino acid onto Foldseek's 20 tertiary interaction states—called the
+
+23
+00:01:27,568 --> 00:01:32,613
+3Di alphabet—and measure its normalized Shannon entropy H-sub-3Di from zero to one.
+
+24
+00:01:32,613 --> 00:01:37,659
+Look at the three clean physical regimes that emerge:
+
+25
+00:01:37,659 --> 00:01:42,704
+a rigid catalytic triad locks into a single dominant 3Di state with
+
+26
+00:01:42,704 --> 00:01:47,749
+entropy near 0.19. A floppy disordered tail scatters across all 20 states
+
+27
+00:01:47,749 --> 00:01:52,795
+with entropy above 0.70. And right in the middle—between 0.29 and 0.70—sits
+
+28
+00:01:52,795 --> 00:01:57,840
+the Goldilocks cryptic breathing lid, toggling cleanly between just two bistable hinge states!
+
+29
+00:01:57,840 --> 00:02:03,147
+Watch our 3D comparison stage on the Lake Magadi soda-lake archaeon D3SWG7.
+
+30
+00:02:03,147 --> 00:02:08,455
+Beneath the surface, the catalytic serine-histidine-aspartate triad sits locked at 0.44 Angstroms
+
+31
+00:02:08,455 --> 00:02:13,762
+with an opening barrier of just 0.16 kilocalories per mole.
+
+32
+00:02:13,762 --> 00:02:19,070
+Directly above it, residues 142 through 160 form a cryptic helical lid
+
+33
+00:02:19,070 --> 00:02:24,377
+with a 3Di entropy of 0.5142 and a breathing score of 0.9948—requiring
+
+34
+00:02:24,377 --> 00:02:29,685
+only 1.29 kilocalories per mole of thermal energy to swing open and
+
+35
+00:02:29,685 --> 00:02:34,992
+admit zero-aromatic perfluoroalkyl chains across 2,608 eight-dimensional GiST pocket matches!
+
+36
+00:02:34,992 --> 00:02:39,161
+Finally, look at what happens under the hood in PostgreSQL 18.
+
+37
+00:02:39,161 --> 00:02:43,330
+Because even a cryptic hinge only needs its top two 3Di states,
+
+38
+00:02:43,330 --> 00:02:47,498
+their probabilities, and its entropy byte,
+
+39
+00:02:47,498 --> 00:02:51,667
+our PGFP binary container packs a 300-amino-acid protein into just 1,232 bytes—19.5
+
+40
+00:02:51,667 --> 00:02:55,836
+times smaller than a dense matrix,
+
+41
+00:02:55,836 --> 00:03:00,005
+living 100 percent inline on the 8-kilobyte heap page with zero TOAST
+
+42
+00:03:00,005 --> 00:03:04,174
+overhead. Better still, the 32-byte header embeds a 128-bit balanced 64-hot structural
+
+43
+00:03:04,174 --> 00:03:08,342
+sketch, letting PostgreSQL compare two 3D folds in two CPU instructions—XOR and
+
+44
+00:03:08,342 --> 00:03:12,511
+POPCNT—at 58.4 million comparisons per second!
+
+45
+00:03:12,511 --> 00:03:16,680
+Explore these breathing pockets in 3D right now at ideia dot me.
