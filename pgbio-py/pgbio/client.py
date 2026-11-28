@@ -21,6 +21,7 @@ from .models import (
     BioEnzRefResult,
     BioIpsaeMinipaeAudit,
     BioBeneinReversionCandidate,
+    BioCrypticFlexPocket,
 )
 
 class PgBioClient:
@@ -1204,6 +1205,90 @@ class PgBioClient:
                     )
                     for r in cur.fetchall()
                 ]
+
+    def encode_3di_flex_profile(
+        self,
+        pdb_or_seq: str,
+        md_b_factor_scale: float = 1.0,
+    ) -> bytes:
+        """
+        Encodes a 3D PDB or 1D amino-acid sequence into an inline zero-TOAST `"PGFP"`
+        (`pg_bio` FlexProfile) `bytea` container with a 32-byte header (including the
+        128-bit 64-hot 3Di POPCNT sketch) + 4-byte/residue quantized 3Di entropy profile.
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT bio_encode_3di_flex_profile(%s, %s);",
+                    (pdb_or_seq, md_b_factor_scale),
+                )
+                return bytes(cur.fetchone()[0])
+
+    def peek_flex3di_header(self, pgfp_bytea: bytes) -> Dict[str, Any]:
+        """
+        Peeks the 32-byte `"PGFP"` FlexProfile header in O(1) time without unpacking
+        the per-residue array (`bio_peek_flex3di_header`).
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT n_residues, mean_h3di, cryptic_fraction, rigid_fraction,
+                           idr_fraction, source_mode, byte_size, sketch_128b
+                    FROM bio_peek_flex3di_header(%s);
+                    """,
+                    (pgfp_bytea,),
+                )
+                r = cur.fetchone()
+                return {
+                    "n_residues": int(r[0]),
+                    "mean_h3di": float(r[1]),
+                    "cryptic_fraction": float(r[2]),
+                    "rigid_fraction": float(r[3]),
+                    "idr_fraction": float(r[4]),
+                    "source_mode": r[5],
+                    "byte_size": int(r[6]),
+                    "sketch_128b": bytes(r[7]),
+                }
+
+    def detect_cryptic_flex_pockets(
+        self,
+        pdb_text: str,
+        flex_profile_bytea: Optional[bytes] = None,
+        max_pockets: int = 5,
+    ) -> List[BioCrypticFlexPocket]:
+        """
+        Couples Layer 19 multi-pocket SAS detection with Layer 23 per-residue 3Di
+        conformational entropy (`H_3Di`) to classify pockets into `RIGID_ORTHOSTERIC_CLEFT`,
+        `CRYPTIC_BREATHING_POCKET`, or `DISORDERED_NON_POCKET_LOOP`.
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT pocket_rank, pocket_id, p2rank_score, mean_lining_h3di,
+                           max_hinge_h3di, cryptic_breathing_score, delta_g_open_kcal,
+                           pocket_thermodynamic_regime, z_order_center, fastscan_16b
+                    FROM bio_detect_cryptic_flex_pockets(%s, %s, %s);
+                    """,
+                    (pdb_text, flex_profile_bytea, max_pockets),
+                )
+                return [
+                    BioCrypticFlexPocket(
+                        pocket_rank=int(r[0]),
+                        pocket_id=r[1],
+                        p2rank_score=float(r[2]),
+                        mean_lining_h3di=float(r[3]),
+                        max_hinge_h3di=float(r[4]),
+                        cryptic_breathing_score=float(r[5]),
+                        delta_g_open_kcal=float(r[6]),
+                        pocket_thermodynamic_regime=r[7],
+                        z_order_center=int(r[8]),
+                        fastscan_16b=bytes(r[9]),
+                    )
+                    for r in cur.fetchall()
+                ]
+
 
 
 

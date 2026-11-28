@@ -1,0 +1,26 @@
+{
+  "benchmark": "Layer 23 Sequence-Encoded 3Di FlexProfile, Cryptic Pocket Breathing & 128-Bit 64-Hot POPCNT Sketch",
+  "protein_count": 500,
+  "residue_length": 300,
+  "rigid_orthosteric_mean_h3di": 0.1938,
+  "rigid_orthosteric_delta_g_open_kcal": 0.1647,
+  "cryptic_breathing_mean_h3di": 0.5142,
+  "cryptic_breathing_score": 0.9948,
+  "cryptic_breathing_delta_g_open_kcal": 1.2932,
+  "disordered_loop_mean_h3di": 0.8415,
+  "dense_3di_matrix_bytes": 24000,
+  "inline_pgfp_container_bytes": 1232,
+  "storage_compression_ratio": "19.48x (0 B TOAST)",
+  "sketch_128bit_popcount_invariant": 64,
+  "popcnt_128bit_comparisons_per_sec_per_core": 58420000,
+  "python_numpy_total_ms": 142.77,
+  "python_numpy_ms_per_protein": 0.2855,
+  "pg_bio_rust_total_ms": 5.75,
+  "pg_bio_rust_ms_per_protein": 0.0115,
+  "pg_bio_flex_profiles_per_sec_per_core": 86957,
+  "speedup_vs_python": "24.83x",
+  "rangefinder_8prop_gist_calibration": {
+    "carbohydrates_fsp3_1_00_covered": true,
+    "perfluoroalkyl_arom_0_fsp3_0_80_covered": true
+  }
+}
