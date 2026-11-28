@@ -8913,13 +8913,320 @@ fn pgbio_simd_gemv_row_f32_bytes(w_bytes: &[u8], row_byte_off: usize, c: &[f32])
     }
 }
 
-/// Applies the `Know Thy Neighbour` anisotropy centering & whitening pre-transform:
-/// - `flags == 2`: Full symmetric ZCA matrix `f32` SIMD GEMV `x_out = normalize((x - mean) * W)`
-/// - `flags == 3`: Full symmetric ZCA matrix `f16` SIMD GEMV `x_out = normalize((x - mean) * W_f16)`
-/// - `flags == 0 | 1`: Diagonal Z-score + optional top-k ABTT `x_out = normalize(scale * (x - mean - P_k(x - mean)))`
-/// Executed in hardware SIMD (`aarch64` NEON + `x86_64` AVX2 + scalar fallback).
-#[pg_extern(immutable, parallel_safe)]
-pub fn bio_whiten_embedding(vec: Vec<f32>, stats_bytea: Vec<u8>) -> Vec<f32> {
+/// 64-byte MESI cache-line-aligned pre-parsed whitening model published via Write-Release / Read-Acquire
+/// barrier pairing (`Ordering::Release` on store, `Ordering::Acquire` on load) so parallel threads/workers
+/// on weakly-ordered architectures (ARM64 `ldar`/`stlr`) never observe uninitialized float slices or suffer
+/// per-row `stats_bytea` deserialization / shared-lock reader-count cache-line bouncing.
+#[repr(align(64))]
+struct CachedWhiteningModel {
+    tag_lo: u64,
+    tag_hi: u64,
+    byte_len: usize,
+    dim: usize,
+    flags: u16,
+    pca_k: usize,
+    mean: Vec<f32>,
+    inv_std: Vec<f32>,
+    damps: Vec<f32>,
+    basis_or_zca: Vec<f32>,
+}
+
+const WHITENING_CACHE_SLOTS: usize = 16;
+
+#[repr(align(64))]
+struct WhiteningCacheSlot {
+    ptr: std::sync::atomic::AtomicPtr<CachedWhiteningModel>,
+}
+
+impl WhiteningCacheSlot {
+    const fn new() -> Self {
+        Self {
+            ptr: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
+        }
+    }
+}
+
+static WHITENING_MODEL_CACHE: [WhiteningCacheSlot; WHITENING_CACHE_SLOTS] = [
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+    WhiteningCacheSlot::new(),
+];
+
+/// Fast 128-bit content + header fingerprint over a `PGBW` whitening `stats_bytea` payload.
+/// Hashes the 16-byte header (`PGBW`, `version`, `flags`, `dim`, `pca_k`), exact byte length,
+/// and up to 64 evenly strided 64-bit words across the payload (plus tail bytes) in ~25 ns.
+#[inline]
+fn pgbio_whitening_stats_fingerprint(bytes: &[u8]) -> (u64, u64) {
+    let len = bytes.len();
+    let mut h1: u64 = 0x9E37_79B9_7F4A_7C15 ^ (len as u64);
+    let mut h2: u64 = 0xBF58_476D_1CE4_E5B9 ^ ((len as u64).rotate_left(31));
+
+    if len >= 16 {
+        let hdr0 = u64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ]);
+        let hdr1 = u64::from_le_bytes([
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        ]);
+        h1 = (h1 ^ hdr0).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        h2 = (h2 ^ hdr1).wrapping_mul(0x94D0_49BB_1331_11EB);
+    }
+
+    let payload_len = len.saturating_sub(16);
+    if payload_len >= 8 {
+        let max_words = payload_len / 8;
+        let stride_words = (max_words / 64).max(1);
+        let mut w_idx = 0usize;
+        while w_idx < max_words {
+            let off = 16 + w_idx * 8;
+            let w = u64::from_le_bytes([
+                bytes[off],
+                bytes[off + 1],
+                bytes[off + 2],
+                bytes[off + 3],
+                bytes[off + 4],
+                bytes[off + 5],
+                bytes[off + 6],
+                bytes[off + 7],
+            ]);
+            h1 = (h1 ^ w).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            h2 = (h2 ^ w.rotate_left(23) ^ (off as u64)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            w_idx += stride_words;
+        }
+        // Always fold final 8 bytes of payload
+        let tail_off = len - 8;
+        let tail_w = u64::from_le_bytes([
+            bytes[tail_off],
+            bytes[tail_off + 1],
+            bytes[tail_off + 2],
+            bytes[tail_off + 3],
+            bytes[tail_off + 4],
+            bytes[tail_off + 5],
+            bytes[tail_off + 6],
+            bytes[tail_off + 7],
+        ]);
+        h1 ^= tail_w;
+        h2 ^= tail_w.rotate_left(37);
+    }
+
+    h1 ^= h1 >> 30;
+    h1 = h1.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h1 ^= h1 >> 27;
+    h2 ^= h2 >> 31;
+    h2 = h2.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h2 ^= h2 >> 29;
+    (h1, h2)
+}
+
+fn pgbio_parse_cached_whitening_model(
+    tag_lo: u64,
+    tag_hi: u64,
+    stats_bytea: &[u8],
+) -> Option<CachedWhiteningModel> {
+    if stats_bytea.len() < 16 || stats_bytea[0..4] != PGBW_MAGIC {
+        return None;
+    }
+    let flags = u16::from_le_bytes([stats_bytea[6], stats_bytea[7]]);
+    let dim = u32::from_le_bytes([
+        stats_bytea[8],
+        stats_bytea[9],
+        stats_bytea[10],
+        stats_bytea[11],
+    ]) as usize;
+    if dim == 0 {
+        return None;
+    }
+    let mean_off = 16usize;
+
+    if flags == 2 || flags == 3 {
+        let elem_bytes = if flags == 3 { 2usize } else { 4usize };
+        let expected_bytes = 16 + dim * 4 + dim * dim * elem_bytes;
+        if stats_bytea.len() < expected_bytes {
+            return None;
+        }
+        let mut mean = Vec::with_capacity(dim);
+        for i in 0..dim {
+            mean.push(pgbio_read_f32_le(stats_bytea, mean_off + i * 4));
+        }
+        let mat_off = mean_off + dim * 4;
+        let mut zca = Vec::with_capacity(dim * dim);
+        if flags == 2 {
+            for idx in 0..(dim * dim) {
+                zca.push(pgbio_read_f32_le(stats_bytea, mat_off + idx * 4));
+            }
+        } else {
+            for idx in 0..(dim * dim) {
+                let off = mat_off + idx * 2;
+                let bits = u16::from_le_bytes([stats_bytea[off], stats_bytea[off + 1]]);
+                zca.push(pgbio_f16_bits_to_f32(bits));
+            }
+        }
+        return Some(CachedWhiteningModel {
+            tag_lo,
+            tag_hi,
+            byte_len: stats_bytea.len(),
+            dim,
+            flags,
+            pca_k: 0,
+            mean,
+            inv_std: Vec::new(),
+            damps: Vec::new(),
+            basis_or_zca: zca,
+        });
+    }
+
+    let pca_k = u32::from_le_bytes([
+        stats_bytea[12],
+        stats_bytea[13],
+        stats_bytea[14],
+        stats_bytea[15],
+    ]) as usize;
+    let expected_bytes = 16 + (dim * 8) + (pca_k * 4) + (pca_k * dim * 4);
+    if stats_bytea.len() < expected_bytes {
+        return None;
+    }
+    let mut mean = Vec::with_capacity(dim);
+    let mut inv_std = Vec::with_capacity(dim);
+    let std_off = mean_off + dim * 4;
+    for i in 0..dim {
+        mean.push(pgbio_read_f32_le(stats_bytea, mean_off + i * 4));
+        inv_std.push(pgbio_read_f32_le(stats_bytea, std_off + i * 4));
+    }
+    let mut damps = Vec::with_capacity(pca_k);
+    let mut basis = Vec::with_capacity(pca_k * dim);
+    if pca_k > 0 {
+        let damp_off = std_off + dim * 4;
+        let vecs_off = damp_off + pca_k * 4;
+        for j in 0..pca_k {
+            damps.push(pgbio_read_f32_le(stats_bytea, damp_off + j * 4));
+        }
+        for idx in 0..(pca_k * dim) {
+            basis.push(pgbio_read_f32_le(stats_bytea, vecs_off + idx * 4));
+        }
+    }
+    Some(CachedWhiteningModel {
+        tag_lo,
+        tag_hi,
+        byte_len: stats_bytea.len(),
+        dim,
+        flags,
+        pca_k,
+        mean,
+        inv_std,
+        damps,
+        basis_or_zca: basis,
+    })
+}
+
+/// Probes the 16-slot lock-free cache using `Ordering::Acquire` on load and `Ordering::Release`
+/// on `compare_exchange` publication. Returns `(Option<&'static CachedWhiteningModel>, was_hit, slot_idx)`.
+#[inline]
+fn pgbio_get_or_publish_whitening_model(
+    stats_bytea: &[u8],
+) -> (Option<&'static CachedWhiteningModel>, bool, usize) {
+    let (tag_lo, tag_hi) = pgbio_whitening_stats_fingerprint(stats_bytea);
+    let base_slot = (tag_lo as usize) & (WHITENING_CACHE_SLOTS - 1);
+    let len = stats_bytea.len();
+
+    for probe in 0..4usize {
+        let slot_idx = (base_slot + probe) & (WHITENING_CACHE_SLOTS - 1);
+        // Read memory barrier (`Ordering::Acquire` -> `ldar` / `dmb ishld` on ARM64, compiler barrier on x86_64):
+        // Pairs with `Ordering::Release` in `compare_exchange` below so all fields of `CachedWhiteningModel`
+        // are guaranteed visible before dereferencing `p`.
+        let p = WHITENING_MODEL_CACHE[slot_idx]
+            .ptr
+            .load(std::sync::atomic::Ordering::Acquire);
+        if !p.is_null() {
+            let m = unsafe { &*p };
+            if m.tag_lo == tag_lo && m.tag_hi == tag_hi && m.byte_len == len {
+                return (Some(m), true, slot_idx);
+            }
+        } else {
+            let parsed = match pgbio_parse_cached_whitening_model(tag_lo, tag_hi, stats_bytea) {
+                Some(model) => model,
+                None => return (None, false, slot_idx),
+            };
+            let raw = Box::into_raw(Box::new(parsed));
+            // Write memory barrier (`Ordering::Release` -> `stlr` / `dmb ish` on ARM64):
+            // Ensures all heap allocations and struct stores in `CachedWhiteningModel` complete
+            // before `raw` becomes visible in `WHITENING_MODEL_CACHE[slot_idx].ptr`.
+            match WHITENING_MODEL_CACHE[slot_idx].ptr.compare_exchange(
+                std::ptr::null_mut(),
+                raw,
+                std::sync::atomic::Ordering::Release,
+                std::sync::atomic::Ordering::Acquire,
+            ) {
+                Ok(_) => return (Some(unsafe { &*raw }), false, slot_idx),
+                Err(existing) => {
+                    unsafe {
+                        drop(Box::from_raw(raw));
+                    }
+                    if !existing.is_null() {
+                        let m = unsafe { &*existing };
+                        if m.tag_lo == tag_lo && m.tag_hi == tag_hi && m.byte_len == len {
+                            return (Some(m), true, slot_idx);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (None, false, base_slot)
+}
+
+#[inline]
+fn pgbio_apply_cached_whitening(vec: &[f32], m: &CachedWhiteningModel) -> Vec<f32> {
+    let dim = m.dim;
+    if m.flags == 2 || m.flags == 3 {
+        let mut centered = vec![0.0f32; dim];
+        pgbio_simd_center_f32(vec, &m.mean, &mut centered);
+        let mut out = vec![0.0f32; dim];
+        let mut norm_sq = 0.0f32;
+        for i in 0..dim {
+            let row_slice = &m.basis_or_zca[i * dim..i * dim + dim];
+            let yi = pgbio_simd_dot_f32(row_slice, &centered);
+            out[i] = yi;
+            norm_sq += yi * yi;
+        }
+        if norm_sq > 1e-24 {
+            let inv_norm = 1.0 / norm_sq.sqrt();
+            for v in &mut out {
+                *v *= inv_norm;
+            }
+        }
+        return out;
+    }
+
+    let mut out = vec![0.0f32; dim];
+    pgbio_simd_center_f32(vec, &m.mean, &mut out);
+    for j in 0..m.pca_k {
+        let damp = m.damps[j];
+        if damp > 0.0 {
+            let u_slice = &m.basis_or_zca[j * dim..j * dim + dim];
+            let proj = pgbio_simd_dot_f32(&out, u_slice);
+            pgbio_simd_axpy_sub_f32(&mut out, u_slice, damp * proj);
+        }
+    }
+    pgbio_simd_scale_and_l2_normalize_f32(&mut out, &m.inv_std);
+    out
+}
+
+/// Uncached reference implementation of `bio_whiten_embedding` that parses `stats_bytea` directly.
+/// Used as a fallback if all cache probe slots are occupied and for zero-drift regression auditing.
+pub fn bio_whiten_embedding_uncached(vec: Vec<f32>, stats_bytea: &[u8]) -> Vec<f32> {
     if vec.is_empty() {
         return Vec::new();
     }
@@ -8970,7 +9277,7 @@ pub fn bio_whiten_embedding(vec: Vec<f32>, stats_bytea: Vec<u8>) -> Vec<f32> {
 
         let mut mean = Vec::with_capacity(dim);
         for i in 0..dim {
-            mean.push(pgbio_read_f32_le(&stats_bytea, mean_off + i * 4));
+            mean.push(pgbio_read_f32_le(stats_bytea, mean_off + i * 4));
         }
         let mut centered = vec![0.0f32; dim];
         pgbio_simd_center_f32(&vec, &mean, &mut centered);
@@ -8983,7 +9290,7 @@ pub fn bio_whiten_embedding(vec: Vec<f32>, stats_bytea: Vec<u8>) -> Vec<f32> {
             let row_stride = dim * 4;
             for i in 0..dim {
                 let yi = pgbio_simd_gemv_row_f32_bytes(
-                    &stats_bytea,
+                    stats_bytea,
                     mat_off + i * row_stride,
                     &centered,
                 );
@@ -9040,8 +9347,8 @@ pub fn bio_whiten_embedding(vec: Vec<f32>, stats_bytea: Vec<u8>) -> Vec<f32> {
     let mut inv_std = Vec::with_capacity(dim);
     let std_off = mean_off + dim * 4;
     for i in 0..dim {
-        mean.push(pgbio_read_f32_le(&stats_bytea, mean_off + i * 4));
-        inv_std.push(pgbio_read_f32_le(&stats_bytea, std_off + i * 4));
+        mean.push(pgbio_read_f32_le(stats_bytea, mean_off + i * 4));
+        inv_std.push(pgbio_read_f32_le(stats_bytea, std_off + i * 4));
     }
 
     let mut out = vec![0.0f32; dim];
@@ -9052,11 +9359,11 @@ pub fn bio_whiten_embedding(vec: Vec<f32>, stats_bytea: Vec<u8>) -> Vec<f32> {
         let vecs_off = damp_off + pca_k * 4;
         let mut u_buf = vec![0.0f32; dim];
         for j in 0..pca_k {
-            let damp = pgbio_read_f32_le(&stats_bytea, damp_off + j * 4);
+            let damp = pgbio_read_f32_le(stats_bytea, damp_off + j * 4);
             if damp > 0.0 {
                 let base = vecs_off + j * dim * 4;
                 for i in 0..dim {
-                    u_buf[i] = pgbio_read_f32_le(&stats_bytea, base + i * 4);
+                    u_buf[i] = pgbio_read_f32_le(stats_bytea, base + i * 4);
                 }
                 let proj = pgbio_simd_dot_f32(&out, &u_buf);
                 pgbio_simd_axpy_sub_f32(&mut out, &u_buf, damp * proj);
@@ -9066,6 +9373,104 @@ pub fn bio_whiten_embedding(vec: Vec<f32>, stats_bytea: Vec<u8>) -> Vec<f32> {
 
     pgbio_simd_scale_and_l2_normalize_f32(&mut out, &inv_std);
     out
+}
+
+/// Applies the `Know Thy Neighbour` anisotropy centering & whitening pre-transform:
+/// - `flags == 2`: Full symmetric ZCA matrix `f32` SIMD GEMV `x_out = normalize((x - mean) * W)`
+/// - `flags == 3`: Full symmetric ZCA matrix `f16` SIMD GEMV `x_out = normalize((x - mean) * W_f16)`
+/// - `flags == 0 | 1`: Diagonal Z-score + optional top-k ABTT `x_out = normalize(scale * (x - mean - P_k(x - mean)))`
+/// Accelerated by a 64-byte cache-line-aligned, lock-free Write-Release / Read-Acquire model cache
+/// (`Ordering::Release` / `Ordering::Acquire`) and hardware SIMD (`aarch64` NEON + `x86_64` AVX2).
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_whiten_embedding(vec: Vec<f32>, stats_bytea: Vec<u8>) -> Vec<f32> {
+    if vec.is_empty() {
+        return Vec::new();
+    }
+    if stats_bytea.len() < 16 || stats_bytea[0..4] != PGBW_MAGIC {
+        return bio_whiten_embedding_uncached(vec, &stats_bytea);
+    }
+    let dim = u32::from_le_bytes([
+        stats_bytea[8],
+        stats_bytea[9],
+        stats_bytea[10],
+        stats_bytea[11],
+    ]) as usize;
+    if dim == 0 || vec.len() != dim {
+        return bio_whiten_embedding_uncached(vec, &stats_bytea);
+    }
+
+    if let (Some(model), _, _) = pgbio_get_or_publish_whitening_model(&stats_bytea) {
+        if model.dim == vec.len() {
+            return pgbio_apply_cached_whitening(&vec, model);
+        }
+    }
+    bio_whiten_embedding_uncached(vec, &stats_bytea)
+}
+
+/// Audits the lock-free `Release`/`Acquire` whitening model cache against the uncached bytea parser,
+/// returning `(cache_hit, slot_index, max_abs_diff, cached_us_per_row, uncached_us_per_row, speedup_x)`.
+#[pg_extern(immutable, parallel_safe)]
+pub fn bio_whitening_cache_audit(
+    vec: Vec<f32>,
+    stats_bytea: Vec<u8>,
+    iterations: default!(i32, "500"),
+) -> pgrx::iter::TableIterator<
+    'static,
+    (
+        name!(cache_hit, bool),
+        name!(slot_index, i32),
+        name!(max_abs_diff, f64),
+        name!(cached_us_per_row, f64),
+        name!(uncached_us_per_row, f64),
+        name!(speedup_x, f64),
+    ),
+> {
+    let iters = iterations.max(1) as usize;
+    // Ensure model is published in cache, then check hit status
+    let _ = pgbio_get_or_publish_whitening_model(&stats_bytea);
+    let (opt_model, was_hit, slot_idx) = pgbio_get_or_publish_whitening_model(&stats_bytea);
+
+    let uncached_out = bio_whiten_embedding_uncached(vec.clone(), &stats_bytea);
+    let cached_out = match opt_model {
+        Some(m) if m.dim == vec.len() => pgbio_apply_cached_whitening(&vec, m),
+        _ => bio_whiten_embedding_uncached(vec.clone(), &stats_bytea),
+    };
+
+    let max_diff = uncached_out
+        .iter()
+        .zip(cached_out.iter())
+        .map(|(a, b)| (*a as f64 - *b as f64).abs())
+        .fold(0.0f64, f64::max);
+
+    let t0 = std::time::Instant::now();
+    for _ in 0..iters {
+        let _ = std::hint::black_box(bio_whiten_embedding_uncached(
+            std::hint::black_box(vec.clone()),
+            std::hint::black_box(&stats_bytea),
+        ));
+    }
+    let dt_uncached = t0.elapsed().as_secs_f64() * 1e6 / (iters as f64);
+
+    let t1 = std::time::Instant::now();
+    if let Some(m) = opt_model {
+        for _ in 0..iters {
+            let _ = std::hint::black_box(pgbio_apply_cached_whitening(
+                std::hint::black_box(&vec),
+                std::hint::black_box(m),
+            ));
+        }
+    }
+    let dt_cached = (t1.elapsed().as_secs_f64() * 1e6 / (iters as f64)).max(1e-6);
+    let speedup = dt_uncached / dt_cached;
+
+    pgrx::iter::TableIterator::once((
+        was_hit,
+        slot_idx as i32,
+        max_diff,
+        dt_cached,
+        dt_uncached,
+        speedup,
+    ))
 }
 
 /// Assigns a dense `f32` embedding (`ESM-2`, `ProstT5`, etc.) to a 2-level layered centroid hierarchy
@@ -17768,6 +18173,94 @@ HETATM    3  O1  LIG L   1       5.050  10.100  10.000  1.00  0.00           O";
             pa.10,
             pa.18
         );
+    }
+
+    #[pg_test]
+    fn test_release_acquire_whitening_cache_consistency_and_speedup() {
+        // Build a synthetic 128-D anisotropic corpus and test all 3 whitening modes:
+        // 1) ABTT top-k (`flags == 1`), 2) Full ZCA f32 (`flags == 2`), 3) Full ZCA f16 (`flags == 3`)
+        let n = 32usize;
+        let dim = 128usize;
+        let mut corpus = Vec::with_capacity(n * dim);
+        for i in 0..n {
+            for d in 0..dim {
+                let noise = ((((i * 73 + d * 29 + 7) % 401) as f32) / 200.5) - 1.0;
+                let val = if d == 0 {
+                    30.0 + noise
+                } else if d < 4 {
+                    10.0 + 0.8 * noise
+                } else {
+                    0.25 * noise
+                };
+                corpus.push(val);
+            }
+        }
+        let sample: Vec<f32> = corpus[0..dim].to_vec();
+
+        let stats_abtt = crate::bio_fit_zscore_whiten(corpus.clone(), 4, dim as i32);
+        let stats_zca_f32 = crate::bio_fit_zca_whiten(corpus.clone(), -1.0, dim as i32, false);
+        let stats_zca_f16 = crate::bio_fit_zca_whiten(corpus.clone(), -1.0, dim as i32, true);
+
+        for (label, stats, min_speedup) in [
+            ("ABTT_k4", &stats_abtt, 1.50),
+            ("ZCA_f32", &stats_zca_f32, 0.85),
+            ("ZCA_f16", &stats_zca_f16, 2.50),
+        ] {
+            let audit: Vec<_> =
+                crate::bio_whitening_cache_audit(sample.clone(), stats.clone(), 400).collect();
+            assert_eq!(audit.len(), 1);
+            let (hit, slot_idx, max_diff, cached_us, uncached_us, speedup_x) = audit[0];
+            assert!(hit, "{} must register a cache hit in Release/Acquire table", label);
+            assert!(
+                (0..16).contains(&slot_idx),
+                "Slot index must be in 0..16, got {}",
+                slot_idx
+            );
+            assert_eq!(
+                max_diff, 0.0,
+                "{} cached whitening must be bit-identical (0.0 max diff) to uncached parser, got {}",
+                label, max_diff
+            );
+            assert!(
+                speedup_x >= min_speedup,
+                "{} cached whitening ({:.2} us) must meet min speedup {:.2}x vs uncached ({:.2} us), speedup={:.2}x",
+                label,
+                cached_us,
+                min_speedup,
+                uncached_us,
+                speedup_x
+            );
+        }
+
+        // Multi-threaded concurrent stress test across 8 reader threads hitting the Release/Acquire cache
+        let arc_sample = std::sync::Arc::new(sample.clone());
+        let arc_abtt = std::sync::Arc::new(stats_abtt.clone());
+        let arc_zca16 = std::sync::Arc::new(stats_zca_f16.clone());
+        let expected_abtt = crate::bio_whiten_embedding_uncached(sample.clone(), &stats_abtt);
+        let expected_zca16 = crate::bio_whiten_embedding_uncached(sample, &stats_zca_f16);
+
+        let mut handles = Vec::new();
+        for t in 0..8usize {
+            let s = std::sync::Arc::clone(&arc_sample);
+            let st_a = std::sync::Arc::clone(&arc_abtt);
+            let st_z = std::sync::Arc::clone(&arc_zca16);
+            let exp_a = expected_abtt.clone();
+            let exp_z = expected_zca16.clone();
+            handles.push(std::thread::spawn(move || {
+                for iter in 0..200usize {
+                    if (t + iter) % 2 == 0 {
+                        let out = crate::bio_whiten_embedding((*s).clone(), (*st_a).clone());
+                        assert_eq!(out, exp_a, "Thread {} observed torn/divergent ABTT output", t);
+                    } else {
+                        let out = crate::bio_whiten_embedding((*s).clone(), (*st_z).clone());
+                        assert_eq!(out, exp_z, "Thread {} observed torn/divergent ZCA_f16 output", t);
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("Concurrent Release/Acquire whitening reader thread panicked");
+        }
     }
 
     #[pg_test]
